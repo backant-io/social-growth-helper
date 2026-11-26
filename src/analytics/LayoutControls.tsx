@@ -51,13 +51,11 @@ export function LayoutControls({
   }
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          Analytics
-        </h1>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          Passive X analytics ingest · declarative dashboard widgets · read-only SQLite views
+        <h1 className="text-xl font-semibold tracking-tight">Analytics</h1>
+        <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
+          How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer.
         </p>
       </div>
 

@@ -3,8 +3,7 @@ import { canEdit, fileName, hasPlaceholders, parsePaths, postLength, similarityN
 import { offlineActionHint, useOnlineStatus } from "../../lib/errors";
 import { creatorApi } from "../../lib/creatorApi";
 import type { FormatRecord, OgcDraft } from "../../lib/types";
-import { Modal } from "./Modal";
-import { btn, danger, field, muted, panel, primary } from "./ui";
+import { btn, danger, field, Modal, muted, panel, primary } from "./ui";
 
 interface Props {
   draft: OgcDraft;
@@ -172,6 +171,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
       {confirming && (
         <Modal
           title="Post this to X?"
+          onClose={() => setConfirming(null)}
           actions={
             <>
               <button type="button" className={btn} onClick={() => setConfirming(null)}>Not yet</button>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Notice, PageHeader } from "../components/ui";
 import { analyticsApi } from "./api";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
@@ -168,12 +169,10 @@ export function AnalyticsPage() {
 
   if (!snapshot) {
     return (
-      <div className="space-y-4">
-        <div className="h-8 w-48 animate-pulse rounded bg-zinc-200 dark:bg-zinc-800" />
+      <div className="mx-auto max-w-7xl space-y-4">
+        <PageHeader title="Analytics" description="How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer." />
         {error ? (
-          <div className="rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 p-4 text-sm text-rose-700 dark:text-rose-300">
-            {error}
-          </div>
+          <Notice tone="error">{error}</Notice>
         ) : (
           <div className="grid grid-cols-12 gap-4">
             {[0, 1, 2, 3, 4, 5].map((i) => (
@@ -227,19 +226,15 @@ export function AnalyticsPage() {
       />
 
       {customizeMode && (
-        <div className="rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50/70 dark:bg-sky-950/30 px-3.5 py-2 text-xs text-sky-800 dark:text-sky-300">
-          Customize mode active: drag cards to reorder, drag the bottom-right corner handle (or pick width/height) to resize, or remove widgets. Changes save immediately.
-        </div>
+        <Notice tone="info">
+          Customize mode: drag cards to reorder, drag the bottom-right corner (or pick width and height) to resize, or remove widgets. Changes save immediately.
+        </Notice>
       )}
 
-      {error && (
-        <div className="rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-300">
-          {error}
-        </div>
-      )}
+      {error && <Notice tone="error">{error}</Notice>}
 
       {snapshot.widgets.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-zinc-300 dark:border-zinc-700 p-10 text-center space-y-3">
+        <div className="space-y-3 rounded-xl border border-dashed border-zinc-300 p-6 text-center dark:border-zinc-700">
           <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
             This layout has no widgets yet.
           </div>

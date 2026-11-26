@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { UnsetRouteGuard } from "../components/UnsetRouteGuard";
+import { btn, btnPrimary as primaryBtn, input as inputCls, PageHeader, panel, Tabs } from "../components/ui";
 import { api } from "../lib/api";
 import { DiffView } from "../learning/DiffView";
 import { parseLlmError } from "../lib/errors";
@@ -27,13 +28,6 @@ interface Props {
 
 type StyleTab = "guide" | "examples" | "bench";
 
-const panel = "rounded-xl border border-zinc-200 p-4 dark:border-zinc-800";
-const btn =
-  "rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800";
-const primaryBtn =
-  "rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200";
-const inputCls =
-  "min-w-0 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
 function TagChips({
   items,
@@ -428,38 +422,17 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Style Studio</h1>
-          <p className="text-xs text-zinc-500">
-            Versioned voice guide, FTS5 few-shot examples, banned-phrase enforcement, and Style Test Bench.
-          </p>
-        </div>
-        <div role="tablist" aria-label="Style Studio sections" className="flex gap-1 rounded-xl border border-zinc-200 p-1 dark:border-zinc-800">
-          {(
-            [
-              ["guide", "Voice & Rules"],
-              ["examples", `Examples (${examples.length})`],
-              ["bench", "Test Bench"],
-            ] as Array<[StyleTab, string]>
-          ).map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              role="tab"
-              aria-selected={tab === id}
-              onClick={() => setTab(id)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                tab === id
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <PageHeader title="Style" description="Teach the app your voice: a guide, a few examples of your own writing, and a bench to test drafts against it." />
+      <Tabs
+        label="Style sections"
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "guide", label: "Voice and rules" },
+          { id: "examples", label: `Examples (${examples.length})` },
+          { id: "bench", label: "Test bench" },
+        ]}
+      />
 
       {locked && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">

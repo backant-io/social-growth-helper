@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { blankBlueprint, syncSlots } from "../../lib/creator";
 import type { FormatBlueprint } from "../../lib/types";
-import { Modal } from "./Modal";
-import { btn, danger, field, muted, primary } from "./ui";
+import { btn, danger, field, Modal, muted, primary } from "./ui";
 
 interface Props {
   initial: FormatBlueprint | null;
@@ -32,6 +31,7 @@ export function FormatEditor({ initial, onSave, onCancel }: Props) {
   return (
     <Modal
       title={initial ? "Edit format" : "New format"}
+      onClose={onCancel}
       actions={
         <>
           <button type="button" className={btn} onClick={onCancel}>Cancel</button>

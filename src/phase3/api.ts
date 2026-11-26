@@ -223,6 +223,7 @@ export const p3 = {
   async setKillSwitch(engaged: boolean): Promise<boolean> {
     if (inTauri()) return call("set_kill_switch", { engaged });
     mem.kill = engaged;
+    window.dispatchEvent(new CustomEvent("sgh:kill", { detail: engaged }));
     return engaged;
   },
   async pacing(): Promise<PacingConfig> {
