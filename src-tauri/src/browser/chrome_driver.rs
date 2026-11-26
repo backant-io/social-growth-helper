@@ -11,6 +11,7 @@ use super::{
 };
 use base64::Engine;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::process::Child;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -333,6 +334,19 @@ impl BrowserDriver for ChromeCdpDriver {
             width: num("width")?.max(0) as u32,
             height: num("height")?.max(0) as u32,
         })
+    }
+
+    async fn set_file_input_files(&self, selector: &str, paths: &[PathBuf]) -> Result<(), BrowserError> {
+        let doc = self.page_call("DOM.getDocument", json!({ "depth": 0 })).await?;
+        let root = doc["root"]["nodeId"].as_i64().ok_or_else(|| BrowserError::Other("DOM.getDocument returned no root".into()))?;
+        let found = self.page_call("DOM.querySelector", json!({ "nodeId": root, "selector": selector })).await?;
+        let node = found["nodeId"].as_i64().unwrap_or(0);
+        if node == 0 {
+            return Err(BrowserError::Other(format!("file input not found: {selector}")));
+        }
+        let files: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        self.page_call("DOM.setFileInputFiles", json!({ "files": files, "nodeId": node })).await?;
+        Ok(())
     }
 
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {
@@ -678,6 +692,34 @@ mod tests {
         .await;
         assert_eq!(d.get_bounds().await.unwrap(), WindowBounds { left: 700, top: 30, width: 480, height: 820 });
         assert_eq!(methods(&rec), vec!["Browser.getWindowForTarget", "Browser.getWindowBounds"]);
+    }
+
+    #[tokio::test]
+    async fn attaches_files_without_enabling_domains_or_runtime() {
+        let (d, rec) = attached_driver(|req| match req["method"].as_str().unwrap() {
+            "DOM.getDocument" => json!({ "result": { "root": { "nodeId": 1 } } }),
+            "DOM.querySelector" => json!({ "result": { "nodeId": 9 } }),
+            _ => json!({ "result": {} }),
+        })
+        .await;
+        d.set_file_input_files("input[type=file]", &[PathBuf::from("/tmp/a.png")]).await.unwrap();
+        let sent = rec.lock().unwrap().clone();
+        let m = methods(&rec);
+        assert_eq!(m, vec!["DOM.getDocument", "DOM.querySelector", "DOM.setFileInputFiles"]);
+        assert_eq!(sent[2]["params"]["nodeId"], 9);
+        assert_eq!(sent[2]["params"]["files"][0], "/tmp/a.png");
+        assert_eq!(sent[2]["sessionId"], "S1");
+    }
+
+    #[tokio::test]
+    async fn missing_file_input_is_an_error() {
+        let (d, _rec) = attached_driver(|req| match req["method"].as_str().unwrap() {
+            "DOM.getDocument" => json!({ "result": { "root": { "nodeId": 1 } } }),
+            "DOM.querySelector" => json!({ "result": { "nodeId": 0 } }),
+            _ => json!({ "result": {} }),
+        })
+        .await;
+        assert!(d.set_file_input_files("input", &[PathBuf::from("/tmp/a.png")]).await.is_err());
     }
 
     #[tokio::test]

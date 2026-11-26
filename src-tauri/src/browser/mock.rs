@@ -119,6 +119,10 @@ impl BrowserDriver for MockDriver {
     async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {
         Ok(self.bounds.lock().unwrap().clone())
     }
+    async fn set_file_input_files(&self, selector: &str, paths: &[std::path::PathBuf]) -> Result<(), BrowserError> {
+        self.record(format!("files {selector} {}", paths.len()));
+        Ok(())
+    }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {
         self.record("close");
         *self.running.lock().unwrap() = false;

@@ -2,7 +2,9 @@
 
 A local desktop app that helps you grow on X without giving up your voice. It is a guideline and a tool: you read, you decide and you click. It does not spam and it does not post AI slop for you.
 
-Phase 1 (this branch) is the foundation: app shell, local database, OS keychain, a clean real-Chrome browser driver and the first-run tour. Scout, Reply Studio, Creator, Analytics and Learning are empty states for now.
+Phase 1 (this branch) is the foundation: app shell, local database, OS keychain, a clean real-Chrome browser driver and the first-run tour. Scout, Reply Studio, Analytics and Learning are empty states for now.
+
+Phase 5 adds the Creator: it finds posts that over-perform, turns them into reusable formats, and drafts three original versions in your voice. Publishing needs your click. See [docs/phase-5-verification.md](docs/phase-5-verification.md).
 
 ## Stack
 

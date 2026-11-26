@@ -4,8 +4,11 @@
 //! other code path (scout, drafts, a model response, a scraped post) can make X change.
 //!
 //! Reply and Quote carry text and only ever pass through `approve_bundle`, which requires the exact text
-//! the user was shown in the confirmation. Single-action approvals refuse text actions.
+//! the user was shown in the confirmation. Single-action approvals refuse text actions. An original post from
+//! Creator (OGC) passes through `approve_top_level` with the same rules: exact confirmed text, kill switch, and
+//! acknowledgement, and it runs through the same serial worker.
 
+use crate::creator::drafts as ogc;
 use crate::drafts::bundle::{text_action, ActionKind};
 use crate::drafts::edit::{pre_publish_problems, DEFAULT_MAX_CHARS};
 use crate::drafts::repo;
@@ -13,11 +16,13 @@ use crate::error::{AppError, AppResult};
 use crate::onboarding::require_acknowledged;
 use crate::util::new_id;
 use rusqlite::Connection;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 enum Scope {
     Bundle { draft_id: String, actions: Vec<ActionKind>, text: String, kind: &'static str },
     Single { action: ActionKind, undo: bool },
+    TopLevel { ogc_draft_id: String, text: String, media: Vec<PathBuf> },
 }
 
 #[derive(Debug, Clone)]
@@ -46,18 +51,20 @@ impl Approval {
         match self.scope {
             Scope::Bundle { .. } => "publish",
             Scope::Single { .. } => "action_click",
+            Scope::TopLevel { .. } => "ogc_publish",
         }
     }
     pub fn draft_id(&self) -> Option<&str> {
         match &self.scope {
             Scope::Bundle { draft_id, .. } => Some(draft_id),
-            Scope::Single { .. } => None,
+            Scope::Single { .. } | Scope::TopLevel { .. } => None,
         }
     }
     pub fn bundle(&self) -> Vec<ActionKind> {
         match &self.scope {
             Scope::Bundle { actions, .. } => actions.clone(),
             Scope::Single { action, .. } => vec![*action],
+            Scope::TopLevel { .. } => vec![],
         }
     }
     pub fn undo(&self) -> bool {
@@ -67,6 +74,7 @@ impl Approval {
     pub fn text(&self) -> &str {
         match &self.scope {
             Scope::Bundle { text, .. } => text,
+            Scope::TopLevel { text, .. } => text,
             Scope::Single { .. } => "",
         }
     }
@@ -74,6 +82,14 @@ impl Approval {
         match &self.scope {
             Scope::Bundle { kind, .. } => kind,
             Scope::Single { .. } => "single_action",
+            Scope::TopLevel { .. } => "ogc",
+        }
+    }
+    /// For an approved OGC post: the Creator draft id, the exact text, and the attachments.
+    pub fn top_level(&self) -> Option<(&str, &str, &[PathBuf])> {
+        match &self.scope {
+            Scope::TopLevel { ogc_draft_id, text, media } => Some((ogc_draft_id, text, media)),
+            _ => None,
         }
     }
 }
@@ -117,6 +133,21 @@ pub fn approve_bundle(conn: &Connection, profile_id: &str, draft_id: &str, confi
         handle: view.post.handle.clone(),
         post_text: view.post.text.clone(),
         scope: Scope::Bundle { draft_id: draft_id.to_string(), actions, text: if text_kind.is_some() { view.edited_text } else { String::new() }, kind: crate::drafts::bundle::draft_kind(&repo::bundle_of(conn, draft_id)?) },
+    })
+}
+
+/// The user clicked Publish on a Creator draft and confirmed `expected_text`. Claims the draft atomically, so a
+/// second click cannot publish it again.
+pub fn approve_top_level(conn: &Connection, profile_id: &str, ogc_draft_id: &str, expected_text: &str, max_chars: usize, kill_engaged: bool) -> AppResult<Approval> {
+    require_open(kill_engaged)?;
+    require_acknowledged(conn)?;
+    let claimed = ogc::claim(conn, profile_id, ogc_draft_id, expected_text, max_chars)?;
+    Ok(Approval {
+        ref_id: new_id(),
+        platform_post_id: String::new(),
+        handle: String::new(),
+        post_text: claimed.text().to_string(),
+        scope: Scope::TopLevel { ogc_draft_id: claimed.draft_id().to_string(), text: claimed.text().to_string(), media: claimed.media().to_vec() },
     })
 }
 
@@ -191,5 +222,24 @@ mod tests {
         approve_bundle(&conn, &profile, &d, "my reply", false).unwrap();
         let s = repo::steps(&conn, &d).unwrap();
         assert_eq!((s[0].status.as_str(), s[1].status.as_str()), ("done", "pending"));
+    }
+
+    #[test]
+    fn top_level_post_needs_acknowledgement_kill_switch_and_exact_text() {
+        let (conn, profile) = db();
+        let d = crate::creator::drafts::insert(
+            &conn,
+            &profile,
+            &crate::creator::drafts::NewDraft { format_id: None, batch_id: None, topic_seed: "t", text: "hi there", model_used: "m", status: "variant", similarity: None },
+        )
+        .unwrap();
+        assert!(matches!(approve_top_level(&conn, &profile, &d.id, "hi there", 280, false), Err(AppError::RulesNotAcknowledged)));
+        acknowledge(&conn);
+        assert!(approve_top_level(&conn, &profile, &d.id, "hi there", 280, true).unwrap_err().to_string().contains("paused"));
+        assert!(approve_top_level(&conn, &profile, &d.id, "other", 280, false).unwrap_err().to_string().contains("changed"));
+        let a = approve_top_level(&conn, &profile, &d.id, "hi there", 280, false).unwrap();
+        assert_eq!((a.source(), a.kind(), a.draft_id(), a.text()), ("ogc_publish", "ogc", None, "hi there"));
+        assert_eq!(a.top_level().map(|(id, text, media)| (id.to_string(), text.to_string(), media.len())), Some((d.id.clone(), "hi there".into(), 0)));
+        assert!(approve_top_level(&conn, &profile, &d.id, "hi there", 280, false).is_err(), "a second click cannot claim it again");
     }
 }

@@ -10,6 +10,8 @@ pub mod learning;
 pub mod guard;
 pub mod diagnostics;
 pub mod layout;
+pub mod creator;
+pub mod formats;
 pub mod lifecycle;
 pub mod llm;
 pub mod logging;
@@ -193,6 +195,32 @@ pub fn run() {
             publish::commands::get_pacing,
             publish::commands::set_pacing,
             publish::commands::pacing_usage,
+            formats::commands::formats_list,
+            formats::commands::formats_create,
+            formats::commands::formats_update,
+            formats::commands::formats_set_status,
+            formats::commands::formats_candidates,
+            formats::commands::formats_dismiss_candidate,
+            formats::commands::formats_extract,
+            formats::commands::formats_extract_pending,
+            formats::commands::formats_add_post,
+            formats::commands::formats_get_thresholds,
+            formats::commands::formats_set_thresholds,
+            formats::commands::formats_watchlist,
+            formats::commands::formats_watch_add,
+            formats::commands::formats_watch_remove,
+            formats::commands::formats_watch_scan,
+            creator::commands::creator_get_settings,
+            creator::commands::creator_save_settings,
+            creator::commands::creator_match_formats,
+            creator::commands::creator_generate,
+            creator::commands::creator_create_blank,
+            creator::commands::creator_drafts,
+            creator::commands::creator_edit,
+            creator::commands::creator_set_media,
+            creator::commands::creator_discard,
+            creator::commands::creator_reopen,
+            creator::commands::creator_publish,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Social Growth Helper");

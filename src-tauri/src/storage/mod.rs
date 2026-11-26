@@ -43,6 +43,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "learning",
         sql: include_str!("migrations/0006_learning.sql"),
     },
+    Migration {
+        version: 7,
+        name: "viral_formats_creator",
+        sql: include_str!("migrations/0007_viral_formats_creator.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -194,6 +199,7 @@ mod tests {
             "publish_audit_log", "analytics_snapshots", "learning_rubrics", "learning_insights",
             "profile_preferences", "app_acknowledgements", "scout_sessions", "dashboard_layouts",
             "dashboard_widgets", "app_settings", "learning_runs", "learning_changelog",
+            "format_candidates", "creator_watchlist",
         ] {
             let n: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))

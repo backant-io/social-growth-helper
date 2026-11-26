@@ -11,6 +11,7 @@ import { api, listen } from "./lib/api";
 import { useOnlineStatus } from "./lib/errors";
 import type { OnboardingStatus, QuitGuardPayload, SectionId } from "./lib/types";
 import { Onboarding, type OnboardingMode } from "./onboarding/Onboarding";
+import { CreatorPage } from "./pages/creator/CreatorPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StylePage } from "./pages/StylePage";
 import { p3 } from "./phase3/api";
@@ -155,6 +156,8 @@ export default function App() {
           <ReplyStudio draftId={draftId} onOpenDraft={openDraft} onGoScout={() => setSection("scout")} />
         ) : section === "activity" ? (
           <ActivityPage />
+        ) : section === "creator" && !locked ? (
+          <CreatorPage locked={locked} />
         ) : (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         )}
