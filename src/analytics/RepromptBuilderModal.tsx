@@ -86,7 +86,7 @@ export function RepromptBuilderModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-2xl">
+      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800 bg-[var(--bg)] shadow-2xl">
         <header className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 px-5 py-3.5">
           <div>
             <h2 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
@@ -145,7 +145,7 @@ export function RepromptBuilderModal({
                   ? 'Follow-up edit (e.g. "switch to stacked bar", "filter to claude only", "last 7d")'
                   : 'Ask for a chart (e.g. "Weekly reply impressions stacked by model")'
               }
-              className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:border-sky-500 focus:outline-none"
+              className="flex-1 rounded-lg border border-zinc-300 dark:border-zinc-700 bg-transparent px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:border-sky-500 focus:outline-none"
             />
             <button
               type="submit"
@@ -203,7 +203,7 @@ export function RepromptBuilderModal({
           )}
 
           {draftSpec && previewData && (
-            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 space-y-2">
+            <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-transparent p-4 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">{draftSpec.title}</div>

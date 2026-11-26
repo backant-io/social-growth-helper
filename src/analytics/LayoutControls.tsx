@@ -84,7 +84,7 @@ export function LayoutControls({
             aria-label="Dashboard layout version"
             value={activeLayout.id}
             onChange={(e) => onSwitchLayout(e.target.value)}
-            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200"
+            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent px-2.5 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200"
           >
             {layouts.map((l) => (
               <option key={l.id} value={l.id}>
@@ -96,13 +96,13 @@ export function LayoutControls({
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
-            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
           >
             Layouts ▾
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 top-9 z-30 w-48 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 py-1 text-xs shadow-lg">
+            <div className="absolute right-0 top-9 z-30 w-48 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent py-1 text-xs shadow-lg">
               <button
                 type="button"
                 onClick={() => {
@@ -159,7 +159,7 @@ export function LayoutControls({
           className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
             customizeMode
               ? "border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300"
-              : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+              : "border-zinc-200 dark:border-zinc-800 bg-transparent text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
           }`}
         >
           {customizeMode ? "Done Editing" : "Customize"}
@@ -187,7 +187,7 @@ export function LayoutControls({
           disabled={syncing}
           onClick={() => onSyncStats(30)}
           title="Backfill last 30 days of profile posts (flags external posts)"
-          className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
+          className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-transparent px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
         >
           Backfill 30d
         </button>

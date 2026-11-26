@@ -142,7 +142,7 @@ export function WidgetCard({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} flex flex-col rounded-xl border bg-white dark:bg-zinc-900/80 p-4 shadow-sm transition-all ${
+      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} flex flex-col rounded-xl border bg-transparent/80 p-4 shadow-sm transition-all ${
         isDropTarget
           ? "border-sky-500 ring-2 ring-sky-500/50"
           : customizeMode

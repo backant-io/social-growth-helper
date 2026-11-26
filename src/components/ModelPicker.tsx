@@ -89,7 +89,7 @@ export function ModelPicker({
       <div className="flex flex-wrap items-center gap-1.5">
         <select
           aria-label={ariaLabel}
-          className={`min-w-[14rem] rounded-lg border border-zinc-300 bg-white px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 ${
+          className={`min-w-[14rem] rounded-lg border border-zinc-300 bg-transparent px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 ${
             compact ? "text-xs" : "text-sm"
           }`}
           value={encoded}
@@ -160,7 +160,7 @@ export function ModelPicker({
         <div className="flex flex-wrap items-center gap-1.5 pt-1">
           <select
             aria-label="Provider for custom model"
-            className="rounded-lg border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+            className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
             value={addingFor}
             onChange={(e) => setAddingFor(e.target.value)}
           >
@@ -172,7 +172,7 @@ export function ModelPicker({
           </select>
           <input
             aria-label="Custom model ID"
-            className="min-w-[12rem] rounded-lg border border-zinc-300 bg-white px-2.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+            className="min-w-[12rem] rounded-lg border border-zinc-300 bg-transparent px-2.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
             placeholder="e.g. grok-4.20 or claude-opus-4-6"
             value={customModel}
             onChange={(e) => setCustomModel(e.target.value)}

@@ -1,7 +1,124 @@
 @import "tailwindcss";
 
+/*
+  Design system: monochrome, quiet, typographic.
+  Tokens first (CSS variables), then the Tailwind theme is pointed at them so every existing
+  utility (zinc, radius, font) resolves to the same scale. Components live in src/components/ui.tsx.
+*/
+
 :root {
   color-scheme: light dark;
+
+  /* Type */
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", ui-sans-serif, sans-serif;
+  --font-body: "Instrument Sans Variable", "Instrument Sans", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 0.9375rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.5rem;
+  --text-hero: 2.25rem;
+
+  /* Space (4px grid) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  /* Shape */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --border-width: 1px;
+
+  /* Colour: light */
+  --bg: #ffffff;
+  --bg-subtle: #f6f6f6;
+  --bg-inverse: #0b0b0b;
+  --fg: #0b0b0b;
+  --fg-muted: #5f5f5f;
+  --fg-faint: #8f8f8f;
+  --fg-inverse: #ffffff;
+  --line: #e6e6e6;
+  --line-strong: #cfcfcf;
+  --dot: rgb(0 0 0 / 0.07);
+  --glow: rgb(0 0 0 / 0.045);
+  --focus: #0b0b0b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #080808;
+    --bg-subtle: #121212;
+    --bg-inverse: #f5f5f5;
+    --fg: #f5f5f5;
+    --fg-muted: #a3a3a3;
+    --fg-faint: #737373;
+    --fg-inverse: #080808;
+    --line: #232323;
+    --line-strong: #383838;
+    --dot: rgb(255 255 255 / 0.07);
+    --glow: rgb(255 255 255 / 0.05);
+    --focus: #f5f5f5;
+  }
+}
+
+@theme {
+  --font-sans: var(--font-body);
+  --font-display: "Bricolage Grotesque Variable", "Bricolage Grotesque", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-md: 0.375rem;
+  --radius-lg: 0.4375rem;
+  --radius-xl: 0.5rem;
+  --radius-2xl: 0.625rem;
+  --shadow-xl: 0 18px 50px -12px rgb(0 0 0 / 0.28);
+
+  --color-zinc-50: #f9f9f9;
+  --color-zinc-100: #f3f3f3;
+  --color-zinc-200: #e6e6e6;
+  --color-zinc-300: #d2d2d2;
+  --color-zinc-400: #a0a0a0;
+  --color-zinc-500: #767676;
+  --color-zinc-600: #5a5a5a;
+  --color-zinc-700: #3f3f3f;
+  --color-zinc-800: #242424;
+  --color-zinc-900: #121212;
+  --color-zinc-950: #080808;
+
+  /* Status colours stay recognisable but are pulled toward neutral. */
+  --color-sky-50: #f4f4f4;
+  --color-sky-200: #dcdcdc;
+  --color-sky-900: #1c1c1c;
+  --color-sky-950: #141414;
+  --color-amber-50: #faf6ec;
+  --color-amber-100: #f4ebd2;
+  --color-amber-200: #e9d9ab;
+  --color-amber-500: #b7891f;
+  --color-amber-600: #946d12;
+  --color-amber-800: #6b4f0d;
+  --color-amber-900: #54400d;
+  --color-amber-950: #1f1808;
+  --color-emerald-50: #f0f6f2;
+  --color-emerald-100: #dcebe1;
+  --color-emerald-200: #b8d6c3;
+  --color-emerald-300: #8fbfa1;
+  --color-emerald-600: #2f7a4d;
+  --color-emerald-800: #1f5636;
+  --color-emerald-900: #173f28;
+  --color-emerald-950: #0c1f15;
+  --color-red-50: #fbf1f0;
+  --color-red-100: #f6dedc;
+  --color-red-200: #ecbcb8;
+  --color-red-600: #b3261e;
+  --color-red-500: #c7352c;
+  --color-red-800: #7f1d17;
+  --color-red-900: #5f1612;
+  --color-red-950: #230b09;
 }
 
 html,
@@ -11,14 +128,112 @@ body,
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
-  @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  letter-spacing: -0.025em;
+  font-variation-settings: "opsz" 48;
+}
+
+h1 {
+  font-weight: 650;
+}
+
+code,
+kbd,
+pre,
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+::selection {
+  background: var(--fg);
+  color: var(--bg);
 }
 
 :focus-visible {
-  outline: 2px solid #71717a;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@layer components {
+  /* Atmosphere: a faint top glow and a dotted grid that fades out, so empty areas have texture. */
+  .atmosphere {
+    position: relative;
+    background-color: var(--bg);
+    background-image: radial-gradient(900px 380px at 12% -8%, var(--glow), transparent 70%);
+  }
+
+  .atmosphere::before {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle at 1px 1px, var(--dot) 1px, transparent 0);
+    background-size: 22px 22px;
+    -webkit-mask-image: linear-gradient(to bottom, #000, transparent 55%);
+    mask-image: linear-gradient(to bottom, #000, transparent 55%);
+  }
+
+  .atmosphere > * {
+    position: relative;
+  }
+
+  .sidebar-surface {
+    background-color: var(--bg-subtle);
+    background-image: linear-gradient(180deg, transparent, var(--glow));
+  }
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+@keyframes spotlight-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.coach-pop {
+  animation: spotlight-in 180ms ease-out;
+}
+
+.spotlight-ring {
+  transition:
+    top 220ms ease,
+    left 220ms ease,
+    width 220ms ease,
+    height 220ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-pop {
+    animation: none;
+  }
+  .spotlight-ring {
+    transition: none;
+  }
 }
 
 /* macOS only: the window is transparent with a native sidebar vibrancy effect behind the sidebar (SHL-03). */

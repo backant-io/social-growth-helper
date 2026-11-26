@@ -126,7 +126,7 @@ export function SyncHealthBanner({
                 {schedule.items.slice(0, 6).map((item) => (
                   <div
                     key={item.platform_post_id}
-                    className="flex items-center justify-between rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5"
+                    className="flex items-center justify-between rounded border border-zinc-200 dark:border-zinc-800 bg-transparent px-2.5 py-1.5"
                   >
                     <span className="font-mono text-[11px] text-zinc-700 dark:text-zinc-300 truncate">
                       {item.draft_kind} #{item.platform_post_id}

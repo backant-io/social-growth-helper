@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnalyticsPage } from "./analytics/AnalyticsPage";
 import { BrowserStateBanner } from "./components/BrowserStateBanner";
 import { EmptyState } from "./components/EmptyState";
 import { OfflineBanner } from "./components/OfflineBanner";
+import { SetupSkippedBanner } from "./components/SetupSkippedBanner";
 import { QuitGuardModal } from "./components/QuitGuardModal";
 import { Sidebar } from "./components/Sidebar";
 import { SECTIONS } from "./components/sections";
@@ -12,6 +13,7 @@ import { api, listen } from "./lib/api";
 import { useOnlineStatus } from "./lib/errors";
 import type { OnboardingStatus, QuitGuardPayload, SectionId } from "./lib/types";
 import { Onboarding, type OnboardingMode } from "./onboarding/Onboarding";
+import { clearSetupSkipped, isLocked, isSetupSkipped, markSetupSkipped } from "./onboarding/setupSkip";
 import { CreatorPage } from "./pages/creator/CreatorPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StylePage } from "./pages/StylePage";
@@ -27,6 +29,10 @@ export default function App() {
   const [section, setSection] = useState<SectionId>("scout");
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [overlay, setOverlay] = useState<OnboardingMode | null>(null);
+  const [skipped, setSkipped] = useState(isSetupSkipped);
+  const returnTo = useRef<SectionId | null>(null);
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
   const [quitJobs, setQuitJobs] = useState<string[] | null>(null);
   const online = useOnlineStatus();
   const [proposed, setProposed] = useState(0);
@@ -54,15 +60,43 @@ export default function App() {
   }, [acknowledged]);
 
   useEffect(() => {
-    if (status && !status.tour_completed && !overlay) setOverlay("full");
+    if (!status || overlay || skipped) return;
+    if (!status.tour_completed) setOverlay("full");
     // Re-prompt for the rules only when the notice version changed.
-    else if (status && status.tour_completed && !status.rules.acknowledged && !overlay) setOverlay("rules");
-  }, [status, overlay]);
+    else if (!status.rules.acknowledged) setOverlay("rules");
+  }, [status, overlay, skipped]);
+
+  const closeOverlay = () => {
+    setOverlay(null);
+    if (returnTo.current) setSection(returnTo.current);
+    returnTo.current = null;
+  };
+
+  const openTour = () => {
+    returnTo.current = sectionRef.current;
+    setOverlay("tour");
+  };
+
+  const skipSetup = async () => {
+    markSetupSkipped();
+    setSkipped(true);
+    returnTo.current = null;
+    setOverlay(null);
+    setSection("scout");
+    await api.completeTour().catch(() => undefined);
+    await refresh();
+  };
+
+  const resumeSetup = () => {
+    clearSetupSkipped();
+    setSkipped(false);
+    setOverlay("setup");
+  };
 
   useEffect(() => {
     const offs: Array<Promise<() => void>> = [
       listen<string>("menu-action", (a) => {
-        if (a === "replay_tour") setOverlay("tour");
+        if (a === "replay_tour") openTour();
         if (a === "read_rules") setOverlay("rules");
       }),
       listen<QuitGuardPayload>("quit-guard", (p) => {
@@ -103,7 +137,7 @@ export default function App() {
     else if (id === "scout:start") setSection("scout");
     else if (id === "kill:toggle") await p3.setKillSwitch(!(await p3.killSwitch()));
     else if (id === "help") setHelp(true);
-    else if (id === "tour") setOverlay("tour");
+    else if (id === "tour") openTour();
   };
 
   const openDraft = (id: string | null) => {
@@ -111,22 +145,24 @@ export default function App() {
     if (id) setSection("reply");
   };
 
-  const locked = status ? !status.rules.acknowledged : false;
+  const locked = status ? isLocked(status.rules.acknowledged, skipped) : false;
+  const setupIncomplete = !!status && !status.rules.acknowledged && skipped && !overlay;
   const active = SECTIONS.find((s) => s.id === section)!;
 
   return (
     <div className="flex h-full">
       <Sidebar active={section} onSelect={setSection} locked={locked} badges={{ learning: proposed }} />
-      <div className="flex min-w-0 flex-1 flex-col bg-white dark:bg-zinc-950">
+      <div className="atmosphere flex min-w-0 flex-1 flex-col">
       <KillBar />
+      {setupIncomplete && <SetupSkippedBanner onResume={resumeSetup} />}
       <BrowserStateBanner />
-      <main className="min-w-0 flex-1 overflow-y-auto p-8">
+      <main data-tour="main" className="min-w-0 flex-1 overflow-y-auto px-10 py-9">
         <OfflineBanner offline={!online} />
         {section === "settings" ? (
           <SettingsPage
             rules={status?.rules ?? null}
             offline={!online}
-            onReplayTour={() => setOverlay("tour")}
+            onReplayTour={openTour}
             onReadRules={() => setOverlay("rules")}
             onDataChanged={() => {
               setProposed(0);
@@ -166,9 +202,15 @@ export default function App() {
           mode={overlay}
           rulesAcknowledged={status.rules.acknowledged}
           onRulesAcknowledged={() => refresh()}
-          onDismiss={overlay === "full" ? undefined : () => setOverlay(null)}
+          onDismiss={overlay === "full" || overlay === "setup" ? undefined : closeOverlay}
+          onSkip={overlay === "full" || overlay === "setup" ? () => void skipSetup() : undefined}
+          onNavigate={setSection}
           onFinished={async () => {
-            setOverlay(null);
+            const wizard = overlay === "full" || overlay === "setup";
+            closeOverlay();
+            if (wizard) setSection("scout");
+            clearSetupSkipped();
+            setSkipped(false);
             await refresh();
           }}
         />
