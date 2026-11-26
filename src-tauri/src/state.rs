@@ -36,11 +36,11 @@ impl AppPaths {
 
 pub struct AppState {
     pub paths: AppPaths,
-    pub db: Mutex<Connection>,
+    pub db: Arc<Mutex<Connection>>,
     pub profile_id: String,
     pub secrets: Arc<SecretsService>,
     pub browser: Arc<BrowserService>,
-    pub llm: LlmRouter,
+    pub llm_router: Arc<LlmRouter>,
     pub http: reqwest::Client,
     pub jobs: JobRegistry,
     pub quit_approved: AtomicBool,
@@ -48,17 +48,21 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(paths: AppPaths, db: Connection, profile_id: String) -> Self {
+        let db = Arc::new(Mutex::new(db));
         let secrets = Arc::new(SecretsService::system());
         let browser = Arc::new(BrowserService::new(Box::new(ChromeCdpDriver::new())));
-        let llm = LlmRouter::new();
-        let _ = llm.sync_from_db(&db, secrets.clone(), browser.clone());
+        let llm_router = Arc::new(LlmRouter::new());
+        {
+            let conn = db.lock().unwrap();
+            let _ = llm_router.sync_from_db(&conn, secrets.clone(), browser.clone());
+        }
         Self {
             paths,
-            db: Mutex::new(db),
+            db,
             profile_id,
             secrets,
             browser,
-            llm,
+            llm_router,
             http: reqwest::Client::new(),
             jobs: JobRegistry::new(),
             quit_approved: AtomicBool::new(false),

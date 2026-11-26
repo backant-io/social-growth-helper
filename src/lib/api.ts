@@ -135,8 +135,21 @@ function defaultStyleGuide(): StyleGuide {
   };
 }
 
+const memoryStore = new Map<string, string>();
+function storageGet(key: string): string | null {
+  if (typeof localStorage !== "undefined") return localStorage.getItem(key);
+  return memoryStore.get(key) ?? null;
+}
+function storageSet(key: string, val: string): void {
+  if (typeof localStorage !== "undefined") localStorage.setItem(key, val);
+  else memoryStore.set(key, val);
+}
+export function resetMockState(): void {
+  if (typeof localStorage !== "undefined") localStorage.removeItem(MOCK_KEY);
+  memoryStore.delete(MOCK_KEY);
+}
 function mockState(): MockState {
-  const raw = localStorage.getItem(MOCK_KEY);
+  const raw = storageGet(MOCK_KEY);
   const parsed = raw ? (JSON.parse(raw) as Partial<MockState>) : {};
   return {
     tour_completed: parsed.tour_completed ?? false,
@@ -152,7 +165,7 @@ function mockState(): MockState {
 }
 
 function saveMock(s: MockState) {
-  localStorage.setItem(MOCK_KEY, JSON.stringify(s));
+  storageSet(MOCK_KEY, JSON.stringify(s));
 }
 
 function mockRules(s: MockState): RulesStatus {
@@ -528,17 +541,18 @@ export const api = {
     limit = 20
   ): Promise<RetrievedExample[]> {
     if (inTauri()) return call("style_search_examples", { kind, query, limit });
-    const q = query.trim().toLowerCase();
-    const items = (await api.styleListExamples(kind)).filter(
-      (e) =>
-        !q ||
-        e.example_text.toLowerCase().includes(q) ||
-        (e.source_context_text ?? "").toLowerCase().includes(q) ||
-        e.tags.some((t) => t.toLowerCase().includes(q))
-    );
+    const tokens = query
+      .toLowerCase()
+      .split(/[^a-z0-9_]+/)
+      .filter((t) => t.length >= 2);
+    const items = (await api.styleListExamples(kind)).filter((e) => {
+      if (e.pinned || tokens.length === 0) return true;
+      const hay = `${e.example_text} ${e.source_context_text ?? ""} ${e.tags.join(" ")}`.toLowerCase();
+      return tokens.some((tok) => hay.includes(tok));
+    });
     return items.slice(0, limit).map((example) => ({
       example,
-      reason: example.pinned ? "Pinned example" : q ? "Preview keyword match" : "Recent example",
+      reason: example.pinned ? "Pinned example" : tokens.length > 0 ? "Preview keyword match" : "Recent example",
       score: null,
     }));
   },

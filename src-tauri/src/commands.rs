@@ -263,7 +263,7 @@ fn to_account_view(state: &AppState, acct: ProviderAccount, remote_models: &[Str
 fn sync_router_from_db(state: &AppState) -> AppResult<()> {
     let db = state.db.lock().unwrap();
     state
-        .llm
+        .llm_router
         .sync_from_db(&db, state.secrets.clone(), state.browser.clone())
         .map_err(AppError::Llm)
 }
@@ -341,7 +341,7 @@ pub async fn llm_connect_claude_cli(
     }
     sync_router_from_db(&state)?;
     let status = state
-        .llm
+        .llm_router
         .health_check_account(&id)
         .await
         .unwrap_or_else(|e| ProviderStatus {
@@ -394,7 +394,7 @@ pub async fn llm_connect_grok_web(
     }
     sync_router_from_db(&state)?;
     let status = state
-        .llm
+        .llm_router
         .health_check_account(&id)
         .await
         .unwrap_or_else(|e| ProviderStatus {
@@ -466,7 +466,7 @@ pub async fn llm_save_api_key_provider(
     }
     sync_router_from_db(&state)?;
     let status = state
-        .llm
+        .llm_router
         .health_check_account(&id)
         .await
         .unwrap_or_else(|e| ProviderStatus {
@@ -571,7 +571,7 @@ pub async fn llm_health_check_provider(
     account_id: String,
 ) -> AppResult<ProviderAccountView> {
     let status = state
-        .llm
+        .llm_router
         .health_check_account(&account_id)
         .await
         .map_err(AppError::Llm)?;
@@ -798,6 +798,6 @@ pub async fn style_run_bench(
         let db = state.db.lock().unwrap();
         onboarding::require_acknowledged(&db)?;
     }
-    bench::run_style_bench(&state.db, &state.llm, &state.profile_id, input).await
+    bench::run_style_bench(&state.db, &state.llm_router, &state.profile_id, input).await
 }
 

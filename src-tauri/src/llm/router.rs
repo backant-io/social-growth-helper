@@ -389,6 +389,42 @@ impl LlmRouter {
         validate_json_schema(&spec.schema, &value).map_err(|errs| errs.join("; "))?;
         Ok(value)
     }
+
+    /// Clean JSON completion helper for downstream feature adapters (e.g. Phase 5 `formats::llm::StructuredLlm`).
+    /// Routes by task slot string (`"format_extraction"`, `"ogc_generation"`, etc.), enforces unset-route
+    /// and rate-limit guards, extracts clean JSON if fence-wrapped, and returns the serialized JSON string.
+    pub async fn complete_json_for_task(
+        &self,
+        db: &Mutex<Connection>,
+        task_name: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<String, LlmError> {
+        let task_type = TaskType::parse(task_name).ok_or_else(|| {
+            LlmError::new(
+                LlmErrorKind::InvalidConfig,
+                format!("unknown LLM task slot '{task_name}'"),
+            )
+        })?;
+        let req = LlmRequest {
+            task_type,
+            model_id: String::new(),
+            system_prompt: (!system_prompt.trim().is_empty()).then(|| system_prompt.to_string()),
+            messages: vec![LlmMessage::user_text(user_prompt)],
+            temperature: None,
+            reasoning_effort: None,
+            max_tokens: None,
+            json_schema: None,
+            prompt_version: None,
+        };
+        let resp = self.complete(db, req, None).await?;
+        if let Some(v) = resp.structured_json {
+            return Ok(v.to_string());
+        }
+        Ok(extract_json_value(&resp.text)
+            .map(|v| v.to_string())
+            .unwrap_or(resp.text))
+    }
 }
 
 pub fn unset_route_tasks(routes: &[TaskModelRoute]) -> Vec<TaskType> {
@@ -628,5 +664,50 @@ mod tests {
         assert!(router.complete(&db, basic_req(TaskType::DashboardBuilder), None).await.is_ok());
         let rate_err = router.complete(&db, basic_req(TaskType::DashboardBuilder), None).await.unwrap_err();
         assert_eq!(rate_err.kind, LlmErrorKind::RateGuardBlocked);
+    }
+
+    #[tokio::test]
+    async fn complete_json_for_task_supports_format_extraction_and_ogc_generation() {
+        let (_dir, db, router) = setup();
+        add_account(&db, "p1", ProviderType::AnthropicApi);
+        {
+            let conn = db.lock().unwrap();
+            for task in [TaskType::FormatExtraction, TaskType::OgcGeneration] {
+                repo::save_task_route(
+                    &conn,
+                    TaskModelRoutePatch {
+                        task_type: task,
+                        provider_account_id: Some("p1".into()),
+                        model_id: Some("m1".into()),
+                        reasoning_effort: None,
+                        temperature: None,
+                        fallback_account_id: None,
+                        fallback_model_id: None,
+                        max_calls_per_hour: None,
+                    },
+                )
+                .unwrap();
+            }
+        }
+        let mock = Arc::new(MockLlmProvider::new(
+            "p1",
+            ProviderType::AnthropicApi,
+            ProviderCapabilities { vision: true, json_schema: true, streaming: false, thinking: false },
+        ));
+        mock.push_ok("```json\n{\"name\":\"Contrarian Metric\"}\n```");
+        mock.push_ok("{\"drafts\":[{\"text\":\"Shipped it.\"}]}");
+        router.register_provider(mock);
+
+        let f_out = router
+            .complete_json_for_task(&db, "format_extraction", "Extract", "Post text")
+            .await
+            .unwrap();
+        assert_eq!(f_out, "{\"name\":\"Contrarian Metric\"}");
+
+        let o_out = router
+            .complete_json_for_task(&db, "ogc_generation", "Draft", "Seed")
+            .await
+            .unwrap();
+        assert!(o_out.contains("Shipped it."));
     }
 }
