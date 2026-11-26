@@ -101,6 +101,11 @@ pub trait BrowserDriver: Send + Sync {
     async fn insert_text(&self, text: &str) -> Result<(), BrowserError>;
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError>;
     async fn get_bounds(&self) -> Result<WindowBounds, BrowserError>;
+    /// Attaches local files to the first element matching `selector` (an `<input type=file>`) without
+    /// opening the OS file dialog (BRW-17). Paths must be absolute.
+    async fn set_file_input_files(&self, _selector: &str, _paths: &[PathBuf]) -> Result<(), BrowserError> {
+        Err(BrowserError::Other("this browser driver cannot attach files".into()))
+    }
     /// Graceful `Browser.close` so Chrome flushes cookies and storage before exiting (BRW-16).
     /// Raises the X window (tray "Focus X window", challenge takeover). No-op for drivers without windows.
     async fn bring_to_front(&self) -> Result<(), BrowserError> {

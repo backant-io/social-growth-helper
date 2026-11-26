@@ -35,6 +35,9 @@ impl JobRunner for AppRunner {
             shots_dir: Some(state.paths.data_dir.join("audit-shots")),
             vision: Some(&*completion),
         };
+        if a.top_level().is_some() {
+            return executor::execute_top_level(&env, a, executor::ComposeTiming::default()).await;
+        }
         executor::execute(&env, a).await
     }
 }

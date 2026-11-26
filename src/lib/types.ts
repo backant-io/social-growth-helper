@@ -428,3 +428,158 @@ export interface StyleBenchResult {
   primary: BenchModelRun;
   comparison: BenchModelRun | null;
 }
+
+export interface FormatSlot {
+  key: string;
+  label: string;
+  hint: string;
+}
+
+export interface FormatBlueprint {
+  name: string;
+  archetype: string;
+  hook_formula: string;
+  structural_pattern: string;
+  skeleton: string;
+  slots: FormatSlot[];
+  media_hint: string;
+}
+
+export interface FormatSource {
+  post_id: string;
+  author: string;
+  url: string;
+  seen_at: string;
+  score: number;
+}
+
+export interface FormatRecord extends FormatBlueprint {
+  id: string;
+  observation_count: number;
+  observed_win_rate: number | null;
+  personal_win_rate: number | null;
+  status: "active" | "archived";
+  origin: "detected" | "manual";
+  sources: FormatSource[];
+  example_texts: string[];
+  recent_sightings: number;
+  detected_at: string;
+  updated_at: string;
+}
+
+export type FormatSort = "working" | "rising" | "recent";
+
+export interface PostMetrics {
+  likes: number;
+  reposts: number;
+  replies: number;
+  bookmarks: number;
+  views: number | null;
+}
+
+export interface FormatCandidate {
+  id: string;
+  platform_post_id: string;
+  author_handle: string;
+  author_followers: number | null;
+  text: string;
+  metrics: PostMetrics;
+  posted_at: string | null;
+  source: "scout" | "watchlist" | "manual";
+  virality_score: number;
+  reasons: string[];
+  status: "pending" | "extracted" | "dismissed" | "failed";
+  format_id: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface ViralThresholds {
+  min_engagement: number;
+  reach_multiple: number;
+  bookmark_ratio: number;
+  min_bookmarks: number;
+  assumed_followers: number;
+}
+
+export interface ManualPost {
+  url: string;
+  text: string;
+  likes: number;
+  reposts: number;
+  replies: number;
+  bookmarks: number;
+  views: number | null;
+  author_followers: number | null;
+}
+
+export interface Detection {
+  verdict: { flagged: boolean; score: number; reasons: string[] };
+  candidate: FormatCandidate | null;
+  already_known: boolean;
+}
+
+export interface Processed {
+  candidate_id: string;
+  format: FormatRecord;
+  merged: boolean;
+  similarity: number | null;
+}
+
+export interface BatchSummary {
+  created: number;
+  merged: number;
+  failed: number;
+  stopped_reason: string | null;
+}
+
+export interface WatchEntry {
+  id: string;
+  handle: string;
+  followers: number | null;
+  added_at: string;
+  last_scanned_at: string | null;
+}
+
+export interface ScanSummary {
+  handle: string;
+  posts_read: number;
+  flagged: number;
+  new_candidates: number;
+}
+
+export interface CreatorSettings {
+  similarity_threshold: number;
+  max_chars: number;
+}
+
+export interface FormatMatch {
+  format_id: string;
+  score: number;
+}
+
+export type DraftStatus = "variant" | "draft" | "publishing" | "published" | "failed" | "unconfirmed" | "discarded";
+
+export interface OgcDraft {
+  id: string;
+  viral_format_id: string | null;
+  batch_id: string | null;
+  topic_seed: string;
+  initial_text: string;
+  edited_text: string;
+  edit_distance: number;
+  media_paths: string[];
+  model_used: string;
+  status: DraftStatus;
+  similarity: number | null;
+  published_url: string | null;
+  error_message: string | null;
+  user_approved_at: string | null;
+  published_at: string | null;
+  created_at: string;
+}
+
+export interface Generated {
+  batch_id: string;
+  drafts: OgcDraft[];
+}

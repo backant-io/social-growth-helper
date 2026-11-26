@@ -1,5 +1,7 @@
 use crate::browser::chrome_driver::ChromeCdpDriver;
 use crate::browser::service::BrowserService;
+use crate::formats::llm::StructuredLlm;
+use crate::formats::router_llm::RouterLlm;
 use crate::lifecycle::JobRegistry;
 use crate::llm::router::LlmRouter;
 use crate::secrets::SecretsService;
@@ -45,6 +47,8 @@ pub struct AppState {
     pub llm_router: Arc<LlmRouter>,
     pub http: reqwest::Client,
     pub jobs: JobRegistry,
+    /// Phase 5 model seam, backed by the Phase 2 router (`LlmRouter::complete_json_for_task`).
+    pub llm: Arc<dyn StructuredLlm>,
     pub quit_approved: AtomicBool,
 }
 
@@ -58,6 +62,7 @@ impl AppState {
             let conn = db.lock().unwrap();
             let _ = llm_router.sync_from_db(&conn, secrets.clone(), browser.clone());
         }
+        let llm: Arc<dyn StructuredLlm> = Arc::new(RouterLlm::new(llm_router.clone(), db.clone()));
         Self {
             paths,
             db,
@@ -67,6 +72,7 @@ impl AppState {
             llm_router,
             http: reqwest::Client::new(),
             jobs: JobRegistry::new(),
+            llm,
             quit_approved: AtomicBool::new(false),
         }
     }
