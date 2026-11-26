@@ -105,6 +105,11 @@ impl ChromeCdpDriver {
         }
     }
 
+    async fn window_id(&self, l: &Live) -> Result<i64, BrowserError> {
+        let w = l.session.send("Browser.getWindowForTarget", json!({ "targetId": l.target_id }), None).await?;
+        w["windowId"].as_i64().ok_or_else(|| BrowserError::Other("no windowId".into()))
+    }
+
     fn take_child(&self) -> Option<Child> {
         self.child.lock().unwrap().take()
     }
@@ -298,8 +303,7 @@ impl BrowserDriver for ChromeCdpDriver {
 
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError> {
         let l = self.live()?;
-        let w = l.session.send("Browser.getWindowForTarget", json!({ "targetId": l.target_id }), None).await?;
-        let window_id = w["windowId"].as_i64().ok_or_else(|| BrowserError::Other("no windowId".into()))?;
+        let window_id = self.window_id(l).await?;
         l.session
             .send(
                 "Browser.setWindowBounds",
@@ -315,6 +319,20 @@ impl BrowserDriver for ChromeCdpDriver {
             )
             .await?;
         Ok(())
+    }
+
+    async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {
+        let l = self.live()?;
+        let window_id = self.window_id(l).await?;
+        let r = l.session.send("Browser.getWindowBounds", json!({ "windowId": window_id }), None).await?;
+        let b = &r["bounds"];
+        let num = |k: &str| b[k].as_i64().ok_or_else(|| BrowserError::Other(format!("window bounds had no {k}")));
+        Ok(WindowBounds {
+            left: num("left")? as i32,
+            top: num("top")? as i32,
+            width: num("width")?.max(0) as u32,
+            height: num("height")?.max(0) as u32,
+        })
     }
 
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {
@@ -646,6 +664,20 @@ mod tests {
         assert_eq!(sent[1]["params"]["windowId"], 3);
         assert_eq!(sent[1]["params"]["bounds"]["width"], 500);
         assert!(sent[1].get("sessionId").is_none(), "browser-level call has no page session");
+    }
+
+    #[tokio::test]
+    async fn get_bounds_reads_the_window_rect() {
+        let (d, rec) = attached_driver(|req| match req["method"].as_str().unwrap() {
+            "Browser.getWindowForTarget" => json!({ "result": { "windowId": 3 } }),
+            "Browser.getWindowBounds" => {
+                json!({ "result": { "bounds": { "left": 700, "top": 30, "width": 480, "height": 820, "windowState": "normal" } } })
+            }
+            _ => json!({ "result": {} }),
+        })
+        .await;
+        assert_eq!(d.get_bounds().await.unwrap(), WindowBounds { left: 700, top: 30, width: 480, height: 820 });
+        assert_eq!(methods(&rec), vec!["Browser.getWindowForTarget", "Browser.getWindowBounds"]);
     }
 
     #[tokio::test]

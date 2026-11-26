@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { api } from "../lib/api";
+import { browserNotices } from "../lib/browserNotices";
 import { parseLlmError } from "../lib/errors";
 import type {
   AppInfo,
   BrowserInfo,
   ClaudeCliDetectionResponse,
+  LayoutStatus,
   PromptTemplate,
   ProviderAccountView,
   ProviderHealth,
@@ -160,6 +162,15 @@ function BrowserPanel({ rulesAcknowledged }: { rulesAcknowledged: boolean }) {
               <span className="text-red-600 dark:text-red-400">{info.problem}</span>
             )}
           </p>
+          {browserNotices(info).map((n) => (
+            <p
+              key={n.id}
+              role="status"
+              className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-amber-800 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200"
+            >
+              {n.text}
+            </p>
+          ))}
           <div className="flex gap-2">
             <input
               aria-label="Browser path override"
@@ -216,6 +227,102 @@ function BrowserPanel({ rulesAcknowledged }: { rulesAcknowledged: boolean }) {
             </div>
           )}
         </div>
+      )}
+    </section>
+  );
+}
+
+function LayoutPanel() {
+  const [status, setStatus] = useState<LayoutStatus | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api.windowLayoutStatus().then(setStatus);
+  }, []);
+
+  const run = async (fn: () => Promise<LayoutStatus>, done: string) => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      setStatus(await fn());
+      setMessage(done);
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const off = !status?.placement_supported;
+  return (
+    <section className={panel} aria-labelledby="lay-h">
+      <h2 id="lay-h" className="font-medium">
+        Window layout
+      </h2>
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        Opening the X window puts it beside this one. Move them where you like, then save; the layout is restored next time.
+      </p>
+      {status?.hint && (
+        <p role="status" className="mt-2 text-sm text-amber-700 dark:text-amber-300">
+          {status.hint}
+        </p>
+      )}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" className={btn} disabled={busy || off} onClick={() => run(api.saveWindowLayout, "Layout saved.")}>
+          Save current layout
+        </button>
+        <button type="button" className={btn} disabled={busy || off} onClick={() => run(api.applyWindowLayout, "Layout applied.")}>
+          Arrange side by side
+        </button>
+        <button
+          type="button"
+          className={btn}
+          disabled={busy || off || !status?.saved}
+          onClick={() => run(api.resetWindowLayout, "Saved layout cleared.")}
+        >
+          Reset
+        </button>
+      </div>
+      {message && <p className="mt-2 text-sm text-zinc-500">{message}</p>}
+    </section>
+  );
+}
+
+function DiagnosticsPanel() {
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const copy = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await navigator.clipboard.writeText(await api.diagnostics());
+      setMessage("Diagnostics copied. Tokens and post text are redacted.");
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className={panel} aria-labelledby="diag-h">
+      <h2 id="diag-h" className="font-medium">
+        Diagnostics
+      </h2>
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
+        Logs stay on this computer and rotate automatically. Copy a redacted report to paste into a bug report.
+      </p>
+      <div className="mt-3">
+        <button type="button" className={btn} disabled={busy} onClick={copy}>
+          Copy diagnostics
+        </button>
+      </div>
+      {message && (
+        <p role="status" className="mt-2 text-sm text-zinc-500">
+          {message}
+        </p>
       )}
     </section>
   );
@@ -1038,6 +1145,8 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onData
           </section>
           <SecurityPanel />
           <BrowserPanel rulesAcknowledged={rules?.acknowledged ?? false} />
+          <LayoutPanel />
+          <DiagnosticsPanel />
           <DataPanel onDataChanged={onDataChanged} />
           {info && (
             <section className={panel} aria-labelledby="about-h">

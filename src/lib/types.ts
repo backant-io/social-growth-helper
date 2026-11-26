@@ -50,11 +50,33 @@ export interface BrowserInstall {
   from_override: boolean;
 }
 
+export type CompatStatus = "ok" | "too_old" | "incompatible" | "unknown";
+
+export interface VersionCheck {
+  version: string | null;
+  major: number | null;
+  min_tested_major: number;
+  status: CompatStatus;
+  warning: string | null;
+}
+
+export type DisplayServer = "macos" | "x11" | "wayland" | "unknown";
+
 export interface BrowserInfo {
   install: BrowserInstall | null;
   problem: string | null;
   override_path: string | null;
   running: boolean;
+  version_check: VersionCheck | null;
+  display_server: DisplayServer;
+  placement_hint: string | null;
+}
+
+export interface LayoutStatus {
+  display_server: DisplayServer;
+  placement_supported: boolean;
+  hint: string | null;
+  saved: boolean;
 }
 
 export interface VisibleTweet {
