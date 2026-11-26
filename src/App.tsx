@@ -1,0 +1,73 @@
+import { useCallback, useEffect, useState } from "react";
+import { EmptyState } from "./components/EmptyState";
+import { QuitGuardModal } from "./components/QuitGuardModal";
+import { Sidebar } from "./components/Sidebar";
+import { SECTIONS } from "./components/sections";
+import { api, listen } from "./lib/api";
+import type { OnboardingStatus, QuitGuardPayload, SectionId } from "./lib/types";
+import { Onboarding, type OnboardingMode } from "./onboarding/Onboarding";
+import { SettingsPage } from "./pages/SettingsPage";
+
+export default function App() {
+  const [section, setSection] = useState<SectionId>("scout");
+  const [status, setStatus] = useState<OnboardingStatus | null>(null);
+  const [overlay, setOverlay] = useState<OnboardingMode | null>(null);
+  const [quitJobs, setQuitJobs] = useState<string[] | null>(null);
+
+  const refresh = useCallback(async () => {
+    setStatus(await api.onboardingStatus());
+  }, []);
+
+  useEffect(() => {
+    refresh().then(() => undefined);
+  }, [refresh]);
+
+  useEffect(() => {
+    if (status && !status.tour_completed && !overlay) setOverlay("full");
+    // Re-prompt for the rules only when the notice version changed.
+    else if (status && status.tour_completed && !status.rules.acknowledged && !overlay) setOverlay("rules");
+  }, [status, overlay]);
+
+  useEffect(() => {
+    const offs: Array<Promise<() => void>> = [
+      listen<string>("menu-action", (a) => {
+        if (a === "replay_tour") setOverlay("tour");
+        if (a === "read_rules") setOverlay("rules");
+      }),
+      listen<QuitGuardPayload>("quit-guard", (p) => {
+        if (p.kind === "needs_confirmation") setQuitJobs(p.jobs);
+      }),
+    ];
+    return () => {
+      offs.forEach((p) => p.then((off) => off()));
+    };
+  }, []);
+
+  const locked = status ? !status.rules.acknowledged : false;
+  const active = SECTIONS.find((s) => s.id === section)!;
+
+  return (
+    <div className="flex h-full">
+      <Sidebar active={section} onSelect={setSection} locked={locked} />
+      <main className="min-w-0 flex-1 overflow-y-auto p-8">
+        {section === "settings" ? (
+          <SettingsPage rules={status?.rules ?? null} onReplayTour={() => setOverlay("tour")} onReadRules={() => setOverlay("rules")} />
+        ) : (
+          <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
+        )}
+      </main>
+      {overlay && status && (
+        <Onboarding
+          mode={overlay}
+          rulesAcknowledged={status.rules.acknowledged}
+          onDismiss={overlay === "full" ? undefined : () => setOverlay(null)}
+          onFinished={async () => {
+            setOverlay(null);
+            await refresh();
+          }}
+        />
+      )}
+      {quitJobs && <QuitGuardModal jobs={quitJobs} onCancel={() => setQuitJobs(null)} onQuit={() => void api.quitApp()} />}
+    </div>
+  );
+}
