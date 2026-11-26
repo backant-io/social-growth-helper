@@ -7,8 +7,11 @@ pub mod control;
 pub mod drafts;
 pub mod error;
 pub mod guard;
+pub mod diagnostics;
+pub mod layout;
 pub mod lifecycle;
 pub mod llm;
+pub mod logging;
 mod menu;
 pub mod onboarding;
 pub mod phase3;
@@ -38,6 +41,10 @@ fn init_state() -> Result<AppState, Box<dyn std::error::Error>> {
 }
 
 pub fn run() {
+    if let Err(e) = logging::init(&AppPaths::resolve().log_dir) {
+        eprintln!("file logging unavailable: {e}");
+    }
+    log::info!("starting Social Growth Helper {}", env!("CARGO_PKG_VERSION"));
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .menu(|handle| menu::build(handle))
@@ -60,6 +67,7 @@ pub fn run() {
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray unavailable: {e}");
             }
+            commands::restore_app_window_layout(app.handle());
             // A Chrome left running by a crashed or force-killed previous session is closed before anything else.
             tauri::async_runtime::spawn(async move {
                 browser::launcher::reclaim_stale_chrome(&profile_dir).await;
@@ -80,6 +88,11 @@ pub fn run() {
             commands::browser_launch_x,
             commands::browser_close,
             commands::browser_current_url,
+            commands::window_layout_status,
+            commands::save_window_layout,
+            commands::apply_window_layout,
+            commands::reset_window_layout,
+            commands::get_diagnostics,
             commands::browser_read_visible_tweets,
             commands::active_jobs,
             commands::quit_app,

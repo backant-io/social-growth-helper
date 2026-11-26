@@ -5,6 +5,7 @@ import type {
   ExampleKind,
   ImportCandidate,
   ModelInfo,
+  LayoutStatus,
   OnboardingStatus,
   Preferences,
   PromptTemplate,
@@ -200,7 +201,11 @@ const mock = {
     problem: "Browser control is only available in the desktop app.",
     override_path: null,
     running: false,
+    version_check: null,
+    display_server: "unknown",
+    placement_hint: null,
   }),
+  layout: (): LayoutStatus => ({ display_server: "unknown", placement_supported: false, hint: "Window layout is only available in the desktop app.", saved: false }),
 };
 
 export const api = {
@@ -258,6 +263,21 @@ export const api = {
   },
   async readVisibleTweets(): Promise<VisibleTweet[]> {
     return call("browser_read_visible_tweets");
+  },
+  async windowLayoutStatus(): Promise<LayoutStatus> {
+    return inTauri() ? call("window_layout_status") : mock.layout();
+  },
+  async saveWindowLayout(): Promise<LayoutStatus> {
+    return call("save_window_layout");
+  },
+  async applyWindowLayout(): Promise<LayoutStatus> {
+    return call("apply_window_layout");
+  },
+  async resetWindowLayout(): Promise<LayoutStatus> {
+    return call("reset_window_layout");
+  },
+  async diagnostics(): Promise<string> {
+    return inTauri() ? call("get_diagnostics") : "Diagnostics are only available in the desktop app.";
   },
   async quitApp(): Promise<void> {
     return call("quit_app");

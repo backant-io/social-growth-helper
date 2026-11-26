@@ -1,7 +1,11 @@
+use crate::browser::compat::{self, VersionCheck};
 use crate::browser::discovery::{self, BrowserInstall};
+use crate::browser::display::{self, DisplayServer};
 use crate::browser::service::{VisibleTweet, X_HOME_URL};
-use crate::browser::ChromeLaunchConfig;
+use crate::browser::{ChromeLaunchConfig, WindowBounds};
+use crate::diagnostics::{self, DiagnosticsInput};
 use crate::error::{AppError, AppResult};
+use crate::layout::{self, LayoutPlan, WindowLayout, WorkArea};
 use crate::lifecycle::{decide_quit, QuitDecision};
 use crate::llm::catalog::{self, ModelInfo};
 use crate::llm::prompts::{self, PromptTemplate};
@@ -27,7 +31,7 @@ use crate::style::{
 use crate::util::now_rfc3339;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, State, WebviewWindow};
 
 const BROWSER_PATH_KEY: &str = "browser_path_override";
 
@@ -105,6 +109,9 @@ pub struct BrowserInfo {
     pub problem: Option<String>,
     pub override_path: Option<String>,
     pub running: bool,
+    pub version_check: Option<VersionCheck>,
+    pub display_server: DisplayServer,
+    pub placement_hint: Option<String>,
 }
 
 #[tauri::command]
@@ -114,11 +121,22 @@ pub async fn browser_info(state: State<'_, AppState>) -> AppResult<BrowserInfo> 
         Ok(i) => (Some(i), None),
         Err(e) => (None, Some(e.to_string())),
     };
+    let version_check = match &install {
+        Some(i) => {
+            let path = i.path.clone();
+            tokio::task::spawn_blocking(move || compat::check_binary(&path)).await.ok()
+        }
+        None => None,
+    };
+    let display_server = display::detect_system();
     Ok(BrowserInfo {
         install,
         problem,
         override_path: override_path.map(|p| p.display().to_string()),
         running: state.browser.is_running().await,
+        version_check,
+        display_server,
+        placement_hint: display_server.placement_hint().map(str::to_string),
     })
 }
 
@@ -137,7 +155,7 @@ pub fn set_browser_path(state: State<'_, AppState>, path: Option<String>) -> App
 /// Opens the dedicated X Chrome window. Blocked until the rules of engagement are acknowledged, because
 /// the next step is logging in and working inside X.
 #[tauri::command]
-pub async fn browser_launch_x(state: State<'_, AppState>) -> AppResult<bool> {
+pub async fn browser_launch_x(app: AppHandle, state: State<'_, AppState>) -> AppResult<bool> {
     {
         let db = state.db.lock().unwrap();
         onboarding::require_acknowledged(&db)?;
@@ -151,7 +169,166 @@ pub async fn browser_launch_x(state: State<'_, AppState>) -> AppResult<bool> {
         width: 560,
         height: 900,
     };
-    Ok(state.browser.launch(cfg).await?)
+    let launched = state.browser.launch(cfg).await?;
+    if launched {
+        if let Err(e) = arrange_windows(&app, &state, true).await {
+            log::warn!("restoring window layout: {e}");
+        }
+    }
+    Ok(launched)
+}
+
+const MAIN_WINDOW: &str = "main";
+
+fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
+    app.get_webview_window(MAIN_WINDOW)
+}
+
+fn logical(v: i32, scale: f64) -> i32 {
+    (f64::from(v) / scale).round() as i32
+}
+
+fn current_work_area(win: &WebviewWindow) -> Option<WorkArea> {
+    let monitor = win.current_monitor().ok()??;
+    let (s, r) = (monitor.scale_factor(), monitor.work_area());
+    Some(WorkArea {
+        x: logical(r.position.x, s),
+        y: logical(r.position.y, s),
+        width: logical(r.size.width as i32, s).max(0) as u32,
+        height: logical(r.size.height as i32, s).max(0) as u32,
+    })
+}
+
+fn current_app_bounds(win: &WebviewWindow) -> Option<WindowBounds> {
+    let s = win.scale_factor().ok()?;
+    let (pos, size) = (win.outer_position().ok()?, win.inner_size().ok()?);
+    Some(WindowBounds {
+        left: logical(pos.x, s),
+        top: logical(pos.y, s),
+        width: logical(size.width as i32, s).max(0) as u32,
+        height: logical(size.height as i32, s).max(0) as u32,
+    })
+}
+
+fn place_app_window(win: &WebviewWindow, b: &WindowBounds) {
+    let _ = win.set_position(LogicalPosition::new(b.left, b.top));
+    let _ = win.set_size(LogicalSize::new(b.width, b.height));
+}
+
+#[derive(Serialize)]
+pub struct LayoutStatus {
+    pub display_server: DisplayServer,
+    pub placement_supported: bool,
+    pub hint: Option<String>,
+    pub saved: bool,
+}
+
+fn layout_status(state: &AppState) -> AppResult<LayoutStatus> {
+    let display_server = display::detect_system();
+    let db = state.db.lock().unwrap();
+    Ok(LayoutStatus {
+        display_server,
+        placement_supported: display_server.supports_window_placement(),
+        hint: display_server.placement_hint().map(str::to_string),
+        saved: layout::load(&db)?.is_some(),
+    })
+}
+
+/// Applies the saved (or default side-by-side) layout. On Wayland and unknown display servers it does nothing.
+async fn arrange_windows(app: &AppHandle, state: &AppState, include_app: bool) -> AppResult<()> {
+    let Some(win) = main_window(app) else { return Ok(()) };
+    let Some(area) = current_work_area(&win) else { return Ok(()) };
+    let saved = layout::load(&state.db.lock().unwrap())?;
+    let LayoutPlan::Apply(l) = layout::plan(display::detect_system(), saved, &area) else { return Ok(()) };
+    if include_app {
+        place_app_window(&win, &l.app);
+    }
+    if state.browser.is_running().await {
+        state.browser.set_bounds(l.browser).await?;
+    }
+    Ok(())
+}
+
+/// Startup: put only the app window back where the user left it. The X window follows when it is opened.
+pub fn restore_app_window_layout(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(win) = main_window(app) else { return };
+    let (Some(area), Ok(Some(saved))) = (current_work_area(&win), layout::load(&state.db.lock().unwrap())) else { return };
+    if let LayoutPlan::Apply(l) = layout::plan(display::detect_system(), Some(saved), &area) {
+        place_app_window(&win, &l.app);
+    }
+}
+
+#[tauri::command]
+pub fn window_layout_status(state: State<'_, AppState>) -> AppResult<LayoutStatus> {
+    layout_status(&state)
+}
+
+/// Remembers where the app window and the X window are right now.
+#[tauri::command]
+pub async fn save_window_layout(app: AppHandle, state: State<'_, AppState>) -> AppResult<LayoutStatus> {
+    if display::detect_system().supports_window_placement() {
+        let win = main_window(&app).ok_or_else(|| AppError::Other("main window not found".into()))?;
+        let area = current_work_area(&win).ok_or_else(|| AppError::Other("could not read the screen size".into()))?;
+        let app_bounds = current_app_bounds(&win).ok_or_else(|| AppError::Other("could not read the window position".into()))?;
+        let browser_bounds = match state.browser.get_bounds().await {
+            Ok(b) => b,
+            Err(_) => {
+                let saved = layout::load(&state.db.lock().unwrap())?;
+                layout::resolve(saved, &area).browser
+            }
+        };
+        layout::save(&state.db.lock().unwrap(), &WindowLayout { app: app_bounds, browser: browser_bounds })?;
+    }
+    layout_status(&state)
+}
+
+#[tauri::command]
+pub async fn apply_window_layout(app: AppHandle, state: State<'_, AppState>) -> AppResult<LayoutStatus> {
+    arrange_windows(&app, &state, true).await?;
+    layout_status(&state)
+}
+
+#[tauri::command]
+pub fn reset_window_layout(state: State<'_, AppState>) -> AppResult<LayoutStatus> {
+    layout::clear(&state.db.lock().unwrap())?;
+    layout_status(&state)
+}
+
+/// Plain-text report for bug reports (SHL-14): environment facts and the recent log, redacted.
+#[tauri::command]
+pub async fn get_diagnostics(state: State<'_, AppState>) -> AppResult<String> {
+    let override_path = configured_browser_path(&state)?;
+    let install = discovery::discover_system(override_path.as_deref());
+    let (browser, browser_check) = match &install {
+        Ok(i) => {
+            let path = i.path.clone();
+            let check = tokio::task::spawn_blocking(move || compat::check_binary(&path)).await.ok();
+            let summary = match &check {
+                Some(c) => c.warning.clone().unwrap_or_else(|| format!("ok ({})", c.version.clone().unwrap_or_default())),
+                None => "not checked".into(),
+            };
+            (format!("{:?} at {}", i.kind, i.path.display()), summary)
+        }
+        Err(e) => (format!("not found: {e}"), "n/a".into()),
+    };
+    let schema_version = storage::user_version(&state.db.lock().unwrap()).ok();
+    let secrets = state.secrets.status();
+    let report = diagnostics::build(&DiagnosticsInput {
+        version: env!("CARGO_PKG_VERSION"),
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        display_server: &format!("{:?}", display::detect_system()).to_lowercase(),
+        browser,
+        browser_check,
+        secrets_backend: format!("{} (available: {})", secrets.backend, secrets.available),
+        schema_version,
+        data_dir: &state.paths.data_dir,
+        log_dir: &state.paths.log_dir,
+        log_tail: crate::logging::tail(&state.paths.log_dir, diagnostics::LOG_TAIL_LINES),
+        home: dirs::home_dir().as_deref(),
+    });
+    Ok(report)
 }
 
 #[tauri::command]

@@ -299,6 +299,9 @@ impl BrowserDriver for FakeX {
     async fn set_bounds(&self, _b: WindowBounds) -> Result<(), BrowserError> {
         Ok(())
     }
+    async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {
+        Ok(WindowBounds { left: 0, top: 0, width: 560, height: 900 })
+    }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {
         Ok(())
     }

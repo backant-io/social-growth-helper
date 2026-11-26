@@ -13,6 +13,7 @@ pub struct AppPaths {
     pub db_path: PathBuf,
     pub backup_dir: PathBuf,
     pub browser_profile_dir: PathBuf,
+    pub log_dir: PathBuf,
 }
 
 impl AppPaths {
@@ -28,6 +29,7 @@ impl AppPaths {
         Self {
             db_path: data_dir.join("app.db"),
             backup_dir: data_dir.join("backups"),
+            log_dir: data_dir.join("logs"),
             browser_profile_dir: data_dir.join("browser-profiles").join("x-default"),
             data_dir,
         }
@@ -78,6 +80,7 @@ mod tests {
     fn data_layout_matches_the_architecture_plan() {
         let p = AppPaths::under(PathBuf::from("/d/social-growth-helper"));
         assert_eq!(p.db_path, PathBuf::from("/d/social-growth-helper/app.db"));
+        assert_eq!(p.log_dir, PathBuf::from("/d/social-growth-helper/logs"));
         assert_eq!(p.browser_profile_dir, PathBuf::from("/d/social-growth-helper/browser-profiles/x-default"));
     }
 }
