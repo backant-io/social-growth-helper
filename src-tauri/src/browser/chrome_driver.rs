@@ -5,7 +5,10 @@
 
 use super::cdp::CleanCdpSession;
 use super::launcher::{self, StaleRecord};
-use super::{BrowserDriver, BrowserError, ChromeLaunchConfig, WindowBounds};
+use super::{
+    AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, CapturedNetworkResponse,
+    ChromeLaunchConfig, WindowBounds,
+};
 use base64::Engine;
 use serde_json::{json, Value};
 use std::process::Child;
@@ -288,6 +291,11 @@ impl BrowserDriver for ChromeCdpDriver {
         Ok(())
     }
 
+    async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        self.page_call("Page.bringToFront", json!({})).await?;
+        Ok(())
+    }
+
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError> {
         let l = self.live()?;
         let w = l.session.send("Browser.getWindowForTarget", json!({ "targetId": l.target_id }), None).await?;
@@ -344,6 +352,184 @@ impl BrowserDriver for ChromeCdpDriver {
         } else {
             Err(BrowserError::Timeout("Chrome did not exit after Browser.close; it was terminated".into()))
         }
+    }
+
+    async fn capture_analytics_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
+        let l = self.live()?;
+        let created = l
+            .session
+            .send("Target.createTarget", json!({ "url": "about:blank", "background": true }), None)
+            .await?;
+        let tab_target_id = created["targetId"]
+            .as_str()
+            .ok_or_else(|| BrowserError::Other("Target.createTarget returned no targetId".into()))?
+            .to_string();
+
+        let outcome = self.run_analytics_tab(&l.session, &tab_target_id, req).await;
+        let _ = l.session.send("Target.closeTarget", json!({ "targetId": tab_target_id }), None).await;
+        outcome
+    }
+}
+
+impl ChromeCdpDriver {
+    async fn eval_in_session(session: &CleanCdpSession, sid: &str, expression: &str) -> Result<Value, BrowserError> {
+        let tree = session.send("Page.getFrameTree", json!({}), Some(sid)).await?;
+        let frame_id = tree["frameTree"]["frame"]["id"]
+            .as_str()
+            .ok_or_else(|| BrowserError::Other("analytics tab had no main frame".into()))?;
+        let world = session
+            .send(
+                "Page.createIsolatedWorld",
+                json!({ "frameId": frame_id, "worldName": "sgh-analytics-isolated" }),
+                Some(sid),
+            )
+            .await?;
+        let ctx = world["executionContextId"]
+            .as_i64()
+            .ok_or_else(|| BrowserError::Other("no executionContextId for analytics tab".into()))?;
+        let r = session
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "contextId": ctx, "returnByValue": true, "awaitPromise": true }),
+                Some(sid),
+            )
+            .await?;
+        if let Some(ex) = r.get("exceptionDetails") {
+            let msg = ex["exception"]["description"]
+                .as_str()
+                .or_else(|| ex["text"].as_str())
+                .unwrap_or("analytics script threw")
+                .to_string();
+            return Err(BrowserError::Evaluation(msg));
+        }
+        Ok(r["result"]["value"].clone())
+    }
+
+    async fn run_analytics_tab(
+        &self,
+        session: &CleanCdpSession,
+        tab_target_id: &str,
+        req: AnalyticsPageRequest,
+    ) -> Result<AnalyticsPageCapture, BrowserError> {
+        let attached = session
+            .send("Target.attachToTarget", json!({ "targetId": tab_target_id, "flatten": true }), None)
+            .await?;
+        let sid = attached["sessionId"]
+            .as_str()
+            .ok_or_else(|| BrowserError::Other("attachToTarget on analytics tab returned no sessionId".into()))?
+            .to_string();
+
+        let mut events_rx = session.subscribe_events();
+        let filters: Vec<String> = req.network_url_filters.iter().map(|f| f.to_lowercase()).collect();
+
+        // Enable Network ONLY on this dedicated analytics tab (ANL-04).
+        let _ = session.send("Network.enable", json!({}), Some(&sid)).await;
+
+        let nav_res = session.send("Page.navigate", json!({ "url": req.url }), Some(&sid)).await;
+        if let Err(e) = nav_res {
+            let _ = session.send("Network.disable", json!({}), Some(&sid)).await;
+            return Err(e);
+        }
+        if let Ok(r) = &nav_res {
+            if let Some(err) = r["errorText"].as_str() {
+                let _ = session.send("Network.disable", json!({}), Some(&sid)).await;
+                return Err(BrowserError::Other(format!("analytics navigation failed: {err}")));
+            }
+        }
+
+        let mut matched: Vec<(String, String, i64)> = Vec::new();
+        let load_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            while let Ok(ev) = events_rx.try_recv() {
+                collect_network_event(&ev, &sid, &filters, &mut matched);
+            }
+            if let Ok(Value::String(state)) = Self::eval_in_session(session, &sid, "document.readyState").await {
+                if state == "complete" {
+                    break;
+                }
+            }
+            if tokio::time::Instant::now() >= load_deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+        }
+
+        if req.settle_ms > 0 {
+            let settle_deadline = tokio::time::Instant::now() + Duration::from_millis(req.settle_ms);
+            while tokio::time::Instant::now() < settle_deadline {
+                let remaining = settle_deadline.saturating_duration_since(tokio::time::Instant::now());
+                match tokio::time::timeout(remaining, events_rx.recv()).await {
+                    Ok(Ok(ev)) => collect_network_event(&ev, &sid, &filters, &mut matched),
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                    _ => break,
+                }
+            }
+        }
+        while let Ok(ev) = events_rx.try_recv() {
+            collect_network_event(&ev, &sid, &filters, &mut matched);
+        }
+
+        let mut network_responses = Vec::new();
+        for (request_id, url, status) in matched {
+            if let Ok(body_val) = session
+                .send("Network.getResponseBody", json!({ "requestId": request_id }), Some(&sid))
+                .await
+            {
+                let raw_body = body_val["body"].as_str().unwrap_or_default();
+                let body = if body_val["base64Encoded"].as_bool().unwrap_or(false) {
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw_body)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .unwrap_or_default()
+                } else {
+                    raw_body.to_string()
+                };
+                network_responses.push(CapturedNetworkResponse { url, status, body });
+            }
+        }
+
+        let dom_result = Self::eval_in_session(session, &sid, &req.dom_script)
+            .await
+            .unwrap_or(Value::Null);
+        let final_url = session
+            .send("Target.getTargetInfo", json!({ "targetId": tab_target_id }), None)
+            .await
+            .ok()
+            .and_then(|v| v["targetInfo"]["url"].as_str().map(ToString::to_string))
+            .filter(|u| !u.is_empty())
+            .unwrap_or(req.url);
+
+        let _ = session.send("Network.disable", json!({}), Some(&sid)).await;
+
+        Ok(AnalyticsPageCapture {
+            final_url,
+            used_dedicated_tab: true,
+            network_responses,
+            dom_result,
+        })
+    }
+}
+
+fn collect_network_event(ev: &Value, sid: &str, filters: &[String], out: &mut Vec<(String, String, i64)>) {
+    if ev.get("method").and_then(Value::as_str) != Some("Network.responseReceived") {
+        return;
+    }
+    if let Some(ev_sid) = ev.get("sessionId").and_then(Value::as_str) {
+        if ev_sid != sid {
+            return;
+        }
+    }
+    let Some(params) = ev.get("params") else { return };
+    let Some(url) = params["response"]["url"].as_str() else { return };
+    let lower = url.to_lowercase();
+    if !filters.is_empty() && !filters.iter().any(|f| lower.contains(f)) {
+        return;
+    }
+    let Some(req_id) = params["requestId"].as_str() else { return };
+    let status = params["response"]["status"].as_i64().unwrap_or(0);
+    if !out.iter().any(|(id, _, _)| id == req_id) {
+        out.push((req_id.to_string(), url.to_string(), status));
     }
 }
 
@@ -477,5 +663,48 @@ mod tests {
         let d = ChromeCdpDriver::new();
         assert!(!d.is_running());
         assert!(matches!(d.navigate("https://x.com").await, Err(BrowserError::Disconnected)));
+    }
+
+    #[tokio::test]
+    async fn analytics_capture_uses_dedicated_tab_and_keeps_feed_untouched() {
+        let (d, rec) = attached_driver(|req| match req["method"].as_str().unwrap() {
+            "Target.createTarget" => json!({ "result": { "targetId": "TAB_ANL" } }),
+            "Target.attachToTarget" => json!({ "result": { "sessionId": "S_ANL" } }),
+            "Target.getTargetInfo" => json!({ "result": { "targetInfo": { "url": "https://x.com/i/account_analytics" } } }),
+            "Page.getFrameTree" => json!({ "result": { "frameTree": { "frame": { "id": "F_ANL" } } } }),
+            "Page.createIsolatedWorld" => json!({ "result": { "executionContextId": 42 } }),
+            "Runtime.evaluate" => {
+                if req["params"]["expression"] == "document.readyState" {
+                    json!({ "result": { "result": { "type": "string", "value": "complete" } } })
+                } else {
+                    json!({ "result": { "result": { "value": { "impressions": 12000 } } } })
+                }
+            }
+            _ => json!({ "result": {} }),
+        })
+        .await;
+
+        let cap = d
+            .capture_analytics_page(AnalyticsPageRequest {
+                url: "https://x.com/i/account_analytics".into(),
+                network_url_filters: vec!["AccountOverviewQuery".into()],
+                dom_script: "({ impressions: 12000 })".into(),
+                settle_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        assert!(cap.used_dedicated_tab);
+        assert_eq!(cap.dom_result["impressions"], 12000);
+
+        let sent = rec.lock().unwrap().clone();
+        let m = methods(&rec);
+        assert!(m.contains(&"Target.createTarget".to_string()));
+        assert!(m.contains(&"Network.enable".to_string()));
+        assert!(m.contains(&"Network.disable".to_string()));
+        assert!(m.contains(&"Target.closeTarget".to_string()));
+        assert!(!m.iter().any(|x| x == "Runtime.enable"));
+        // Main feed session S1 was never touched!
+        assert!(sent.iter().all(|r| r.get("sessionId").and_then(Value::as_str) != Some("S1")));
     }
 }

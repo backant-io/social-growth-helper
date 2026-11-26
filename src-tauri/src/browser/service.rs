@@ -1,9 +1,20 @@
 //! Application-facing wrapper over a [`BrowserDriver`]: serialises access, makes launch idempotent,
 //! and guarantees the X window is closed when the app quits (BRW-16).
 
-use super::{BrowserDriver, BrowserError, ChromeLaunchConfig};
+use super::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, ChromeLaunchConfig};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
+
+/// Exclusive hold on the driver (BRW-10). Publish keeps one for a whole job, Scout takes one per tick,
+/// so the two never drive the page at the same time and queued work runs in arrival order.
+pub struct BrowserGuard<'a>(MutexGuard<'a, Box<dyn BrowserDriver>>);
+
+impl std::ops::Deref for BrowserGuard<'_> {
+    type Target = dyn BrowserDriver;
+    fn deref(&self) -> &Self::Target {
+        &**self.0
+    }
+}
 
 pub const X_HOME_URL: &str = "https://x.com/home";
 
@@ -43,6 +54,14 @@ pub struct BrowserService {
 impl BrowserService {
     pub fn new(driver: Box<dyn BrowserDriver>) -> Self {
         Self { driver: Mutex::new(driver) }
+    }
+
+    pub async fn lock(&self) -> BrowserGuard<'_> {
+        BrowserGuard(self.driver.lock().await)
+    }
+
+    pub async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        self.driver.lock().await.bring_to_front().await
     }
 
     pub async fn is_running(&self) -> bool {
@@ -113,6 +132,15 @@ impl BrowserService {
             return Err(BrowserError::Disconnected);
         }
         d.click_point(x, y).await
+    }
+
+    /// Captures an X analytics page in a dedicated tab with temporary passive network sniffing (BRW-13, ANL-04).
+    pub async fn capture_analytics_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.capture_analytics_page(req).await
     }
 }
 

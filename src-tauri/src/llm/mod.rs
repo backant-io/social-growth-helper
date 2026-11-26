@@ -1,6 +1,7 @@
 //! LLM Router, multi-lane providers, task routing, schema validation, and usage accounting (LLM-01..21).
 
 pub mod catalog;
+pub mod phase3_bridge;
 pub mod prompts;
 pub mod providers;
 pub mod repo;

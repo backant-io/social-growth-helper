@@ -29,6 +29,16 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
     Migration {
+        version: 4,
+        name: "phase3",
+        sql: include_str!("migrations/0004_phase3.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "phase4_analytics_views",
+        sql: include_str!("migrations/0005_phase4_analytics_views.sql"),
+    },
+    Migration {
         version: 6,
         name: "learning",
         sql: include_str!("migrations/0006_learning.sql"),
@@ -59,6 +69,14 @@ pub fn apply_pragmas(conn: &Connection) -> AppResult<()> {
 
 pub fn user_version(conn: &Connection) -> AppResult<u32> {
     Ok(conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))?)
+}
+
+#[cfg(test)]
+pub fn open_in_memory() -> AppResult<Connection> {
+    let mut conn = Connection::open_in_memory()?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    migrate(&mut conn, MIGRATIONS, None)?;
+    Ok(conn)
 }
 
 /// Opens (creating if needed) the app database, backs it up before any upgrade, and migrates it.
@@ -233,7 +251,8 @@ mod tests {
 
         let (conn, report) = open(&db, &bk).unwrap();
         assert_eq!(report.from_version, 1);
-        assert_eq!(report.applied, vec![2, 3, 6]);
+        let expected: Vec<u32> = MIGRATIONS.iter().map(|m| m.version).filter(|v| *v > 1).collect();
+        assert_eq!(report.applied, expected);
         let backup = report.backup_path.expect("backup must exist before migrating an existing db");
         assert!(backup.exists());
 
@@ -254,11 +273,18 @@ mod tests {
         let db = dir.path().join("app.db");
         let (mut conn, _) = open(&db, &dir.path().join("b")).unwrap();
         let before = table_count(&conn);
-        let latest = latest_version();
-        let bad = [Migration { version: latest + 1, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" }];
+        let bad_version = latest_version() + 1;
+        let mut bad: Vec<Migration> = (1..=latest_version())
+            .map(|version| Migration { version, name: "noop", sql: "SELECT 1;" })
+            .collect();
+        bad.push(Migration {
+            version: bad_version,
+            name: "bad",
+            sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);",
+        });
         let err = migrate(&mut conn, &bad, None).unwrap_err();
-        assert!(err.to_string().contains(&format!("migration {}", latest + 1)));
-        assert_eq!(user_version(&conn).unwrap(), latest);
+        assert!(err.to_string().contains(&format!("migration {bad_version}")));
+        assert_eq!(user_version(&conn).unwrap(), latest_version());
         assert_eq!(table_count(&conn), before, "partial DDL must roll back");
     }
 
