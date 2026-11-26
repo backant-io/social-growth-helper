@@ -1,14 +1,24 @@
 pub mod browser;
 mod commands;
+pub mod activity;
+pub mod completion;
+pub mod control;
+pub mod drafts;
 pub mod error;
+pub mod guard;
 pub mod lifecycle;
 pub mod llm;
 mod menu;
 pub mod onboarding;
+pub mod phase3;
+pub mod publish;
+pub mod scout;
 pub mod secrets;
+pub mod selectors;
 pub mod state;
 pub mod storage;
 pub mod style;
+mod tray;
 pub mod util;
 
 use state::{AppPaths, AppState};
@@ -28,12 +38,27 @@ fn init_state() -> Result<AppState, Box<dyn std::error::Error>> {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .menu(|handle| menu::build(handle))
         .on_menu_event(|app, event| menu::handle_event(app, event.id().as_ref()))
         .setup(|app| {
             let state = init_state()?;
             let profile_dir = state.paths.browser_profile_dir.clone();
+            let kill_engaged = {
+                let db = state.db.lock().unwrap();
+                let _ = scout::repo::close_orphans(&db);
+                let _ = publish::repo::recover_interrupted(&db);
+                phase3::load_kill_state(&db)
+            };
+            phase3::purge_media(&state.paths.data_dir, phase3::retention_days(&state.db.lock().unwrap()));
+            let p3 = phase3::Phase3::new(kill_engaged);
+            p3.set_completion(std::sync::Arc::new(llm::phase3_bridge::RouterCompletion::new(state.llm_router.clone(), state.db.clone())));
             app.manage(state);
+            app.manage(p3);
+            publish::commands::spawn_worker(app.handle());
+            if let Err(e) = tray::install(app.handle()) {
+                log::warn!("tray unavailable: {e}");
+            }
             // A Chrome left running by a crashed or force-killed previous session is closed before anything else.
             tauri::async_runtime::spawn(async move {
                 browser::launcher::reclaim_stale_chrome(&profile_dir).await;
@@ -85,6 +110,40 @@ pub fn run() {
             commands::style_parse_pasted_examples,
             commands::style_import_examples_from_browser,
             commands::style_run_bench,
+            phase3::get_kill_switch,
+            phase3::set_kill_switch,
+            phase3::get_notifications,
+            phase3::set_notifications,
+            phase3::completion_status,
+            phase3::retention_get,
+            phase3::retention_set,
+            phase3::watchlist_get,
+            phase3::watchlist_set,
+            phase3::activity_list,
+            scout::commands::scout_status,
+            scout::commands::scout_start,
+            scout::commands::scout_stop,
+            scout::commands::scout_pause,
+            scout::commands::scout_queue,
+            scout::commands::scout_dismiss,
+            scout::commands::scout_set_threshold,
+            drafts::commands::draft_open,
+            drafts::commands::draft_get,
+            drafts::commands::draft_save_edit,
+            drafts::commands::draft_select_variant,
+            drafts::commands::draft_set_actions,
+            drafts::commands::draft_discard,
+            drafts::commands::draft_check,
+            drafts::commands::draft_generate,
+            drafts::commands::draft_model_options,
+            publish::commands::publish_draft,
+            publish::commands::engage_action,
+            publish::commands::get_action_state,
+            publish::commands::checklist_run,
+            publish::commands::checklist_reports,
+            publish::commands::get_pacing,
+            publish::commands::set_pacing,
+            publish::commands::pacing_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Social Growth Helper");

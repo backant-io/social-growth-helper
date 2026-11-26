@@ -1,0 +1,72 @@
+import { describe, expect, it } from "vitest";
+import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, stepSummary, toggleInBundle } from "./logic";
+
+describe("bundles", () => {
+  it("orders actions and keeps one text action", () => {
+    expect(normalizeBundle(["reply", "like", "follow"])).toEqual(["like", "follow", "reply"]);
+    expect(normalizeBundle(["quote", "reply"])).toEqual(["reply"]);
+  });
+
+  it("selecting a text action replaces the other one", () => {
+    expect(toggleInBundle(["like", "reply"], "quote")).toEqual(["like", "quote"]);
+    expect(toggleInBundle(["like", "quote"], "quote")).toEqual(["like"]);
+    expect(toggleInBundle([], "bookmark")).toEqual(["bookmark"]);
+  });
+});
+
+describe("text helpers", () => {
+  it("counts code points and flags overflow", () => {
+    expect(charInfo("hi 👋")).toMatchObject({ count: 4, over: false });
+    expect(charInfo("x".repeat(281)).over).toBe(true);
+    expect(charInfo("abc", 5).remaining).toBe(2);
+  });
+
+  it("computes edit distance", () => {
+    expect(editDistance("kitten", "sitting")).toBe(3);
+    expect(editDistance("", "abc")).toBe(3);
+    expect(editDistance("same", "same")).toBe(0);
+  });
+
+  it("formats durations and counts", () => {
+    expect(formatDuration(45)).toBe("45s");
+    expect(formatDuration(600)).toBe("10m");
+    expect(formatDuration(3900)).toBe("1h 5m");
+    expect(compactCount(1250)).toBe("1.3K");
+    expect(compactCount(12)).toBe("12");
+  });
+});
+
+describe("shortcuts", () => {
+  it("recognises the palette and publish combos anywhere", () => {
+    expect(matchShortcut({ key: "k", metaKey: true })).toBe("palette");
+    expect(matchShortcut({ key: "Enter", ctrlKey: true, target: { tagName: "TEXTAREA" } })).toBe("publish");
+  });
+
+  it("ignores plain keys while typing", () => {
+    expect(matchShortcut({ key: "j", target: { tagName: "TEXTAREA" } })).toBeNull();
+    expect(matchShortcut({ key: "d", target: { tagName: "INPUT" } })).toBeNull();
+    expect(matchShortcut({ key: "j", target: { tagName: "BODY" } })).toBe("next");
+    expect(matchShortcut({ key: "d" })).toBe("dismiss");
+  });
+});
+
+describe("palette and steps", () => {
+  const cmds = [
+    { id: "a", label: "Start scout session" },
+    { id: "b", label: "Open Reply Studio" },
+  ];
+  it("filters by every word", () => {
+    expect(filterCommands(cmds, "reply studio").map((c) => c.id)).toEqual(["b"]);
+    expect(filterCommands(cmds, "")).toHaveLength(2);
+    expect(filterCommands(cmds, "zzz")).toHaveLength(0);
+  });
+
+  it("summarises publish progress", () => {
+    const s = stepSummary([
+      { action: "like", status: "done", detail: null },
+      { action: "reply", status: "uncertain", detail: "check X" },
+    ]);
+    expect(s).toMatchObject({ done: 1, total: 2 });
+    expect(s.blocked?.action).toBe("reply");
+  });
+});

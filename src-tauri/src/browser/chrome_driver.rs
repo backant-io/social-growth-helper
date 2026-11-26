@@ -288,6 +288,11 @@ impl BrowserDriver for ChromeCdpDriver {
         Ok(())
     }
 
+    async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        self.page_call("Page.bringToFront", json!({})).await?;
+        Ok(())
+    }
+
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError> {
         let l = self.live()?;
         let w = l.session.send("Browser.getWindowForTarget", json!({ "targetId": l.target_id }), None).await?;
