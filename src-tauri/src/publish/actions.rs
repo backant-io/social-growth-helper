@@ -3,11 +3,12 @@
 //! Clicks go through real CDP mouse events at the element's centre; text goes through `insert_text`.
 
 use crate::browser::{BrowserDriver, BrowserError};
+use crate::completion::{CompletionProvider, TaskSlot};
 use crate::control::KillSwitch;
 use crate::drafts::bundle::ActionKind;
 use crate::selectors::{self, sel, Selector};
 use serde::Deserialize;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
 
 static NEVER: AtomicBool = AtomicBool::new(false);
@@ -58,6 +59,9 @@ pub struct Page<'a> {
     pub me: Option<String>,
     pub t: Timing,
     pub kill: &'a KillSwitch,
+    /// Vision fallback for controls whose selector no longer matches. Only set when a model is routed.
+    pub vision: Option<&'a dyn CompletionProvider>,
+    pub vision_hits: AtomicU32,
 }
 
 fn err(e: BrowserError) -> String {
@@ -82,13 +86,41 @@ impl Page<'_> {
         })
     }
 
-    /// Scrolls the element into view, waits briefly, then clicks its centre. `false` when it is not on the page.
+    /// Scrolls the element into view, waits briefly, then clicks its centre. When the selector finds nothing and a
+    /// browser-navigation model is routed, asks it to point at the control from a screenshot (LLM-20).
+    /// `false` when it is not on the page.
     async fn click(&self, scope: Option<&str>, s: &Selector, needle: Option<&str>) -> Result<bool, BrowserError> {
-        let Some((x, y)) = self.rect(scope, s, needle).await? else { return Ok(false) };
+        self.click_with(scope, s, needle, true).await
+    }
+
+    async fn click_with(&self, scope: Option<&str>, s: &Selector, needle: Option<&str>, look: bool) -> Result<bool, BrowserError> {
+        let found = match self.rect(scope, s, needle).await? {
+            Some(p) => Some(p),
+            None if look => self.look_for(s, needle).await,
+            None => None,
+        };
+        let Some((x, y)) = found else { return Ok(false) };
         self.nap(self.t.settle_ms / 2).await;
         self.d.click_point(x, y).await?;
         self.nap(self.t.settle_ms).await;
         Ok(true)
+    }
+
+    async fn look_for(&self, s: &Selector, needle: Option<&str>) -> Option<(f64, f64)> {
+        let provider = self.vision.filter(|p| p.is_configured(TaskSlot::BrowserNavigation))?;
+        let what = s.name.to_lowercase().replace('_', " ");
+        let goal = match needle {
+            Some(n) => format!("the \"{n}\" menu item ({what})"),
+            None => format!("the {what} control"),
+        };
+        let goal = format!("{goal} belonging to the post by @{} (post id {})", self.handle, self.post_id);
+        let found = super::vision::locate(provider, self.d, self.kill, &goal).await.ok()?;
+        self.vision_hits.fetch_add(1, Ordering::Relaxed);
+        Some(found)
+    }
+
+    pub fn vision_used(&self) -> u32 {
+        self.vision_hits.load(Ordering::Relaxed)
     }
 
     async fn wait_probe(&self, want: impl Fn(&Probe) -> bool) -> Result<bool, String> {
@@ -180,7 +212,7 @@ impl Page<'_> {
                     return Ok(Outcome::Failed("the follow button was not clickable".into()));
                 }
                 if undo {
-                    self.click(None, &sel::UNFOLLOW_CONFIRM, None).await.map_err(err)?;
+                    self.click_with(None, &sel::UNFOLLOW_CONFIRM, None, false).await.map_err(err)?;
                 }
                 let ok = self.wait_probe(|p| p.follow == wanted).await?;
                 Ok(if ok { Outcome::done() } else { Outcome::Failed("follow did not register on the page".into()) })
@@ -213,7 +245,7 @@ impl Page<'_> {
             return Ok(Outcome::Failed("the follow menu item was not clickable".into()));
         }
         if undo {
-            self.click(None, &sel::UNFOLLOW_CONFIRM, None).await.map_err(err)?;
+            self.click_with(None, &sel::UNFOLLOW_CONFIRM, None, false).await.map_err(err)?;
         }
         Ok(Outcome::Done { detail: Some("via the author menu".into()), post_id: None })
     }

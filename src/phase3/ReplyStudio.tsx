@@ -3,7 +3,7 @@ import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
-import type { ActionName, CompletionStatus, DraftView, PostActionState, QueueItem } from "./types";
+import type { ActionName, CompletionStatus, DraftView, ModelOption, PostActionState, QueueItem } from "./types";
 import { btn, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
 
 interface Props {
@@ -44,6 +44,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
   const [confirming, setConfirming] = useState(false);
   const [state, setState] = useState<PostActionState | null>(null);
   const [otherModel, setOtherModel] = useState("");
+  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
   const [completion, setCompletion] = useState<CompletionStatus | null>(null);
   const [siblings, setSiblings] = useState<QueueItem[]>([]);
 
@@ -54,6 +55,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
 
   useEffect(() => {
     void p3.completionStatus().then(setCompletion);
+    void p3.draftModelOptions().then(setModelOptions);
   }, []);
 
   useEffect(() => {
@@ -287,7 +289,14 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
             <label className="flex items-center gap-2 text-xs">
               <span className={muted}>Redraft with another model</span>
-              <input value={otherModel} onChange={(e) => setOtherModel(e.target.value)} placeholder="e.g. claude, grok" className={`${input} w-40`} />
+              <select value={otherModel} onChange={(e) => setOtherModel(e.target.value)} className={`${input} w-56`} disabled={modelOptions.length === 0}>
+                <option value="">{modelOptions.length === 0 ? "Connect a model in Settings" : "Choose a model"}</option>
+                {modelOptions.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
             </label>
             <button type="button" className={btn} disabled={!editable || !otherModel.trim() || busy !== null} onClick={() => void transform("fresh", otherModel.trim())}>
               Redraft

@@ -51,8 +51,10 @@ pub fn run() {
                 phase3::load_kill_state(&db)
             };
             phase3::purge_media(&state.paths.data_dir, phase3::retention_days(&state.db.lock().unwrap()));
+            let p3 = phase3::Phase3::new(kill_engaged);
+            p3.set_completion(std::sync::Arc::new(llm::phase3_bridge::RouterCompletion::new(state.llm_router.clone(), state.db.clone())));
             app.manage(state);
-            app.manage(phase3::Phase3::new(kill_engaged));
+            app.manage(p3);
             publish::commands::spawn_worker(app.handle());
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray unavailable: {e}");
@@ -133,9 +135,12 @@ pub fn run() {
             drafts::commands::draft_discard,
             drafts::commands::draft_check,
             drafts::commands::draft_generate,
+            drafts::commands::draft_model_options,
             publish::commands::publish_draft,
             publish::commands::engage_action,
             publish::commands::get_action_state,
+            publish::commands::checklist_run,
+            publish::commands::checklist_reports,
             publish::commands::get_pacing,
             publish::commands::set_pacing,
             publish::commands::pacing_usage,

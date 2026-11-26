@@ -11,6 +11,7 @@ import type {
   PacingConfig,
   PacingUsage,
   PostActionState,
+  ModelOption,
   QueueItem,
   ScoutStatus,
   SessionParams,
@@ -124,6 +125,17 @@ export const p3 = {
   async scoutStop(): Promise<void> {
     if (inTauri()) return call("scout_stop");
     mem.running = false;
+  },
+  async scoutPause(paused: boolean): Promise<boolean> {
+    if (inTauri()) return call("scout_pause", { paused });
+    return mem.running;
+  },
+  async draftModelOptions(): Promise<ModelOption[]> {
+    if (inTauri()) return call("draft_model_options");
+    return [
+      { value: "claude::sonnet", label: "Claude (subscription) - Sonnet" },
+      { value: "grok::grok-4", label: "Grok - Grok 4" },
+    ];
   },
   async scoutQueue(): Promise<QueueItem[]> {
     if (inTauri()) return call("scout_queue");

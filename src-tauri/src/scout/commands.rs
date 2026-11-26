@@ -80,7 +80,9 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         };
         run_session(&env, &sid, &params).await;
         *p3.scout.lock().unwrap() = None;
+        crate::tray::refresh_all(&handle);
     });
+    crate::tray::refresh_all(&app);
     Ok(session_id)
 }
 
@@ -103,8 +105,10 @@ pub fn set_scout_paused(p3: &Phase3, paused: bool) -> bool {
 }
 
 #[tauri::command]
-pub fn scout_pause(p3: State<'_, Phase3>, paused: bool) -> bool {
-    set_scout_paused(&p3, paused)
+pub fn scout_pause(app: AppHandle, p3: State<'_, Phase3>, paused: bool) -> bool {
+    let changed = set_scout_paused(&p3, paused);
+    crate::tray::refresh_all(&app);
+    changed
 }
 
 #[tauri::command]
@@ -115,11 +119,15 @@ pub fn scout_queue(state: State<'_, AppState>) -> AppResult<Vec<QueueItem>> {
 }
 
 #[tauri::command]
-pub fn scout_dismiss(state: State<'_, AppState>, evaluation_id: String, reason: String) -> AppResult<()> {
-    repo::dismiss(&state.db.lock().unwrap(), &evaluation_id, &reason)
+pub fn scout_dismiss(app: AppHandle, state: State<'_, AppState>, evaluation_id: String, reason: String) -> AppResult<()> {
+    repo::dismiss(&state.db.lock().unwrap(), &evaluation_id, &reason)?;
+    crate::tray::refresh_all(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn scout_set_threshold(state: State<'_, AppState>, threshold: f64) -> AppResult<f64> {
-    repo::set_threshold(&state.db.lock().unwrap(), threshold)
+pub fn scout_set_threshold(app: AppHandle, state: State<'_, AppState>, threshold: f64) -> AppResult<f64> {
+    let v = repo::set_threshold(&state.db.lock().unwrap(), threshold)?;
+    crate::tray::refresh_all(&app);
+    Ok(v)
 }

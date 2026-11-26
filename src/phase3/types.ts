@@ -196,7 +196,7 @@ export interface ActivityEntry {
 
 export interface ChecklistItem {
   action: string;
-  status: "pass" | "fail" | "manual";
+  status: "pass" | "fail" | "skipped" | "manual";
   detail: string;
 }
 
@@ -206,4 +206,9 @@ export interface ChecklistReport {
   created_at: string;
   post_url: string;
   items: ChecklistItem[];
+}
+
+export interface ModelOption {
+  value: string;
+  label: string;
 }

@@ -10,6 +10,7 @@ pub struct MockDriver {
     running: Arc<Mutex<bool>>,
     pub fail_launch: bool,
     eval_fn: Option<EvalFn>,
+    screenshot: Arc<Mutex<Vec<u8>>>,
 }
 
 pub type EvalFn = Arc<dyn Fn(&str) -> Value + Send + Sync>;
@@ -22,6 +23,7 @@ impl MockDriver {
             running: Arc::default(),
             fail_launch: false,
             eval_fn: None,
+            screenshot: Arc::new(Mutex::new(vec![0x89, 0x50])),
         }
     }
 
@@ -33,6 +35,11 @@ impl MockDriver {
     /// Computes each `eval_json` result from the script text, for flows that issue many different scripts.
     pub fn with_eval_fn(mut self, f: impl Fn(&str) -> Value + Send + Sync + 'static) -> Self {
         self.eval_fn = Some(Arc::new(f));
+        self
+    }
+
+    pub fn with_screenshot(self, bytes: Vec<u8>) -> Self {
+        *self.screenshot.lock().unwrap() = bytes;
         self
     }
 
@@ -80,7 +87,7 @@ impl BrowserDriver for MockDriver {
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, BrowserError> {
         self.record("screenshot");
-        Ok(vec![0x89, 0x50])
+        Ok(self.screenshot.lock().unwrap().clone())
     }
     async fn ax_tree(&self, _max_depth: Option<u32>) -> Result<Value, BrowserError> {
         self.record("ax_tree");

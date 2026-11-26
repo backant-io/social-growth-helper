@@ -99,3 +99,9 @@ pub async fn draft_generate(state: State<'_, AppState>, p3: State<'_, Phase3>, d
     }
     repo::get_view(&db, &draft_id)
 }
+
+/// Connected models the user can pick for a one-off redraft (LLM-15).
+#[tauri::command]
+pub fn draft_model_options(state: State<'_, AppState>) -> Vec<crate::llm::phase3_bridge::ModelOption> {
+    crate::llm::phase3_bridge::model_options(&state.db.lock().unwrap())
+}

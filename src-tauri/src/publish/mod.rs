@@ -2,12 +2,14 @@
 //! only `gate` can create and only an explicit user click (a Tauri command in `commands`) asks it to.
 
 pub mod actions;
+pub mod checklist;
 pub mod commands;
 pub mod executor;
 pub mod gate;
 pub mod pacing;
 pub mod queue;
 pub mod repo;
+pub mod vision;
 
 #[cfg(test)]
 mod fake;

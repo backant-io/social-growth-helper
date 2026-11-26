@@ -12,6 +12,23 @@ pub fn record_event(conn: &Connection, profile_id: &str, platform_post_id: &str,
     Ok(())
 }
 
+/// The observed-post row a check or action on a pasted link hangs off. Never evaluated, so it stays out of the queue.
+pub fn ensure_observed(conn: &Connection, profile_id: &str, handle: &str, post_id: &str) -> AppResult<String> {
+    if let Some(id) = conn
+        .query_row("SELECT id FROM observed_posts WHERE profile_id = ?1 AND platform_post_id = ?2", params![profile_id, post_id], |r| r.get::<_, String>(0))
+        .optional()?
+    {
+        return Ok(id);
+    }
+    let id = new_id();
+    conn.execute(
+        "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, text, has_media, feed_source, first_seen_at, metrics_at_capture_json)
+         VALUES (?1, ?2, ?3, ?4, '', 0, 'checklist', ?5, '{}')",
+        params![id, profile_id, post_id, handle, now_rfc3339()],
+    )?;
+    Ok(id)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn write_audit(
     conn: &Connection,

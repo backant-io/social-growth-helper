@@ -112,6 +112,9 @@ impl EventSink for TauriSink {
             self.emit("notify", serde_json::json!({ "kind": "scout_done", "title": "Scout finished", "body": body }));
         }
         let _ = self.0.emit(event, payload);
+        if event.starts_with("scout:") || event == "publish:update" {
+            crate::tray::refresh_all(&self.0);
+        }
     }
 }
 
@@ -131,7 +134,7 @@ pub fn set_kill(app: &AppHandle, engaged: bool) -> AppResult<()> {
         p3.kill.release();
     }
     let _ = app.emit("kill:changed", engaged);
-    crate::tray::refresh(app, engaged);
+    crate::tray::refresh_all(app);
     Ok(())
 }
 

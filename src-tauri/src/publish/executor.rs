@@ -29,6 +29,8 @@ pub struct PublishEnv<'a> {
     pub step_gap_ms: (u64, u64),
     /// Directory for before/after screenshots; `None` disables them.
     pub shots_dir: Option<PathBuf>,
+    /// Routed model for the vision fallback; `None` keeps the selector-only behaviour.
+    pub vision: Option<&'a dyn crate::completion::CompletionProvider>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -106,7 +108,7 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
         .await
         .ok()
         .and_then(|v| v.get("me").and_then(|m| m.as_str().map(str::to_string)));
-    let page = Page { d: &*d, post_id: a.platform_post_id(), handle: a.handle(), me, t: env.timing, kill: env.kill };
+    let page = Page { d: &*d, post_id: a.platform_post_id(), handle: a.handle(), me, t: env.timing, kill: env.kill, vision: env.vision, vision_hits: Default::default() };
 
     let mut probe = None;
     for _ in 0..env.timing.polls {
@@ -208,9 +210,13 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
     }
 
     let after = screenshot(env, &*d, "after", a.ref_id()).await;
+    let looked = page.vision_used();
     drop(d);
 
     let db = env.db.lock().unwrap();
+    if looked > 0 {
+        crate::activity::record(&db, env.profile_id, "action", "Vision fallback located a control", Some("A selector no longer matched, so the model found the control on a screenshot. Check for X layout changes."), Some(problem.is_none()), None);
+    }
     let draft = a.draft_id();
     let _ = prepo::write_audit(&db, env.profile_id, a.kind(), draft, a.ref_id(), &executed, before.as_deref(), after.as_deref(), problem.is_none(), problem.as_deref());
     match (&problem, draft) {
@@ -243,6 +249,6 @@ pub async fn probe_state(browser: &BrowserService, handle: &str, post_id: &str, 
         let _ = d.navigate(&drepo::post_url(handle, post_id)).await;
         tokio::time::sleep(Duration::from_millis(2500)).await;
     }
-    let page = Page { d: &*d, post_id, handle, me: None, t: Timing::LIVE, kill };
+    let page = Page { d: &*d, post_id, handle, me: None, t: Timing::LIVE, kill, vision: None, vision_hits: Default::default() };
     Ok(page.probe().await.ok().filter(|p| p.found))
 }

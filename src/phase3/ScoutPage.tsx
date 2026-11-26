@@ -43,7 +43,7 @@ function SessionRow({ s }: { s: SessionView }) {
 export function ScoutPage({ onOpenDraft }: Props) {
   const [params, setParams] = useState<SessionParams>({ feed_source: "for_you", max_duration_sec: 600, max_posts: 100, stop_after_queued: null, threshold: 72 });
   const [running, setRunning] = useState(false);
-  const [paused, setPaused] = useState(false);
+  const [paused, setPaused] = useState<null | "manual" | "user_activity">(null);
   const [progress, setProgress] = useState<ScoutProgress | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [recent, setRecent] = useState<SessionView[]>([]);
@@ -68,17 +68,17 @@ export function ScoutPage({ onOpenDraft }: Props) {
     const offs = [
       listen<ScoutProgress>("scout:progress", (p) => {
         setProgress(p);
-        setPaused(false);
+        setPaused(null);
         void p3.scoutQueue().then(setQueue);
       }),
       listen("scout:finished", () => {
         setRunning(false);
-        setPaused(false);
+        setPaused(null);
         void reload();
       }),
       listen<{ message: string }>("scout:error", (e) => setError(e.message)),
-      listen("scout:paused", () => setPaused(true)),
-      listen("scout:resumed", () => setPaused(false)),
+      listen<{ reason?: string }>("scout:paused", (e) => setPaused(e.reason === "manual" ? "manual" : "user_activity")),
+      listen("scout:resumed", () => setPaused(null)),
     ];
     return () => {
       offs.forEach((o) => void o.then((f) => f()));
@@ -101,6 +101,11 @@ export function ScoutPage({ onOpenDraft }: Props) {
 
   const stop = async () => {
     await p3.scoutStop();
+  };
+
+  const togglePause = async () => {
+    const wantPause = paused !== "manual";
+    if (await p3.scoutPause(wantPause)) setPaused(wantPause ? "manual" : null);
   };
 
   const draft = useCallback(
@@ -151,7 +156,8 @@ export function ScoutPage({ onOpenDraft }: Props) {
         <Notice tone="info">No model is set for scoring yet, so posts get a quick local score from engagement and your topics. Pick a model in Settings for better picks.</Notice>
       )}
       {error && <Notice tone="error">{error}</Notice>}
-      {paused && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}
+      {paused === "user_activity" && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}
+      {paused === "manual" && <Notice tone="warn">Scout is paused. The session is kept; resume it when you are ready.</Notice>}
 
       <section className={panel} aria-labelledby="scout-start">
         <h2 id="scout-start" className="mb-3 font-medium">New session</h2>
@@ -217,9 +223,14 @@ export function ScoutPage({ onOpenDraft }: Props) {
         </fieldset>
         <div className="mt-4 flex items-center gap-3">
           {running ? (
-            <button type="button" className={btn} onClick={stop}>
-              Stop session
-            </button>
+            <>
+              <button type="button" className={btn} onClick={togglePause}>
+                {paused === "manual" ? "Resume session" : "Pause session"}
+              </button>
+              <button type="button" className={btn} onClick={stop}>
+                Stop session
+              </button>
+            </>
           ) : (
             <button type="button" className={btnPrimary} onClick={start} disabled={busy}>
               Start scouting

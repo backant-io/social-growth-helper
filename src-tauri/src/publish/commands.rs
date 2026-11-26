@@ -22,6 +22,7 @@ impl JobRunner for AppRunner {
         let state = self.handle.state::<AppState>();
         let p3 = self.handle.state::<Phase3>();
         let sink = TauriSink(self.handle.clone());
+        let completion = p3.completion();
         let _job = state.jobs.register("Publishing");
         let env = PublishEnv {
             db: &state.db,
@@ -32,6 +33,7 @@ impl JobRunner for AppRunner {
             timing: Timing::LIVE,
             step_gap_ms: (1500, 4000),
             shots_dir: Some(state.paths.data_dir.join("audit-shots")),
+            vision: Some(&*completion),
         };
         executor::execute(&env, a).await
     }
@@ -118,4 +120,51 @@ pub fn set_pacing(state: State<'_, AppState>, config: PacingConfig) -> AppResult
 pub fn pacing_usage(state: State<'_, AppState>) -> AppResult<Vec<PacingUsage>> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     pacing::usage(&state.db.lock().unwrap(), &state.profile_id, now)
+}
+
+struct LiveToggler<'a> {
+    state: &'a AppState,
+    p3: &'a Phase3,
+    observed_id: String,
+    handle: String,
+    post_id: String,
+}
+
+#[async_trait::async_trait]
+impl super::checklist::Toggler for LiveToggler<'_> {
+    async fn probe(&self) -> Result<Option<super::actions::Probe>, String> {
+        executor::probe_state(&self.state.browser, &self.handle, &self.post_id, &self.p3.kill).await.map_err(|e| e.to_string())
+    }
+
+    async fn toggle(&self, kind: ActionKind, undo: bool) -> JobResult {
+        let approval = {
+            let db = self.state.db.lock().unwrap();
+            gate::approve_action(&db, &self.observed_id, kind, undo, self.p3.kill.is_engaged())
+        };
+        match approval {
+            Ok(a) => match self.p3.publish.submit_and_wait(a).await {
+                Ok(r) => r,
+                Err(_) => JobResult { ok: false, message: Some("the publish worker stopped".into()), published_post_id: None },
+            },
+            Err(e) => JobResult { ok: false, message: Some(e.to_string()), published_post_id: None },
+        }
+    }
+}
+
+/// Runs the repeatable live check on a post the user names and stores the report with the selector version.
+#[tauri::command]
+pub async fn checklist_run(state: State<'_, AppState>, p3: State<'_, Phase3>, post_url: String) -> AppResult<super::checklist::ChecklistReport> {
+    let (handle, post_id) = super::checklist::parse_post_url(&post_url)?;
+    let observed_id = {
+        let db = state.db.lock().unwrap();
+        prepo::ensure_observed(&db, &state.profile_id, &handle, &post_id)?
+    };
+    let toggler = LiveToggler { state: &state, p3: &p3, observed_id, handle, post_id };
+    let items = super::checklist::run(&toggler).await;
+    super::checklist::save(&state.db.lock().unwrap(), &state.profile_id, &post_url, &items)
+}
+
+#[tauri::command]
+pub fn checklist_reports(state: State<'_, AppState>) -> AppResult<Vec<super::checklist::ChecklistReport>> {
+    super::checklist::list(&state.db.lock().unwrap(), &state.profile_id, 20)
 }

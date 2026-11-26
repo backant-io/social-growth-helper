@@ -27,6 +27,7 @@ pub struct FakeState {
     pub published: Vec<(String, String)>,
     pub calls: Vec<String>,
     pub ignore_like_clicks: bool,
+    pub hide_like: bool,
     pub mangle_insert: bool,
     pub submit_hangs: bool,
     pub engage_after_like: Option<Arc<KillSwitch>>,
@@ -95,7 +96,9 @@ impl FakeX {
 
     fn rect_target(&self, js: &str) -> Option<&'static str> {
         let s = self.0.lock().unwrap();
-        let name = if has(js, &sel::UNLIKE) {
+        let name = if s.hide_like && has(js, &sel::LIKE) {
+            return None;
+        } else if has(js, &sel::UNLIKE) {
             "unlike"
         } else if has(js, &sel::LIKE) {
             "like"
@@ -259,7 +262,10 @@ impl BrowserDriver for FakeX {
         Ok(out)
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, BrowserError> {
-        Ok(vec![0x89, 0x50])
+        let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png.extend(100u32.to_be_bytes());
+        png.extend(100u32.to_be_bytes());
+        Ok(png)
     }
     async fn ax_tree(&self, _max_depth: Option<u32>) -> Result<Value, BrowserError> {
         Ok(Value::Null)
@@ -343,6 +349,7 @@ mod tests {
                 timing: Timing::INSTANT,
                 step_gap_ms: (0, 0),
                 shots_dir: None,
+                vision: None,
             }
         }
 
@@ -573,5 +580,95 @@ mod tests {
                 assert!(!prod.contains("publish::") && !prod.contains("Approval"), "{rel} must not reach the publish layer");
             }
         }
+    }
+
+    #[tokio::test]
+    async fn vision_fallback_finds_a_control_the_selector_missed_and_the_result_is_still_verified() {
+        use crate::completion::ScriptedProvider;
+        let r = rig(&["like"], |s| s.hide_like = true);
+        let res = r.single(ActionKind::Like, false).await;
+        assert!(!res.ok, "without a model the missing selector fails the step");
+        assert!(!r.fake.0.lock().unwrap().like);
+
+        let p = ScriptedProvider::new(vec![r#"{"action":"click","x":1,"y":5}"#]);
+        let mut env = r.env();
+        env.vision = Some(&p);
+        let a = approve_action(&r.db.lock().unwrap(), &r.observed, ActionKind::Like, false, false).unwrap();
+        let res = execute(&env, &a).await;
+        assert!(res.ok, "{:?}", res.message);
+        assert!(r.fake.0.lock().unwrap().like, "the page state confirms the like");
+        assert_eq!(p.call_count(), 1);
+        let log = crate::activity::list(&r.db.lock().unwrap(), &r.profile, 10).unwrap();
+        assert!(log.iter().any(|e| e.title.contains("Vision fallback")));
+    }
+
+    #[tokio::test]
+    async fn vision_giving_up_leaves_the_page_untouched() {
+        use crate::completion::ScriptedProvider;
+        let r = rig(&["like"], |s| s.hide_like = true);
+        let p = ScriptedProvider::new(vec![r#"{"action":"give_up","reason":"no heart icon"}"#]);
+        let mut env = r.env();
+        env.vision = Some(&p);
+        let a = approve_action(&r.db.lock().unwrap(), &r.observed, ActionKind::Like, false, false).unwrap();
+        let res = execute(&env, &a).await;
+        assert!(!res.ok);
+        assert!(r.fake.clicks().is_empty());
+    }
+
+    struct FakeToggler<'a> {
+        r: &'a Rig,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::publish::checklist::Toggler for FakeToggler<'_> {
+        async fn probe(&self) -> Result<Option<crate::publish::actions::Probe>, String> {
+            let page = crate::publish::actions::Page { d: &self.r.fake, post_id: "111", handle: HANDLE, me: None, t: Timing::INSTANT, kill: &self.r.kill, vision: None, vision_hits: Default::default() };
+            Ok(page.probe().await.ok().filter(|p| p.found))
+        }
+
+        async fn toggle(&self, kind: ActionKind, undo: bool) -> crate::publish::executor::JobResult {
+            self.r.single(kind, undo).await
+        }
+    }
+
+    #[tokio::test]
+    async fn the_live_check_does_and_undoes_each_toggle_and_stores_a_report() {
+        let r = rig(&["like"], |s| s.follow = true);
+        let items = crate::publish::checklist::run(&FakeToggler { r: &r }).await;
+        let status = |a: &str| items.iter().find(|i| i.action == a).map(|i| i.status.clone()).unwrap();
+        for a in ["like", "bookmark", "repost", "follow"] {
+            assert_eq!(status(a), "pass", "{a}: {items:?}");
+        }
+        assert_eq!((status("reply"), status("quote")), ("manual".into(), "manual".into()));
+        let s = r.fake.0.lock().unwrap();
+        assert!(!s.like && !s.bookmark && !s.repost && s.follow, "every toggle ends in its starting state");
+        drop(s);
+        assert!(r.fake.inserts() == 0, "the check never types");
+
+        let db = r.db.lock().unwrap();
+        let saved = crate::publish::checklist::save(&db, &r.profile, "https://x.com/naval/status/111", &items).unwrap();
+        assert_eq!(saved.registry_version, crate::selectors::REGISTRY_VERSION);
+        let listed = crate::publish::checklist::list(&db, &r.profile, 5).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].items, items);
+        assert!(crate::activity::list(&db, &r.profile, 5).unwrap().iter().any(|e| e.title.contains("passed")));
+    }
+
+    #[tokio::test]
+    async fn the_live_check_reports_failures_and_skips_follow_when_absent() {
+        let r = rig(&["like"], |s| {
+            s.ignore_like_clicks = true;
+            s.inline_follow = false;
+        });
+        let items = crate::publish::checklist::run(&FakeToggler { r: &r }).await;
+        let status = |a: &str| items.iter().find(|i| i.action == a).map(|i| i.status.clone()).unwrap();
+        assert_eq!(status("like"), "fail");
+        assert_eq!(status("bookmark"), "pass");
+        assert_eq!(status("follow"), "skipped");
+
+        let r = rig(&["like"], |s| s.found = false);
+        let items = crate::publish::checklist::run(&FakeToggler { r: &r }).await;
+        assert_eq!(items[0].status, "fail");
+        assert!(items.iter().any(|i| i.action == "reply" && i.status == "manual"));
     }
 }
