@@ -29,6 +29,11 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
     Migration {
+        version: 4,
+        name: "phase3",
+        sql: include_str!("migrations/0004_phase3.sql"),
+    },
+    Migration {
         version: 5,
         name: "phase4_analytics_views",
         sql: include_str!("migrations/0005_phase4_analytics_views.sql"),
@@ -59,6 +64,14 @@ pub fn apply_pragmas(conn: &Connection) -> AppResult<()> {
 
 pub fn user_version(conn: &Connection) -> AppResult<u32> {
     Ok(conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))?)
+}
+
+#[cfg(test)]
+pub fn open_in_memory() -> AppResult<Connection> {
+    let mut conn = Connection::open_in_memory()?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    migrate(&mut conn, MIGRATIONS, None)?;
+    Ok(conn)
 }
 
 /// Opens (creating if needed) the app database, backs it up before any upgrade, and migrates it.

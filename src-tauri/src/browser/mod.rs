@@ -99,6 +99,10 @@ pub trait BrowserDriver: Send + Sync {
     async fn insert_text(&self, text: &str) -> Result<(), BrowserError>;
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError>;
     /// Graceful `Browser.close` so Chrome flushes cookies and storage before exiting (BRW-16).
+    /// Raises the X window (tray "Focus X window", challenge takeover). No-op for drivers without windows.
+    async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        Ok(())
+    }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError>;
 
     /// Opens an analytics page in a dedicated tab (BRW-13) with temporary passive `Network` capture (ANL-04)
