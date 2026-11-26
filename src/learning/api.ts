@@ -74,7 +74,7 @@ export const learningApi = {
   async inspectExport(path: string): Promise<Manifest> {
     if (inTauri()) return call("data_inspect_export", { path });
     if (!path.trim().endsWith(".zip")) throw new Error("this file is not a zip archive");
-    return { format: "social-growth-helper-export", format_version: 1, app_version: "0.1.0", schema_version: 5, created_at: "2026-11-20T10:00:00Z", tables: { reply_drafts: 18, observed_posts: 64 }, excluded: [] };
+    return { format: "social-growth-helper-export", format_version: 1, app_version: "0.1.0", schema_version: 6, created_at: "2026-11-20T10:00:00Z", tables: { reply_drafts: 18, observed_posts: 64 }, excluded: [] };
   },
   async importData(path: string): Promise<ImportSummary> {
     if (inTauri()) return call("data_import", { path });

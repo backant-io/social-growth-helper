@@ -29,9 +29,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
     Migration {
-        version: 5,
+        version: 6,
         name: "learning",
-        sql: include_str!("migrations/0005_learning.sql"),
+        sql: include_str!("migrations/0006_learning.sql"),
     },
 ];
 
@@ -233,7 +233,7 @@ mod tests {
 
         let (conn, report) = open(&db, &bk).unwrap();
         assert_eq!(report.from_version, 1);
-        assert_eq!(report.applied, vec![2, 3, 5]);
+        assert_eq!(report.applied, vec![2, 3, 6]);
         let backup = report.backup_path.expect("backup must exist before migrating an existing db");
         assert!(backup.exists());
 

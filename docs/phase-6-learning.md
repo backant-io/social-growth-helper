@@ -13,7 +13,7 @@ Covers LRN-01 to LRN-14, SHL-12 (export/import) and SHL-13 (wipe). STY-07 style 
 
 ## Data
 
-Migration `0005_learning.sql` (0003 is Phase 2, 0004 is left for Phases 3 and 5). It extends `learning_insights` and adds `learning_runs` and `learning_changelog`. A trigger blocks edits to existing rubric versions.
+Migration `0006_learning.sql` (0003 is Phase 2, 0004 is Phase 3, 0005 is Phase 4 analytics views). It extends `learning_insights` and adds `learning_runs` and `learning_changelog`. A trigger blocks edits to existing rubric versions.
 
 ## Export, import, wipe
 
@@ -38,5 +38,5 @@ Migration `0005_learning.sql` (0003 is Phase 2, 0004 is left for Phases 3 and 5)
 
 ## Rebase notes
 
-- Renumber the migration only if another phase takes 0005 first.
+- The migration is 0006. Merge after Phases 3 and 4 are on `main`. The runner applies only versions above `user_version`, so a database already at 6 would skip any later 4 or 5.
 - Expect conflicts in `lib.rs` (invoke handler), `App.tsx` and `SettingsPage.tsx`.
