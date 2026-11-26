@@ -39,7 +39,6 @@ function liveOn(action: ActionName, s: PostActionState | null): boolean {
 }
 
 export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }: Props) {
-export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
   const online = useOnlineStatus();
   const [draft, setDraft] = useState<DraftView | null>(null);
   const [text, setText] = useState("");
