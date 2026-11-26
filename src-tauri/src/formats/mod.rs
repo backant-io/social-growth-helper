@@ -12,3 +12,4 @@ pub mod pipeline;
 pub mod repo;
 pub mod router_llm;
 pub mod scan;
+pub mod winrate;

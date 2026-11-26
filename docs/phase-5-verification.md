@@ -1,6 +1,6 @@
 # Phase 5 verification: viral formats and the OGC creator
 
-Covers matrix rows OGC-01 to OGC-09, OGC-13, OGC-14 and BRW-17. OGC-10 (personal win rate) is stored and sortable but stays empty until Phase 4 analytics feeds it. OGC-11 and OGC-12 are P2 and not built.
+Covers matrix rows OGC-01 to OGC-09, OGC-13, OGC-14 and BRW-17. OGC-10 (personal win rate) is computed from analytics snapshots after each stats sync (`formats/winrate.rs`): for each format, the share of your published OGC posts, at least 24 hours old, whose engagement rate is at or above the median of all your mature posts. It stays empty until a format has two such posts and you have three mature posts overall. OGC-11 and OGC-12 are P2 and not built.
 
 ## What was built
 
@@ -30,14 +30,13 @@ Covers matrix rows OGC-01 to OGC-09, OGC-13, OGC-14 and BRW-17. OGC-10 (personal
 | Check | Result |
 | --- | --- |
 | `cargo check --all-targets` | clean, no warnings |
-| `cargo test --lib` | 385 passed |
-| `pnpm typecheck`, `pnpm test` (47 tests), `pnpm build` | ok |
+| `cargo test --lib` | 402 passed |
+| `pnpm typecheck`, `pnpm test` (52 tests), `pnpm build` | ok |
 | UI in a plain browser against the in-memory stand-in (Playwright): write 3 versions, edit, attach media, Publish disabled with the X window closed, extraction message without a model, new format, watchlist add and validation | passed, no console errors (run before the publish rewiring; repeat before merge) |
 
 ## Known gaps
 
-- The OGC path does not run `pre_publish_problems` (banned-phrase and recent-duplicate checks). That function rejects empty action bundles, and a standalone post has none. Banned phrases are enforced at generation time only.
-- The OGC path does not run `pacing::check`.
+- The OGC path runs the same text checks as replies at approval time (`drafts::edit::text_problems`: empty, length, banned phrases, exact repeat of a recent reply or original post), and `pacing::check_original_post` at execution time. Pacing has no per-day cap for original posts, only the minimum gap between text publishes, which now counts replies, quotes and original posts together.
 - Anything against live X is unverified: the compose selectors (`tweetTextarea_0`, `fileInput`, `tweetButton`, `toast`) in `publish/executor.rs`, the profile scan selectors and metric labels in `formats/scan.rs`, and real media upload. Check them with a throwaway account before relying on Publish.
 - Viral thresholds are defaults, not tuned on real feeds.
-- Phase 3 Scout should call `formats::pipeline::consider_post(..., PostSource::Scout, ...)` for each evaluated post (OGC-06). The hook exists; the call site does not.
+- Scout calls `formats::pipeline::consider_post(..., PostSource::Scout, ...)` for every organic, non-own post it reads, before its own filters (OGC-06). The feed does not show follower counts, so Scout detection uses the assumed follower count from the viral thresholds.
