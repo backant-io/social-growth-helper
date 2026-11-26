@@ -38,3 +38,5 @@ Produces an ad-hoc signed `.app` and `.dmg` under `src-tauri/target/aarch64-appl
 ## Verification status
 
 See [docs/phase-1-verification.md](docs/phase-1-verification.md).
+
+Learning loop, export and wipe: see [docs/phase-6-learning.md](docs/phase-6-learning.md).

@@ -38,6 +38,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "phase4_analytics_views",
         sql: include_str!("migrations/0005_phase4_analytics_views.sql"),
     },
+    Migration {
+        version: 6,
+        name: "learning",
+        sql: include_str!("migrations/0006_learning.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -127,7 +132,7 @@ pub fn migrate(
     })
 }
 
-fn backup_database(conn: &Connection, dir: &Path, version: u32) -> AppResult<PathBuf> {
+pub fn backup_database(conn: &Connection, dir: &Path, version: u32) -> AppResult<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let stamp = crate::util::now_rfc3339().replace([':', '-'], "");
     let path = dir.join(format!("app-v{version}-{stamp}.db"));
@@ -188,7 +193,7 @@ mod tests {
             "observed_posts", "scout_evaluations", "viral_formats", "reply_drafts", "ogc_drafts",
             "publish_audit_log", "analytics_snapshots", "learning_rubrics", "learning_insights",
             "profile_preferences", "app_acknowledgements", "scout_sessions", "dashboard_layouts",
-            "dashboard_widgets", "app_settings",
+            "dashboard_widgets", "app_settings", "learning_runs", "learning_changelog",
         ] {
             let n: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))

@@ -5,6 +5,8 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { QuitGuardModal } from "./components/QuitGuardModal";
 import { Sidebar } from "./components/Sidebar";
 import { SECTIONS } from "./components/sections";
+import { learningApi } from "./learning/api";
+import { LearningPage } from "./learning/LearningPage";
 import { api, listen } from "./lib/api";
 import { useOnlineStatus } from "./lib/errors";
 import type { OnboardingStatus, QuitGuardPayload, SectionId } from "./lib/types";
@@ -26,6 +28,7 @@ export default function App() {
   const [overlay, setOverlay] = useState<OnboardingMode | null>(null);
   const [quitJobs, setQuitJobs] = useState<string[] | null>(null);
   const online = useOnlineStatus();
+  const [proposed, setProposed] = useState(0);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
@@ -37,6 +40,17 @@ export default function App() {
   useEffect(() => {
     refresh().then(() => undefined);
   }, [refresh]);
+
+  const acknowledged = status?.rules.acknowledged ?? false;
+  useEffect(() => {
+    if (!acknowledged) return;
+    learningApi
+      .reflectIfDue()
+      .catch(() => null)
+      .then(() => learningApi.proposedCount())
+      .then(setProposed)
+      .catch(() => undefined);
+  }, [acknowledged]);
 
   useEffect(() => {
     if (status && !status.tour_completed && !overlay) setOverlay("full");
@@ -101,7 +115,7 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <Sidebar active={section} onSelect={setSection} locked={locked} />
+      <Sidebar active={section} onSelect={setSection} locked={locked} badges={{ learning: proposed }} />
       <div className="flex min-w-0 flex-1 flex-col">
       <KillBar />
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
@@ -113,11 +127,17 @@ export default function App() {
               offline={!online}
               onReplayTour={() => setOverlay("tour")}
               onReadRules={() => setOverlay("rules")}
+              onDataChanged={() => {
+                setProposed(0);
+                void refresh();
+              }}
             />
             <div className="mx-auto mt-6 max-w-3xl">
               <PublishSettings />
             </div>
           </>
+        ) : section === "learning" && !locked ? (
+          <LearningPage onProposedChange={setProposed} />
         ) : section === "style" ? (
           <StylePage
             locked={locked}

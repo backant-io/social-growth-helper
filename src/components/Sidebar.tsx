@@ -5,9 +5,10 @@ interface Props {
   active: SectionId;
   onSelect: (id: SectionId) => void;
   locked: boolean;
+  badges?: Partial<Record<SectionId, number>>;
 }
 
-export function Sidebar({ active, onSelect, locked }: Props) {
+export function Sidebar({ active, onSelect, locked, badges }: Props) {
   return (
     <nav aria-label="Main" className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 px-2 pt-2 text-sm font-semibold tracking-tight">Social Growth Helper</div>
@@ -27,6 +28,11 @@ export function Sidebar({ active, onSelect, locked }: Props) {
                 }`}
               >
                 <span>{s.label}</span>
+                {!locked && !!badges?.[s.id] && (
+                  <span aria-label={`${badges[s.id]} waiting`} className="rounded-full bg-amber-500 px-1.5 text-[10px] font-semibold text-white">
+                    {badges[s.id]}
+                  </span>
+                )}
                 {locked && s.id !== "settings" && <span aria-label="locked" className="text-[10px] uppercase opacity-60">locked</span>}
               </button>
             </li>
