@@ -1,6 +1,6 @@
 //! Allowlisted read-only SQLite analytics views (ANL-08, ANL-09, ANL-10, ANL-11, ANL-20).
 //!
-//! Defined by migration `0004_phase4_analytics_views.sql`; `ensure_views` only re-applies the DDL when a view is
+//! Defined by migration `0005_phase4_analytics_views.sql`; `ensure_views` only re-applies the DDL when a view is
 //! missing (e.g. a connection that bypassed migrations), so dashboard loads never write to the database.
 
 use super::spec::AllowedView;
@@ -190,7 +190,7 @@ pub fn list_view_schemas() -> Vec<ViewSchemaInfo> {
         .collect()
 }
 
-/// Creates the allowlisted read-only SQLite views when any is missing; a no-op once migration 0004 has run.
+/// Creates the allowlisted read-only SQLite views when any is missing; a no-op once migration 0005 has run.
 pub fn ensure_views(conn: &Connection) -> AppResult<()> {
     let expected = list_view_schemas();
     let present: i64 = conn.query_row(
@@ -204,5 +204,5 @@ pub fn ensure_views(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-const VIEWS_SQL: &str = include_str!("../storage/migrations/0004_phase4_analytics_views.sql");
+const VIEWS_SQL: &str = include_str!("../storage/migrations/0005_phase4_analytics_views.sql");
 

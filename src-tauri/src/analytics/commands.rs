@@ -202,6 +202,12 @@ pub async fn analytics_reprompt_widget(
     current_spec: Option<WidgetSpec>,
     window_days: Option<u32>,
 ) -> AppResult<RepromptResult> {
+    {
+        let conn = state.db.lock().unwrap();
+        state
+            .llm_router
+            .sync_from_db(&conn, state.secrets.clone(), state.browser.clone())?;
+    }
     let completer = RouterBuilderCompleter {
         router: &state.llm_router,
         db: &state.db,

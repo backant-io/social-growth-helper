@@ -171,6 +171,8 @@ impl BuilderCompleter for RouterBuilderCompleter<'_> {
 /// Async entry point that uses an injected `BuilderCompleter` (Phase 2 LLM router) when the
 /// `dashboard_builder` route is configured, always validating untrusted LLM JSON strictly through
 /// [`parse_untrusted_spec_json`] (ANL-20). The database lock is never held across an `.await`.
+/// Provider/transport failures fall back to the local planner with a visible note; specs the sandbox rejects are
+/// returned as errors and never silently replaced.
 pub async fn reprompt_widget_with_completer(
     db: &Mutex<Connection>,
     profile_id: &str,
@@ -189,27 +191,41 @@ pub async fn reprompt_widget_with_completer(
         let conn = db.lock().unwrap();
         get_builder_route_status(&conn)?
     };
+    let mut fallback_note: Option<String> = None;
     if route_status.configured {
         if let Some(llm) = completer {
-            let raw_json = llm
+            match llm
                 .complete_widget_spec(&builder_system_prompt(), trimmed, current_spec)
-                .await?;
-            let spec = parse_untrusted_spec_json(&raw_json)?;
-            let conn = db.lock().unwrap();
-            let preview = execute_widget(&conn, profile_id, &spec, window_override_days)?;
-            return Ok(RepromptResult {
-                spec,
-                preview,
-                source_prompt: trimmed.to_string(),
-                generated_by: "dashboard_builder_llm".to_string(),
-                route_status,
-                summary: "Generated via configured dashboard_builder model and verified by sandbox.".into(),
-            });
+                .await
+            {
+                Ok(raw_json) => {
+                    let spec = parse_untrusted_spec_json(&raw_json)?;
+                    let conn = db.lock().unwrap();
+                    let preview = execute_widget(&conn, profile_id, &spec, window_override_days)?;
+                    return Ok(RepromptResult {
+                        spec,
+                        preview,
+                        source_prompt: trimmed.to_string(),
+                        generated_by: "dashboard_builder_llm".to_string(),
+                        route_status,
+                        summary: "Generated via configured dashboard_builder model and verified by sandbox.".into(),
+                    });
+                }
+                Err(e) => {
+                    fallback_note = Some(format!("dashboard_builder model unavailable ({e}); used built-in planner."))
+                }
+            }
         }
     }
 
-    let conn = db.lock().unwrap();
-    reprompt_widget_sync(&conn, profile_id, trimmed, current_spec, window_override_days)
+    let mut result = {
+        let conn = db.lock().unwrap();
+        reprompt_widget_sync(&conn, profile_id, trimmed, current_spec, window_override_days)?
+    };
+    if let Some(note) = fallback_note {
+        result.summary = format!("{note} {}", result.summary);
+    }
+    Ok(result)
 }
 
 /// Deterministic NL-to-WidgetSpec planner supporting both brand-new widgets and follow-up edits (ANL-19, ANL-22).
@@ -887,6 +903,143 @@ mod tests {
         ] {
             let res = reprompt_widget_sync(&conn, &pid, prompt, None, None).unwrap();
             assert_eq!(res.spec.chart_type, expected, "prompt={prompt}");
+        }
+    }
+
+    mod router_edge_cases {
+        use super::*;
+        use crate::llm::providers::mock::MockLlmProvider;
+        use crate::llm::repo::{self as llm_repo, ProviderAccount, ProviderAccountConfig, TaskModelRoutePatch};
+        use crate::llm::{BillingLane, LlmError, LlmErrorKind, ProviderCapabilities, ProviderType};
+        use std::sync::Arc;
+
+        fn setup(route: bool) -> (tempfile::TempDir, Mutex<Connection>, String, LlmRouter, Arc<MockLlmProvider>) {
+            let dir = tempdir().unwrap();
+            let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+            let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+            llm_repo::upsert_provider_account(
+                &conn,
+                &ProviderAccount {
+                    id: "p1".into(),
+                    provider_type: ProviderType::ClaudeCli,
+                    label: "Claude CLI".into(),
+                    keychain_ref: None,
+                    billing_lane: BillingLane::Subscription,
+                    status: "connected".into(),
+                    last_verified_at: None,
+                    last_error: None,
+                    config: ProviderAccountConfig::default(),
+                },
+            )
+            .unwrap();
+            if route {
+                llm_repo::save_task_route(
+                    &conn,
+                    TaskModelRoutePatch {
+                        task_type: TaskType::DashboardBuilder,
+                        provider_account_id: Some("p1".into()),
+                        model_id: Some("sonnet".into()),
+                        reasoning_effort: None,
+                        temperature: None,
+                        fallback_account_id: None,
+                        fallback_model_id: None,
+                        max_calls_per_hour: None,
+                    },
+                )
+                .unwrap();
+            }
+            let mock = Arc::new(MockLlmProvider::new(
+                "p1",
+                ProviderType::ClaudeCli,
+                ProviderCapabilities { vision: false, json_schema: true, streaming: false, thinking: false },
+            ));
+            let router = LlmRouter::new();
+            router.register_provider(mock.clone());
+            (dir, Mutex::new(conn), pid, router, mock)
+        }
+
+        #[tokio::test]
+        async fn follow_up_edit_sends_current_spec_and_accepts_fenced_json() {
+            let (_d, db, pid, router, mock) = setup(true);
+            let (current, _) = plan_widget_from_prompt("total impressions kpi", None).unwrap();
+            mock.push_ok(format!("```json\n{}\n```", serde_json::to_string(&current).unwrap()));
+            let completer = RouterBuilderCompleter { router: &router, db: &db };
+            let res = reprompt_widget_with_completer(&db, &pid, "make it 7 days", Some(&current), None, Some(&completer))
+                .await
+                .unwrap();
+            assert_eq!(res.generated_by, "dashboard_builder_llm");
+            let calls = mock.recorded_calls();
+            let crate::llm::LlmContentPart::Text { text } = &calls[0].messages[0].parts[0] else {
+                panic!("expected text part");
+            };
+            assert!(text.contains("Current WidgetSpec JSON"));
+            assert!(text.contains("make it 7 days"));
+        }
+
+        #[tokio::test]
+        async fn llm_specs_violating_the_sandbox_are_rejected_not_replaced() {
+            for bad in [
+                r#"{"title":"x","view":"provider_accounts","chart_type":"table"}"#,
+                r#"{"title":"x","view":"v_analytics_post_performance","chart_type":"table","sql":"DROP TABLE profiles"}"#,
+            ] {
+                let (_d, db, pid, router, mock) = setup(true);
+                mock.push_ok(bad);
+                let completer = RouterBuilderCompleter { router: &router, db: &db };
+                let err = reprompt_widget_with_completer(&db, &pid, "anything", None, None, Some(&completer))
+                    .await
+                    .unwrap_err();
+                assert!(err.to_string().contains("sandbox"), "{err}");
+            }
+        }
+
+        #[tokio::test]
+        async fn provider_failure_falls_back_to_local_planner_with_visible_note() {
+            let (_d, db, pid, router, mock) = setup(true);
+            mock.push_err(LlmError::new(LlmErrorKind::Offline, "offline"));
+            let completer = RouterBuilderCompleter { router: &router, db: &db };
+            let res = reprompt_widget_with_completer(
+                &db,
+                &pid,
+                "show reply impressions by model per week",
+                None,
+                None,
+                Some(&completer),
+            )
+            .await
+            .unwrap();
+            assert_eq!(res.generated_by, "local_planner");
+            assert!(res.summary.contains("dashboard_builder model unavailable"), "{}", res.summary);
+        }
+
+        #[tokio::test]
+        async fn unset_route_uses_local_planner_and_never_calls_provider() {
+            let (_d, db, pid, router, mock) = setup(false);
+            let completer = RouterBuilderCompleter { router: &router, db: &db };
+            let res = reprompt_widget_with_completer(
+                &db,
+                &pid,
+                "show reply impressions by model per week",
+                None,
+                None,
+                Some(&completer),
+            )
+            .await
+            .unwrap();
+            assert_eq!(res.generated_by, "local_planner");
+            assert!(!res.route_status.configured);
+            assert!(mock.recorded_calls().is_empty());
+        }
+    }
+
+    #[test]
+    fn migration_0005_creates_every_allowlisted_view_without_runtime_ddl() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        for v in super::super::views::list_view_schemas() {
+            let n: i64 = conn
+                .query_row("SELECT count(*) FROM sqlite_master WHERE type='view' AND name=?1", [v.sql_name], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "view {} must exist right after migrations", v.sql_name);
         }
     }
 }

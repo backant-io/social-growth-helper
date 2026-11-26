@@ -29,9 +29,9 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
     Migration {
-        version: 4,
+        version: 5,
         name: "phase4_analytics_views",
-        sql: include_str!("migrations/0004_phase4_analytics_views.sql"),
+        sql: include_str!("migrations/0005_phase4_analytics_views.sql"),
     },
 ];
 
