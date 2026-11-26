@@ -6,6 +6,7 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
 import type { ActionName, CompletionStatus, DraftView, ModelOption, PostActionState, QueueItem } from "./types";
+import { LoadingBlock, useKillSwitch } from "../components/ui";
 import { btn, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
 
 interface Props {
@@ -95,6 +96,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
     };
   }, [draftId]);
 
+  const paused = useKillSwitch();
   const editable = draft ? draft.status === "draft" || draft.status === "failed" : false;
   const dirty = draft ? text !== draft.edited_text : false;
   const chars = charInfo(text, MAX_CHARS);
@@ -156,10 +158,10 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
     else return false;
   });
 
-  if (!draftId || (!draft && !error)) {
+  if (!draftId) {
     return (
       <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
-        <h1 className="mb-2 text-xl font-semibold">Reply Studio</h1>
+        <h1 className="mb-2 text-xl font-semibold tracking-tight">Reply Studio</h1>
         <p className={`text-sm ${muted}`}>Pick a post from the Scout Queue to draft a reply in your voice.</p>
         <button type="button" className={`${btnPrimary} mt-4`} onClick={onGoScout}>
           Go to Scout Queue
@@ -167,7 +169,14 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
       </div>
     );
   }
-  if (!draft) return <Notice tone="error">{error}</Notice>;
+  if (!draft) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-4">
+        <h1 className="text-xl font-semibold tracking-tight">Reply Studio</h1>
+        {error ? <Notice tone="error">{error}</Notice> : <LoadingBlock label="Loading draft" />}
+      </div>
+    );
+  }
 
   const toggleBundle = async (a: ActionName) => {
     const next = toggleInBundle(draft.actions, a);
@@ -196,13 +205,13 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const textAction = bundleText(draft.actions);
   const models = [...new Set(draft.variants.map((v) => v.model_used))];
   const offlineHint = offlineActionHint(online);
-  const canActNow = draft.status !== "publishing";
+  const canActNow = draft.status !== "publishing" && !paused;
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <div className="space-y-4">
         <header className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold">Reply Studio</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Reply Studio</h1>
           <div className="flex gap-2">
             <button type="button" className={btn} onClick={() => void move(-1)} aria-label="Previous queue item">Prev</button>
             <button type="button" className={btn} onClick={() => void move(1)} aria-label="Next queue item">Next</button>
@@ -225,12 +234,12 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           )}
         </section>
         <section className={panel} aria-label="Why this post was picked">
-          <h2 className="mb-1 text-sm font-medium">Why this post{draft.score != null ? ` (score ${Math.round(draft.score)})` : ""}</h2>
+          <h2 className="mb-1 text-base font-medium">Why this post{draft.score != null ? ` (score ${Math.round(draft.score)})` : ""}</h2>
           {draft.angle && <p className="text-sm"><span className="font-medium">Angle:</span> {draft.angle}</p>}
           {draft.reasoning && <p className={`mt-1 text-sm ${muted}`}>{draft.reasoning}</p>}
         </section>
         <section className={panel} aria-label="Actions on this post">
-          <h2 className="mb-1 text-sm font-medium">Do it now</h2>
+          <h2 className="mb-1 text-base font-medium">Do it now</h2>
           <p className={`mb-3 text-xs ${muted}`}>One click, one action, in the X window. Reply and Quote go through Publish below.</p>
           <div className="grid grid-cols-2 gap-2">
             {ACTION_ORDER.filter((a) => !ACTION_META[a].text).map((a) => {
@@ -250,6 +259,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
       </div>
 
       <div className="space-y-4">
+        {paused && <Notice tone="warn">Everything is paused, so nothing can be posted or clicked on X. Resume in the bar above to continue. You can keep editing.</Notice>}
         {error && <Notice tone="error">{error}</Notice>}
         {completion && !completion.drafting && (
           <InlineModelGuard
@@ -276,7 +286,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
 
         <section className={panel} aria-label="Variants">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-medium">Variants</h2>
+            <h2 className="text-base font-medium">Variants</h2>
             <div className="flex flex-wrap gap-2">
               {TRANSFORMS.map((t) => (
                 <button key={t.id} type="button" className={chip(false)} disabled={!editable || busy !== null} onClick={() => void transform(t.id)}>
@@ -349,7 +359,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
         </section>
 
         <section className={panel} aria-label="Publish bundle">
-          <h2 className="mb-2 text-sm font-medium">What Publish will do</h2>
+          <h2 className="mb-2 text-base font-medium">What Publish will do</h2>
           <div className="flex flex-wrap gap-2">
             {ACTION_ORDER.map((a) => (
               <button key={a} type="button" disabled={!editable || busy !== null} className={chip(draft.actions.includes(a))} aria-pressed={draft.actions.includes(a)} onClick={() => void toggleBundle(a)}>
@@ -388,8 +398,8 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           </button>
           <div className="flex items-center gap-3">
             <span className={`text-xs ${muted}`}>Cmd/Ctrl+Enter</span>
-            <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint} onClick={() => void openConfirm()}>
-              {draft.status === "failed" ? "Retry publish" : "Publish..."}
+            <button type="button" className={btnPrimary} disabled={!online || !editable || paused || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? (paused ? "Paused. Resume in the bar above." : undefined)} onClick={() => void openConfirm()}>
+              {draft.status === "failed" ? "Retry publish" : "Review and publish"}
             </button>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { btn, btnPrimary as primaryBtn, input as inputCls, LoadingBlock, panel, PageHeader, Tabs } from "../components/ui";
 import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { api } from "../lib/api";
 import { browserNotices } from "../lib/browserNotices";
@@ -23,6 +24,7 @@ import type {
 import { TASK_METAS } from "../lib/types";
 import { DataPanel } from "../learning/DataPanel";
 import { PreferencesPanel } from "../onboarding/PreferencesStep";
+import { PublishSettings } from "../phase3/PublishSettings";
 
 interface Props {
   rules: RulesStatus | null;
@@ -34,13 +36,6 @@ interface Props {
 
 type SettingsTab = "general" | "providers" | "routing" | "usage" | "prompts";
 
-const panel = "rounded-xl border border-zinc-200 p-4 dark:border-zinc-800";
-const btn =
-  "rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800";
-const primaryBtn =
-  "rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200";
-const inputCls =
-  "min-w-0 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
 function StatusBadge({ status }: { status: ProviderHealth }) {
   const styles: Record<ProviderHealth, string> = {
@@ -866,7 +861,7 @@ function UsagePanel() {
     void load();
   }, [load]);
 
-  if (!dash) return <div className="text-sm text-zinc-500">Loading usage stats...</div>;
+  if (!dash) return <LoadingBlock label="Loading usage stats" />;
 
   return (
     <div className="space-y-4">
@@ -1099,28 +1094,9 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onData
   ];
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <div role="tablist" aria-label="Settings sections" className="flex flex-wrap gap-1 rounded-xl border border-zinc-200 p-1 dark:border-zinc-800">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
-                tab === t.id
-                  ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                  : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-6">
+      <PageHeader title="Settings" description="Your X window, AI providers, limits and data. Nothing here posts anything." />
+      <Tabs label="Settings sections" tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === "general" && (
         <div className="space-y-4">
@@ -1147,6 +1123,7 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onData
           <PreferencesPanel />
           <SecurityPanel />
           <BrowserPanel rulesAcknowledged={rules?.acknowledged ?? false} />
+          <PublishSettings />
           <LayoutPanel />
           <DiagnosticsPanel />
           <DataPanel onDataChanged={onDataChanged} />

@@ -20,7 +20,6 @@ import { ActivityPage } from "./phase3/ActivityPage";
 import { CommandPalette, ShortcutHelp } from "./phase3/CommandPalette";
 import { KillBar } from "./phase3/KillBar";
 import { matchShortcut, type PaletteCommand } from "./phase3/logic";
-import { PublishSettings } from "./phase3/PublishSettings";
 import { ReplyStudio } from "./phase3/ReplyStudio";
 import { ScoutPage } from "./phase3/ScoutPage";
 
@@ -124,21 +123,16 @@ export default function App() {
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
         <OfflineBanner offline={!online} />
         {section === "settings" ? (
-          <>
-            <SettingsPage
-              rules={status?.rules ?? null}
-              offline={!online}
-              onReplayTour={() => setOverlay("tour")}
-              onReadRules={() => setOverlay("rules")}
-              onDataChanged={() => {
-                setProposed(0);
-                void refresh();
-              }}
-            />
-            <div className="mx-auto mt-6 max-w-3xl">
-              <PublishSettings />
-            </div>
-          </>
+          <SettingsPage
+            rules={status?.rules ?? null}
+            offline={!online}
+            onReplayTour={() => setOverlay("tour")}
+            onReadRules={() => setOverlay("rules")}
+            onDataChanged={() => {
+              setProposed(0);
+              void refresh();
+            }}
+          />
         ) : section === "learning" && !locked ? (
           <LearningPage onProposedChange={setProposed} />
         ) : section === "style" ? (

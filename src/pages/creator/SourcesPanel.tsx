@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { creatorApi } from "../../lib/creatorApi";
 import type { CreatorSettings, ViralThresholds, WatchEntry } from "../../lib/types";
-import { btn, danger, field, muted, panel, primary } from "./ui";
+import { EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
+import { btn, field, muted, panel, primary } from "./ui";
 
 interface Props {
   locked: boolean;
   xRunning: boolean;
+  paused: boolean;
 }
 
-export function SourcesPanel({ locked, xRunning }: Props) {
+export function SourcesPanel({ locked, xRunning, paused }: Props) {
   const api = creatorApi();
   const [watch, setWatch] = useState<WatchEntry[]>([]);
   const [handle, setHandle] = useState("");
@@ -27,7 +29,7 @@ export function SourcesPanel({ locked, xRunning }: Props) {
   }, [api]);
 
   useEffect(() => {
-    void load();
+    load().catch((e) => setError(e instanceof Error ? e.message : String(e)));
   }, [load]);
 
   async function run(label: string, fn: () => Promise<void>) {
@@ -53,11 +55,13 @@ export function SourcesPanel({ locked, xRunning }: Props) {
 
   return (
     <div className="space-y-4">
-      {error && <p role="alert" className={`text-sm ${danger}`}>{error}</p>}
-      {notice && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+      {paused && <Notice tone="warn">Everything is paused, so scans are off. Resume in the bar above.</Notice>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
+      {!thresholds && !settings && !error && <LoadingBlock label="Loading sources" />}
 
       <section className={panel} aria-labelledby="wl-h">
-        <h2 id="wl-h" className="font-medium">Creator watchlist</h2>
+        <h2 id="wl-h" className="text-base font-medium">Creator watchlist</h2>
         <p className={`mt-1 text-sm ${muted}`}>Creators whose posts you want to learn from. A scan opens one creator's profile in your X window, reads what is on screen and flags posts that over-perform. It only runs when you press Scan.</p>
         <form
           className="mt-3 flex flex-wrap gap-2"
@@ -75,7 +79,7 @@ export function SourcesPanel({ locked, xRunning }: Props) {
           <button type="submit" className={primary} disabled={busy !== null || !handle.trim()}>Add creator</button>
         </form>
         {watch.length === 0 ? (
-          <p className={`mt-3 text-sm ${muted}`}>No creators yet.</p>
+          <div className="mt-3"><EmptyBlock title="No creators yet">Add a handle above to start learning from creators you admire.</EmptyBlock></div>
         ) : (
           <ul className="mt-3 divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
             {watch.map((w) => (
@@ -91,8 +95,8 @@ export function SourcesPanel({ locked, xRunning }: Props) {
                   <button
                     type="button"
                     className={btn}
-                    disabled={busy !== null || locked || !xRunning}
-                    title={xRunning ? undefined : "Open the X window first (Settings)"}
+                    disabled={busy !== null || locked || !xRunning || paused}
+                    title={paused ? "Paused. Resume in the bar above." : xRunning ? undefined : "Open the X window first (Settings)"}
                     onClick={() =>
                       run(`scan-${w.id}`, async () => {
                         const s = await api.watchScan(w.id);
@@ -112,7 +116,7 @@ export function SourcesPanel({ locked, xRunning }: Props) {
 
       {thresholds && (
         <section className={panel} aria-labelledby="th-h">
-          <h2 id="th-h" className="font-medium">What counts as viral</h2>
+          <h2 id="th-h" className="text-base font-medium">What counts as viral</h2>
           <p className={`mt-1 text-sm ${muted}`}>A post is flagged when it clears the minimum engagement and either beats the creator's follower count by the reach multiple or is saved unusually often. The defaults are a starting point; tune them against what you see.</p>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
             {numField("Minimum engagement", thresholds.min_engagement, (n) => setThresholds({ ...thresholds, min_engagement: n }))}
@@ -129,7 +133,7 @@ export function SourcesPanel({ locked, xRunning }: Props) {
 
       {settings && (
         <section className={panel} aria-labelledby="cs-h">
-          <h2 id="cs-h" className="font-medium">Writing</h2>
+          <h2 id="cs-h" className="text-base font-medium">Writing</h2>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block text-sm">
               <span className="mb-1 block text-zinc-500">Originality warning at {Math.round(settings.similarity_threshold * 100)}% overlap</span>

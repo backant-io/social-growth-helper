@@ -3,7 +3,8 @@ import { percent } from "../../lib/creator";
 import { creatorApi } from "../../lib/creatorApi";
 import type { FormatCandidate, FormatRecord, FormatSort, ManualPost } from "../../lib/types";
 import { FormatEditor } from "./FormatEditor";
-import { btn, danger, field, muted, panel, primary } from "./ui";
+import { EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
+import { btn, field, muted, panel, primary } from "./ui";
 
 const EMPTY_POST: ManualPost = { url: "", text: "", likes: 0, reposts: 0, replies: 0, bookmarks: 0, views: null, author_followers: null };
 
@@ -84,6 +85,7 @@ export function FormatsPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     const [f, c] = await Promise.all([api.formats(sort, archived), api.candidates("pending")]);
@@ -92,7 +94,9 @@ export function FormatsPanel() {
   }, [api, sort, archived]);
 
   useEffect(() => {
-    void load();
+    load()
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setLoaded(true));
   }, [load]);
 
   async function run(fn: () => Promise<void>) {
@@ -109,14 +113,19 @@ export function FormatsPanel() {
     }
   }
 
+  if (!loaded) return error ? <Notice tone="error">{error}</Notice> : <LoadingBlock label="Loading formats" />;
+
   return (
     <div className="space-y-6">
-      {error && <p role="alert" className={`text-sm ${danger}`}>{error}</p>}
-      {notice && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{notice}</p>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
+      {loaded && formats.length === 0 && candidates.length === 0 && (
+        <Notice tone="info">A format is a reusable shape for a post, such as a hook plus a structure, taken from posts that did well. Formats only guide drafts in the Write tab. They never post anything.</Notice>
+      )}
 
       <section aria-labelledby="lib-h" className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="lib-h" className="font-medium">Format library</h2>
+          <h2 id="lib-h" className="text-base font-medium">Format library</h2>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <label className="flex items-center gap-1.5">
               <span className={muted}>Sort</span>
@@ -133,7 +142,7 @@ export function FormatsPanel() {
           </div>
         </div>
         {formats.length === 0 ? (
-          <p className={`text-sm ${muted}`}>No formats yet. Turn a viral post below into one, or write your own with New format.</p>
+          <EmptyBlock title="No formats yet" action={<button type="button" className={btn} onClick={() => setEditing("new")}>Write your own</button>}>Turn a post below into one, or write your own.</EmptyBlock>
         ) : (
           formats.map((f) => (
             <FormatCard
@@ -148,7 +157,7 @@ export function FormatsPanel() {
 
       <section aria-labelledby="cand-h" className="space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 id="cand-h" className="font-medium">Posts worth studying</h2>
+          <h2 id="cand-h" className="text-base font-medium">Posts worth studying</h2>
           {candidates.length > 1 && (
             <button
               type="button"
@@ -167,7 +176,7 @@ export function FormatsPanel() {
           )}
         </div>
         {candidates.length === 0 ? (
-          <p className={`text-sm ${muted}`}>Nothing waiting. Posts that over-perform show up here after a watchlist scan, or add one by hand below.</p>
+          <EmptyBlock title="Nothing waiting">Posts that over-perform show up here after a watchlist scan, or add one by hand below.</EmptyBlock>
         ) : (
           candidates.map((c) => (
             <CandidateCard

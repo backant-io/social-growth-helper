@@ -4,6 +4,7 @@ import { InsightCard } from "./InsightCard";
 import { learningApi } from "./api";
 import { categoryLabel, diffSummary, multiplier, sampleNote, targetLabel } from "./model";
 import type { ChangelogEntry, ExampleInfo, Insight, LearningOverview, Patch, ReflectionMode, VersionInfo } from "./types";
+import { EmptyBlock, LoadingBlock, Notice, PageHeader, Tabs } from "../components/ui";
 import { btn, btnPrimary, input, panel } from "./ui";
 
 type Tab = "suggestions" | "signals" | "history";
@@ -69,9 +70,9 @@ export function LearningPage({ onProposedChange }: Props) {
 
   if (!data) {
     return (
-      <div className="mx-auto max-w-3xl">
-        <h1 className="text-xl font-semibold">Learning</h1>
-        {message ? <p role="alert" className="mt-3 text-sm text-red-600 dark:text-red-400">{message.text}</p> : <p className="mt-3 text-sm text-zinc-500">Loading</p>}
+      <div className="mx-auto max-w-3xl space-y-6">
+        <PageHeader title="Learning" description="What the app noticed about your edits and results, and small changes it suggests." />
+        {message ? <Notice tone="error">{message.text}</Notice> : <LoadingBlock label="Loading suggestions" />}
       </div>
     );
   }
@@ -85,60 +86,34 @@ export function LearningPage({ onProposedChange }: Props) {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Learning</h1>
-          <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-            The app compares your edits and results with what it drafted, then suggests small changes. Nothing changes until you apply it, and every change can be undone.
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button type="button" className={btn} disabled={busy} onClick={() => reflect("light")} title="Looks at your edits and dismissals">
-            Quick reflect
-          </button>
-          <button type="button" className={btnPrimary} disabled={busy} onClick={() => reflect("deep")} title="Adds results, timing and winners">
-            Deep reflect
-          </button>
-        </div>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader
+        title="Learning"
+        description="The app compares your edits and results with what it drafted, then suggests small changes. Nothing changes until you apply it, and every change can be undone."
+        actions={
+          <>
+            <button type="button" className={btn} disabled={busy} onClick={() => reflect("light")} title="Looks at your edits and dismissals">
+              Quick reflect
+            </button>
+            <button type="button" className={btnPrimary} disabled={busy} onClick={() => reflect("deep")} title="Adds results, timing and winners">
+              Deep reflect
+            </button>
+          </>
+        }
+      />
 
-      {note && (
-        <p role="status" className={`${panel} bg-amber-50 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200`}>
-          {note}
-        </p>
-      )}
-      {message && (
-        <p role={message.kind === "error" ? "alert" : "status"} className={`text-sm ${message.kind === "error" ? "text-red-600 dark:text-red-400" : "text-emerald-700 dark:text-emerald-400"}`}>
-          {message.text}
-        </p>
-      )}
+      {note && <Notice tone="warn">{note}</Notice>}
+      {message && <Notice tone={message.kind === "error" ? "error" : "ok"}>{message.text}</Notice>}
 
-      <div role="tablist" aria-label="Learning sections" className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {tabs.map(([id, label]) => (
-          <button
-            key={id}
-            role="tab"
-            type="button"
-            aria-selected={tab === id}
-            onClick={() => setTab(id)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === id ? "border-zinc-900 font-medium dark:border-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <Tabs label="Learning sections" tabs={tabs.map(([id, label]) => ({ id, label }))} active={tab} onChange={setTab} />
 
       {tab === "suggestions" && (
         <div className="space-y-3" role="tabpanel" aria-label="Suggestions">
           {data.proposed.length === 0 ? (
-            <div className={`${panel} text-center`}>
-              <p className="font-medium">No suggestions waiting</p>
-              <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-                {signals.last_run ? `Last checked ${fmtDate(signals.last_run.started_at)}. ` : ""}
-                Keep editing and posting. The app looks again when you open it, or press Reflect.
-              </p>
-            </div>
+            <EmptyBlock title="No suggestions waiting">
+              {signals.last_run ? `Last checked ${fmtDate(signals.last_run.started_at)}. ` : ""}
+              Keep editing and posting. The app looks again when you open it, or press Reflect.
+            </EmptyBlock>
           ) : (
             data.proposed.map((i) => <InsightCard key={i.id} insight={i} busy={busy} onAccept={accept} onReject={reject} />)
           )}
@@ -192,7 +167,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.edit.removed.length > 0 && (
         <section className={panel}>
-          <h2 className="text-sm font-medium">Phrases you keep deleting</h2>
+          <h2 className="text-base font-medium">Phrases you keep deleting</h2>
           <ul className="mt-2 flex flex-wrap gap-2 text-xs">
             {s.edit.removed.map((p) => (
               <li key={p.phrase} className="rounded-full bg-red-50 px-2 py-0.5 text-red-800 dark:bg-red-950 dark:text-red-300">
@@ -217,7 +192,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.timing.age.length > 0 && (
         <section className={panel}>
-          <h2 className="text-sm font-medium">Results by how fast you replied</h2>
+          <h2 className="text-base font-medium">Results by how fast you replied</h2>
           <p className="text-xs text-zinc-500">1.0x is your typical result, adjusted for the author's reach.</p>
           <Bars rows={s.timing.age} />
           {s.timing.tier.length > 0 && (
@@ -231,7 +206,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.models.length > 0 && (
         <section className={panel}>
-          <h2 className="text-sm font-medium">Which model drafts fit you best</h2>
+          <h2 className="text-base font-medium">Which model drafts fit you best</h2>
           <table className="mt-2 w-full text-sm">
             <thead className="text-left text-xs text-zinc-500">
               <tr><th className="font-normal">Model</th><th className="font-normal">Drafts</th><th className="font-normal">Used with light edits</th><th className="font-normal">Results</th></tr>
@@ -249,7 +224,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.dismissal.dismissed > 0 && (
         <section className={panel}>
-          <h2 className="text-sm font-medium">What you skip</h2>
+          <h2 className="text-base font-medium">What you skip</h2>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             You dismissed {s.dismissal.dismissed} posts and replied to {s.dismissal.drafted}.
             {s.dismissal.reasons.length > 0 && ` Most common reason: ${s.dismissal.reasons[0][0]} (${s.dismissal.reasons[0][1]}).`}
@@ -259,7 +234,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {(s.best.length > 0 || s.weakest.length > 0) && (
         <section className={panel}>
-          <h2 className="text-sm font-medium">Best and weakest replies</h2>
+          <h2 className="text-base font-medium">Best and weakest replies</h2>
           <ul className="mt-2 space-y-2 text-sm">
             {[...s.best.map((b) => ({ ...b, tone: "best" })), ...s.weakest.map((b) => ({ ...b, tone: "weak" }))].map((b) => (
               <li key={`${b.tone}-${b.draft_id}`} className="flex justify-between gap-3">
@@ -308,7 +283,7 @@ function MinSample({ value, onSaved }: { value: number; onSaved: () => void }) {
   };
   return (
     <section className={panel}>
-      <h2 className="text-sm font-medium">Minimum sample</h2>
+      <h2 className="text-base font-medium">Minimum sample</h2>
       <p className="mt-1 text-xs text-zinc-500">Below this many published replies, suggestions are marked low confidence.</p>
       <div className="mt-2 flex items-center gap-2">
         <input aria-label="Minimum published replies" inputMode="numeric" className={`${input} w-24`} value={text} onChange={(e) => setText(e.target.value)} />
@@ -341,7 +316,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       {loadError && <p role="alert" className="text-sm text-red-600">{loadError}</p>}
 
       <section className={panel} aria-label="Scout rubric versions">
-        <h2 className="text-sm font-medium">Scout rubric</h2>
+        <h2 className="text-base font-medium">Scout rubric</h2>
         {rubric.length === 0 ? (
           <p className="mt-1 text-sm text-zinc-500">No versions yet. The first change you apply creates one.</p>
         ) : (
@@ -388,7 +363,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       </section>
 
       <section className={panel} aria-label="Examples">
-        <h2 className="text-sm font-medium">Kept examples</h2>
+        <h2 className="text-base font-medium">Kept examples</h2>
         <p className="mt-1 text-xs text-zinc-500">Replies you chose to keep. They guide the voice of future drafts.</p>
         {examples.length === 0 ? (
           <p className="mt-2 text-sm text-zinc-500">Nothing here yet.</p>
@@ -410,7 +385,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       </section>
 
       <section className={panel} aria-label="Change log">
-        <h2 className="text-sm font-medium">Change log</h2>
+        <h2 className="text-base font-medium">Change log</h2>
         {changelog.length === 0 ? (
           <p className="mt-2 text-sm text-zinc-500">No changes yet.</p>
         ) : (

@@ -3,8 +3,8 @@ import { canEdit, fileName, hasPlaceholders, parsePaths, postLength, similarityN
 import { offlineActionHint, useOnlineStatus } from "../../lib/errors";
 import { creatorApi } from "../../lib/creatorApi";
 import type { FormatRecord, OgcDraft } from "../../lib/types";
-import { Modal } from "./Modal";
-import { btn, danger, field, muted, panel, primary } from "./ui";
+import { Notice } from "../../components/ui";
+import { btn, danger, field, Modal, muted, panel, primary } from "./ui";
 
 interface Props {
   draft: OgcDraft;
@@ -12,6 +12,7 @@ interface Props {
   threshold: number;
   maxChars: number;
   canPublish: boolean;
+  publishBlock?: string;
   onChanged: (d: OgcDraft) => void;
   onRemoved: (id: string) => void;
 }
@@ -22,7 +23,7 @@ const TONE = {
   none: "text-zinc-500",
 };
 
-export function DraftCard({ draft, format, threshold, maxChars, canPublish, onChanged, onRemoved }: Props) {
+export function DraftCard({ draft, format, threshold, maxChars, canPublish, publishBlock, onChanged, onRemoved }: Props) {
   const api = creatorApi();
   const online = useOnlineStatus();
   const [text, setText] = useState(draft.edited_text);
@@ -96,10 +97,15 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
   return (
     <article className={panel} data-draft-id={draft.id} aria-label="Draft">
       <header className="mb-2 flex items-center justify-between text-xs">
-        <span className={muted}>
-          {statusLabel(draft.status)}
-          {format ? ` · ${format.name}` : ""}
-          {draft.topic_seed ? ` · ${draft.topic_seed}` : ""}
+        <span className={`flex min-w-0 flex-wrap items-center gap-2 ${muted}`}>
+          <span className={`rounded-full px-2 py-0.5 font-medium ${draft.status === "published" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" : draft.status === "failed" || draft.status === "unconfirmed" ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"}`}>
+            {statusLabel(draft.status)}
+          </span>
+          <span className="truncate">
+            {format ? format.name : ""}
+            {format && draft.topic_seed ? " · " : ""}
+            {draft.topic_seed ?? ""}
+          </span>
         </span>
         {draft.status === "published" && draft.published_url && (
           <a className="underline" href={draft.published_url} target="_blank" rel="noreferrer">View on X</a>
@@ -144,7 +150,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
       )}
 
       {draft.status === "unconfirmed" && (
-        <div role="alert" className="mt-3 rounded-lg border border-amber-400 bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        <div role="alert" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
           <p>{draft.error_message}</p>
           <p className="mt-1">It will not be posted again by itself. Look at your X profile first.</p>
           <button type="button" className={`${btn} mt-2`} disabled={busy} onClick={async () => { const d = await run(() => api.reopen(draft.id)); if (d) onChanged(d); }}>
@@ -152,18 +158,19 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
           </button>
         </div>
       )}
-      {draft.status === "failed" && draft.error_message && <p role="alert" className={`mt-2 text-sm ${danger}`}>{draft.error_message}</p>}
-      {error && <p role="alert" className={`mt-2 text-sm ${danger}`}>{error}</p>}
+      {draft.status === "failed" && draft.error_message && <div className="mt-3"><Notice tone="error">{draft.error_message}</Notice></div>}
+      {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
 
       {editable && (
-        <footer className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <footer className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
           <button type="button" className={btn} disabled={busy} onClick={async () => { if (await run(async () => { await api.discard(draft.id); return true; })) onRemoved(draft.id); }}>
             Discard
           </button>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-xs ${muted}`}>{publishBlock ?? "Not posted yet. You approve the exact text first."}</span>
             <button type="button" className={btn} disabled={busy || !dirty} onClick={save}>Save edits</button>
-            <button type="button" className={primary} disabled={busy || !online || !canPublish || !text.trim() || over} onClick={startPublish} title={offlineActionHint(online) ?? (canPublish ? undefined : "Open the X window first (Settings)")}>
-              Publish...
+            <button type="button" className={primary} disabled={busy || !online || !canPublish || !text.trim() || over} onClick={startPublish} title={offlineActionHint(online) ?? publishBlock}>
+              Review and publish
             </button>
           </div>
         </footer>
@@ -172,10 +179,11 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
       {confirming && (
         <Modal
           title="Post this to X?"
+          onClose={() => setConfirming(null)}
           actions={
             <>
-              <button type="button" className={btn} onClick={() => setConfirming(null)}>Not yet</button>
-              <button type="button" className={primary} disabled={!online} title={offlineActionHint(online)} onClick={confirmPublish}>Post to X now</button>
+              <button type="button" className={btn} onClick={() => setConfirming(null)}>Back to editing</button>
+              <button type="button" className={primary} disabled={!online} title={offlineActionHint(online)} onClick={confirmPublish}>Approve and post to X</button>
             </>
           }
         >
