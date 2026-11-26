@@ -68,7 +68,8 @@ pub async fn draft_generate(state: State<'_, AppState>, p3: State<'_, Phase3>, d
         if !matches!(v.status.as_str(), "draft" | "failed") {
             return Err(AppError::Validation(format!("this draft is {} and can no longer be changed", v.status)));
         }
-        (v, repo::load_style(&db, &state.profile_id)?)
+        let style = repo::load_style_for_generation(&db, &state.profile_id, &v.post.text)?;
+        (v, style)
     };
     let context = {
         let db = state.db.lock().unwrap();

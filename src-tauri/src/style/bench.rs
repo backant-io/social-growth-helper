@@ -133,10 +133,21 @@ fn count_hashtags(text: &str) -> usize {
 }
 
 pub fn check_reply_constraints(text: &str, guide: &StyleGuide) -> ConstraintCheck {
+    check_text_constraints(text, &guide.banned_patterns, guide.max_reply_chars, guide.emoji_policy, guide.hashtag_policy)
+}
+
+/// Length, banned-phrase, emoji and hashtag rules shared by the Style Test Bench and draft generation.
+pub fn check_text_constraints(
+    text: &str,
+    banned_patterns: &[String],
+    max_reply_chars: u32,
+    emoji_policy: EmojiPolicy,
+    hashtag_policy: HashtagPolicy,
+) -> ConstraintCheck {
     let char_count = text.chars().count();
     let lower = text.to_lowercase();
     let mut banned_hits = Vec::new();
-    for pat in &guide.banned_patterns {
+    for pat in banned_patterns {
         let p = pat.trim();
         if !p.is_empty() && lower.contains(&p.to_lowercase()) {
             banned_hits.push(p.to_string());
@@ -150,13 +161,13 @@ pub fn check_reply_constraints(text: &str, guide: &StyleGuide) -> ConstraintChec
     if !banned_hits.is_empty() {
         violations.push(format!("Contains banned pattern(s): {}", banned_hits.join(", ")));
     }
-    if char_count > guide.max_reply_chars as usize {
+    if char_count > max_reply_chars as usize {
         violations.push(format!(
             "Exceeds max length ({char_count} > {} chars)",
-            guide.max_reply_chars
+            max_reply_chars
         ));
     }
-    match guide.emoji_policy {
+    match emoji_policy {
         EmojiPolicy::None if emoji_count > 0 => {
             violations.push(format!("Emoji policy is 'none' (found {emoji_count})"));
         }
@@ -165,7 +176,7 @@ pub fn check_reply_constraints(text: &str, guide: &StyleGuide) -> ConstraintChec
         }
         _ => {}
     }
-    match guide.hashtag_policy {
+    match hashtag_policy {
         HashtagPolicy::None if hashtag_count > 0 => {
             violations.push(format!("Hashtag policy is 'none' (found {hashtag_count})"));
         }
@@ -180,7 +191,7 @@ pub fn check_reply_constraints(text: &str, guide: &StyleGuide) -> ConstraintChec
     ConstraintCheck {
         passed: violations.is_empty(),
         char_count,
-        max_reply_chars: guide.max_reply_chars,
+        max_reply_chars: max_reply_chars,
         banned_hits,
         emoji_count,
         hashtag_count,
