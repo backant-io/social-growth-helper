@@ -261,17 +261,16 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
       <div className="space-y-4">
         {paused && <Notice tone="warn">Everything is paused, so nothing can be posted or clicked on X. Resume in the bar above to continue. You can keep editing.</Notice>}
         {error && <Notice tone="error">{error}</Notice>}
-        {completion && !completion.drafting && (
-          <InlineModelGuard
-            taskType="reply_drafting"
-            onAssigned={refreshCompletion}
-            onGoToSettings={onGoToSettings}
-            hint="You can also write your own text below without a model."
-          />
-        )}
+        <InlineModelGuard
+          taskType="reply_drafting"
+          onAssigned={refreshCompletion}
+          onGoToSettings={onGoToSettings}
+          hint="You can also write your own text below without a model."
+        />
         {completion && !completion.browser_navigation && draft.status !== "published" && (
           <InlineModelGuard
             taskType="browser_navigation"
+            showChip={false}
             onAssigned={refreshCompletion}
             onGoToSettings={onGoToSettings}
             hint="Publish clicks through X with selectors first. This model is only used as a fallback when a selector breaks; without it, a broken selector fails the step."

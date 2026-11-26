@@ -13,11 +13,14 @@ interface Props {
   mode: OnboardingMode;
   rulesAcknowledged: boolean;
   onFinished: (status?: RulesStatus) => void;
+  onRulesAcknowledged?: (status: RulesStatus) => void | Promise<void>;
   onDismiss?: () => void;
 }
 
-export function Onboarding({ mode, rulesAcknowledged, onFinished, onDismiss }: Props) {
-  const steps = mode === "rules" ? [{ kind: "rules" as const }] : mode === "tour" ? wizardOrder().filter((s) => s.kind === "tour") : wizardOrder();
+export function Onboarding({ mode, rulesAcknowledged, onFinished, onRulesAcknowledged, onDismiss }: Props) {
+  const [steps] = useState(() =>
+    mode === "rules" ? [{ kind: "rules" as const }] : mode === "tour" ? wizardOrder().filter((s) => s.kind === "tour") : wizardOrder(rulesAcknowledged),
+  );
   const [index, setIndex] = useState(0);
   const step = steps[index];
   const back = () => setIndex((i) => Math.max(0, i - 1));
@@ -27,6 +30,7 @@ export function Onboarding({ mode, rulesAcknowledged, onFinished, onDismiss }: P
     await api.completeTour();
     onFinished();
   };
+  const isLast = index === steps.length - 1;
 
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-6" role="dialog" aria-modal="true" aria-label="Welcome">
@@ -77,16 +81,21 @@ export function Onboarding({ mode, rulesAcknowledged, onFinished, onDismiss }: P
             </div>
           )}
           {(step.kind === "browser" || step.kind === "providers" || step.kind === "style" || step.kind === "routing") && (
-            <SetupStep kind={step.kind} rulesAcknowledged={rulesAcknowledged} onBack={back} onNext={next} />
+            <SetupStep kind={step.kind} rulesAcknowledged={rulesAcknowledged} onBack={back} onNext={mode === "full" && isLast ? () => void finishTour() : next} finish={mode === "full" && isLast} />
           )}
           {step.kind === "rules" && (
             <RulesStep
               alreadyAcknowledged={rulesAcknowledged}
               onBack={mode === "full" ? back : undefined}
-              onClose={onDismiss}
+              onClose={mode === "full" ? next : onDismiss}
+              closeLabel={mode === "full" ? "Continue" : "Close"}
               onAcknowledged={async (status) => {
-                if (mode === "full") await api.completeTour();
-                onFinished(status);
+                if (mode === "full") {
+                  await onRulesAcknowledged?.(status);
+                  next();
+                } else {
+                  onFinished(status);
+                }
               }}
             />
           )}

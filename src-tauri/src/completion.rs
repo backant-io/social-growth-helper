@@ -28,6 +28,18 @@ impl TaskSlot {
     }
 }
 
+/// The pieces a production caller exposes so a stored prompt override (LLM-19) can replace its built-in
+/// wording. `vars` fill `{{name}}` placeholders in the override's user template; `required` vars that the
+/// template forgot are appended so the model never loses its input; `guard` (system) and `extra` (user) are
+/// non-negotiable parts such as the untrusted-text rules, the JSON output shape and per-call instructions.
+#[derive(Debug, Clone, Default)]
+pub struct PromptSlots {
+    pub vars: Vec<(&'static str, String)>,
+    pub required: Vec<&'static str>,
+    pub guard: String,
+    pub extra: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
     pub task: TaskSlot,
@@ -39,11 +51,18 @@ pub struct CompletionRequest {
     pub images: Vec<String>,
     /// Optional model or provider the user asked for on this one call (side-by-side redraft, LLM-15).
     pub model_hint: Option<String>,
+    /// When set, an active prompt override for the task replaces `system` and `user`.
+    pub slots: Option<PromptSlots>,
 }
 
 impl CompletionRequest {
     pub fn new(task: TaskSlot, system: String, user: String, json: bool) -> Self {
-        Self { task, system, user, json, images: vec![], model_hint: None }
+        Self { task, system, user, json, images: vec![], model_hint: None, slots: None }
+    }
+
+    pub fn with_slots(mut self, slots: PromptSlots) -> Self {
+        self.slots = Some(slots);
+        self
     }
 
     pub fn with_images(mut self, images: Vec<String>) -> Self {

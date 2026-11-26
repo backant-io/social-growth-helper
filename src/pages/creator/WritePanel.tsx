@@ -3,6 +3,7 @@ import { inTauri } from "../../lib/api";
 import { creatorApi } from "../../lib/creatorApi";
 import type { CreatorSettings, FormatRecord, OgcDraft } from "../../lib/types";
 import { DraftCard } from "./DraftCard";
+import { InlineModelGuard } from "../../components/InlineModelGuard";
 import { EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
 import { btn, field, muted, panel, primary } from "./ui";
 
@@ -10,9 +11,10 @@ interface Props {
   locked: boolean;
   xRunning: boolean;
   paused: boolean;
+  onGoToSettings?: () => void;
 }
 
-export function WritePanel({ locked, xRunning, paused }: Props) {
+export function WritePanel({ locked, xRunning, paused, onGoToSettings }: Props) {
   const api = creatorApi();
   const [formats, setFormats] = useState<FormatRecord[]>([]);
   const [drafts, setDrafts] = useState<OgcDraft[]>([]);
@@ -108,6 +110,13 @@ export function WritePanel({ locked, xRunning, paused }: Props) {
     <div className="space-y-4">
       {paused && <Notice tone="warn">Everything is paused. You can write and edit, but nothing can be posted until you resume in the bar above.</Notice>}
       {!paused && !xRunning && <Notice tone="info">The X window is closed. You can write and edit now; open it in Settings before publishing.</Notice>}
+
+      <InlineModelGuard
+        taskType="ogc_generation"
+        onGoToSettings={onGoToSettings}
+        onAssigned={() => undefined}
+        hint="You can still start from a blank draft and write the post yourself without a model."
+      />
 
       <section className={panel} aria-labelledby="w-h">
         <h2 id="w-h" className="text-base font-medium">New original post</h2>

@@ -12,9 +12,10 @@ interface Props {
   rulesAcknowledged: boolean;
   onBack: () => void;
   onNext: () => void;
+  finish?: boolean;
 }
 
-function Frame({ kind, hint, onBack, onNext, children }: { kind: SetupKind; hint: SetupHint | null; onBack: () => void; onNext: () => void; children: ReactNode }) {
+function Frame({ kind, hint, onBack, onNext, finish, children }: { kind: SetupKind; hint: SetupHint | null; onBack: () => void; onNext: () => void; finish?: boolean; children: ReactNode }) {
   const copy = SETUP_STEP_COPY[kind];
   return (
     <div className="flex h-full flex-col">
@@ -33,7 +34,7 @@ function Frame({ kind, hint, onBack, onNext, children }: { kind: SetupKind; hint
           Back
         </button>
         <button type="button" onClick={onNext} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
-          {hint?.done ? "Next" : "Skip for now"}
+          {finish ? "Finish setup" : hint?.done ? "Next" : "Skip for now"}
         </button>
       </div>
     </div>
@@ -101,7 +102,7 @@ function StyleGuideForm({ onSaved }: { onSaved: (g: StyleGuide) => void }) {
   );
 }
 
-export function SetupStep({ kind, rulesAcknowledged, onBack, onNext }: Props) {
+export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: Props) {
   const offline = !useOnlineStatus();
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [routes, setRoutes] = useState<TaskModelRoute[]>([]);
@@ -116,19 +117,23 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext }: Props) {
 
   useEffect(() => {
     if (kind === "providers" || kind === "routing") void loadLlm();
-    if (kind === "browser") api.browserInfo().then(setInfo);
+    if (kind !== "browser") return;
+    const poll = () => void api.browserInfo().then(setInfo);
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => clearInterval(timer);
   }, [kind, loadLlm]);
 
   if (kind === "browser") {
     return (
-      <Frame kind={kind} hint={browserHint(info, rulesAcknowledged)} onBack={onBack} onNext={onNext}>
+      <Frame kind={kind} hint={browserHint(info, rulesAcknowledged)} onBack={onBack} onNext={onNext} finish={finish}>
         <BrowserPanel rulesAcknowledged={rulesAcknowledged} />
       </Frame>
     );
   }
   if (kind === "providers") {
     return (
-      <Frame kind={kind} hint={providerHint(providers)} onBack={onBack} onNext={onNext}>
+      <Frame kind={kind} hint={providerHint(providers)} onBack={onBack} onNext={onNext} finish={finish}>
         <ProvidersPanel providers={providers} offline={offline} onChanged={loadLlm} />
       </Frame>
     );
@@ -136,13 +141,13 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext }: Props) {
   if (kind === "style") {
     const hint = styleSaved ? { done: true, text: `Saved style guide v${styleSaved.version}.` } : null;
     return (
-      <Frame kind={kind} hint={hint} onBack={onBack} onNext={onNext}>
+      <Frame kind={kind} hint={hint} onBack={onBack} onNext={onNext} finish={finish}>
         <StyleGuideForm onSaved={setStyleSaved} />
       </Frame>
     );
   }
   return (
-    <Frame kind={kind} hint={routingHint(routes)} onBack={onBack} onNext={onNext}>
+    <Frame kind={kind} hint={routingHint(routes)} onBack={onBack} onNext={onNext} finish={finish}>
       <RoutingPanel providers={providers} routes={routes} onChanged={loadLlm} />
     </Frame>
   );

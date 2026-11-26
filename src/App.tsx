@@ -117,7 +117,7 @@ export default function App() {
   return (
     <div className="flex h-full">
       <Sidebar active={section} onSelect={setSection} locked={locked} badges={{ learning: proposed }} />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col bg-white dark:bg-zinc-950">
       <KillBar />
       <BrowserStateBanner />
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
@@ -153,7 +153,7 @@ export default function App() {
         ) : section === "activity" ? (
           <ActivityPage />
         ) : section === "creator" && !locked ? (
-          <CreatorPage locked={locked} />
+          <CreatorPage locked={locked} onGoToSettings={() => setSection("settings")} />
         ) : (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         )}
@@ -165,6 +165,7 @@ export default function App() {
         <Onboarding
           mode={overlay}
           rulesAcknowledged={status.rules.acknowledged}
+          onRulesAcknowledged={() => refresh()}
           onDismiss={overlay === "full" ? undefined : () => setOverlay(null)}
           onFinished={async () => {
             setOverlay(null);

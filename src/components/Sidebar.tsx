@@ -12,7 +12,7 @@ interface Props {
 export function Sidebar({ active, onSelect, locked, badges }: Props) {
   const paused = useKillSwitch();
   return (
-    <nav aria-label="Main" className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+    <nav aria-label="Main" data-vibrancy-sidebar className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 px-2 pt-2 text-sm font-semibold tracking-tight">Social Growth Helper</div>
       <ul className="space-y-1">
         {SECTIONS.map((s) => {

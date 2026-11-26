@@ -4,7 +4,7 @@ import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { DURATION_PRESETS, POST_PRESETS, REASONS, compactCount, formatDuration, scoreTone } from "./logic";
-import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams, SessionView } from "./types";
+import type { QueueItem, ScoutProgress, SessionParams, SessionView } from "./types";
 import { EmptyBlock, PageHeader, useKillSwitch } from "../components/ui";
 import { btn, btnPrimary, chip, input, muted, Notice, panel } from "./ui";
 
@@ -54,7 +54,6 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [dismissing, setDismissing] = useState<string | null>(null);
-  const [completion, setCompletion] = useState<CompletionStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const budgetLoaded = useRef(false);
 
@@ -71,7 +70,6 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
 
   useEffect(() => {
     void reload().catch((e) => setError(String(e.message ?? e)));
-    void p3.completionStatus().then(setCompletion);
     const offs = [
       listen<ScoutProgress>("scout:progress", (p) => {
         setProgress(p);
@@ -156,14 +154,12 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader title="Scout Queue" description="You choose how long to scroll and how many posts to read. Nothing is posted from here." />
 
-      {completion && !completion.scoring && (
-        <InlineModelGuard
-          taskType="post_scoring"
-          onAssigned={() => p3.completionStatus().then(setCompletion)}
-          onGoToSettings={onGoToSettings}
-          hint="Until a model is chosen, posts get a quick local score from engagement and your topics."
-        />
-      )}
+      <InlineModelGuard
+        taskType="post_scoring"
+        onAssigned={() => undefined}
+        onGoToSettings={onGoToSettings}
+        hint="Until a model is chosen, posts get a quick local score from engagement and your topics."
+      />
       {killed && <Notice tone="warn">Everything is paused, so Scout cannot start. Resume in the bar above.</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {paused === "user_activity" && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}

@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import { browserHint, providerHint, routingHint, SETUP_STEP_COPY, TOUR_STEPS, wizardOrder } from "./tourSteps";
 
 describe("wizard order", () => {
-  it("shows the tour, then preferences, then the rules acknowledgement last", () => {
+  it("shows the tour, then the rules acknowledgement, before any setup step", () => {
     const order = wizardOrder();
-    expect(order.at(-1)?.kind).toBe("rules");
-    expect(order.at(-2)?.kind).toBe("routing");
+    expect(order[TOUR_STEPS.length].kind).toBe("rules");
+    expect(order.at(-1)?.kind).toBe("routing");
     expect(order.filter((s) => s.kind === "tour")).toHaveLength(TOUR_STEPS.length);
     expect(order.slice(0, TOUR_STEPS.length).every((s) => s.kind === "tour")).toBe(true);
+  });
+
+  it("leaves out the rules step when it was already acknowledged", () => {
+    expect(wizardOrder(true).some((s) => s.kind === "rules")).toBe(false);
+    expect(wizardOrder(true)[TOUR_STEPS.length].kind).toBe("preferences");
   });
 });
 
@@ -29,9 +34,9 @@ describe("tour content", () => {
 });
 
 describe("guided setup steps", () => {
-  it("walks Chrome, providers, style guide and model routing between preferences and the rules", () => {
+  it("walks the rules, preferences, Chrome and X login, providers, style guide and model routing", () => {
     const kinds = wizardOrder().map((s) => s.kind).filter((k) => k !== "tour");
-    expect(kinds).toEqual(["preferences", "browser", "providers", "style", "routing", "rules"]);
+    expect(kinds).toEqual(["rules", "preferences", "browser", "providers", "style", "routing"]);
     expect(Object.keys(SETUP_STEP_COPY)).toEqual(["browser", "providers", "style", "routing"]);
   });
 

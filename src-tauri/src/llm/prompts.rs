@@ -1,6 +1,7 @@
 //! Versioned prompt library per task with DB overrides (LLM-19).
 
 use super::TaskType;
+use crate::completion::PromptSlots;
 use crate::error::AppResult;
 use crate::util::{new_id, now_rfc3339};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -90,6 +91,56 @@ pub fn get_active_prompt(conn: &Connection, task_type: TaskType) -> AppResult<Pr
     })
 }
 
+/// A prompt ready to send, with the version that produced it (1 means the built-in text).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedPrompt {
+    pub system: String,
+    pub user: String,
+    pub version: u32,
+}
+
+/// Fills `{{name}}` placeholders in one pass, so text inside a value is never re-expanded. Unknown
+/// placeholders become empty rather than leaking the raw marker to the model.
+pub fn render_template(template: &str, vars: &[(&str, String)]) -> String {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| regex::Regex::new(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}").unwrap());
+    re.replace_all(template, |c: &regex::Captures| {
+        vars.iter().find(|(k, _)| *k == &c[1]).map(|(_, v)| v.clone()).unwrap_or_default()
+    })
+    .into_owned()
+}
+
+/// The prompt a production call sends for `task` (LLM-19). With no stored override the caller's built-in
+/// `system` and `user` are used unchanged. With an active override its system prompt and rendered user
+/// template replace them, while the slots' guard, extra and any required variable the template omitted are
+/// kept so output parsing and untrusted-text handling still work.
+pub fn resolve_prompt(conn: &Connection, task_type: TaskType, system: &str, user: &str, slots: &PromptSlots) -> AppResult<ResolvedPrompt> {
+    let active = get_active_prompt(conn, task_type)?;
+    if !active.is_override {
+        return Ok(ResolvedPrompt { system: system.to_string(), user: user.to_string(), version: active.version });
+    }
+    let mut system_out = active.system_prompt.trim().to_string();
+    if !slots.guard.trim().is_empty() {
+        system_out.push_str("\n\n");
+        system_out.push_str(slots.guard.trim());
+    }
+    let mut user_out = render_template(&active.user_template, &slots.vars);
+    for name in &slots.required {
+        let marker = format!("{{{{{name}}}}}");
+        if !active.user_template.replace(' ', "").contains(&marker) {
+            if let Some((_, v)) = slots.vars.iter().find(|(k, _)| k == name) {
+                user_out.push_str(&format!("\n\n{v}"));
+            }
+        }
+    }
+    if !slots.extra.trim().is_empty() {
+        user_out.push_str("\n\n");
+        user_out.push_str(slots.extra.trim());
+    }
+    Ok(ResolvedPrompt { system: system_out, user: user_out, version: active.version })
+}
+
 pub fn list_active_prompts(conn: &Connection) -> AppResult<Vec<PromptTemplate>> {
     let mut out = Vec::with_capacity(TaskType::ALL.len());
     for t in TaskType::ALL {
@@ -171,5 +222,45 @@ mod tests {
         let reset = reset_prompt_to_default(&conn, TaskType::ReplyDrafting).unwrap();
         assert!(!reset.is_override);
         assert_eq!(reset.version, 1);
+    }
+
+    fn slots() -> PromptSlots {
+        PromptSlots {
+            vars: vec![("rubric", "R{{post_text}}".into()), ("posts", "P1".into())],
+            required: vec!["posts"],
+            guard: "GUARD".into(),
+            extra: "EXTRA".into(),
+        }
+    }
+
+    #[test]
+    fn without_an_override_the_built_in_prompt_is_kept() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let r = resolve_prompt(&conn, TaskType::PostScoring, "built sys", "built user", &slots()).unwrap();
+        assert_eq!(r, ResolvedPrompt { system: "built sys".into(), user: "built user".into(), version: 1 });
+    }
+
+    #[test]
+    fn an_override_replaces_the_text_keeps_the_guard_and_reports_its_version() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        save_prompt_override(&conn, TaskType::PostScoring, "my sys", "Rubric: {{rubric}} / {{ posts }} / {{nope}}").unwrap();
+        let r = resolve_prompt(&conn, TaskType::PostScoring, "built sys", "built user", &slots()).unwrap();
+        assert_eq!(r.version, 2);
+        assert_eq!(r.system, "my sys\n\nGUARD");
+        assert_eq!(r.user, "Rubric: R{{post_text}} / P1 / \n\nEXTRA", "values are not re-expanded and unknown names are dropped");
+    }
+
+    #[test]
+    fn a_required_variable_the_template_forgot_is_appended() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        save_prompt_override(&conn, TaskType::PostScoring, "my sys", "Only the rubric: {{rubric}}").unwrap();
+        let r = resolve_prompt(&conn, TaskType::PostScoring, "s", "u", &slots()).unwrap();
+        assert!(r.user.contains("P1"), "the posts still reach the model: {}", r.user);
+        reset_prompt_to_default(&conn, TaskType::PostScoring).unwrap();
+        let back = resolve_prompt(&conn, TaskType::PostScoring, "s", "u", &slots()).unwrap();
+        assert_eq!((back.system.as_str(), back.version), ("s", 1));
     }
 }

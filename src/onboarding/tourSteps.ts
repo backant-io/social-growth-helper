@@ -60,16 +60,20 @@ export interface WizardStep {
   tourIndex?: number;
 }
 
-/** Order of the first-run wizard: the tour, preferences, guided setup (Chrome, providers, style, routing), then the rules acknowledgement last. */
-export function wizardOrder(): WizardStep[] {
+/**
+ * Order of the first-run wizard: the tour, the rules acknowledgement, then preferences and guided
+ * setup (Chrome and X login, providers, style, routing). The acknowledgement comes before setup so
+ * the X window can be opened for the login. Pass `rulesAcknowledged` to skip a step already done.
+ */
+export function wizardOrder(rulesAcknowledged = false): WizardStep[] {
   return [
     ...TOUR_STEPS.map((_, tourIndex) => ({ kind: "tour" as const, tourIndex })),
+    ...(rulesAcknowledged ? [] : [{ kind: "rules" as const }]),
     { kind: "preferences" },
     { kind: "browser" },
     { kind: "providers" },
     { kind: "style" },
     { kind: "routing" },
-    { kind: "rules" },
   ];
 }
 
@@ -77,7 +81,7 @@ export const SETUP_STEP_COPY: Record<"browser" | "providers" | "style" | "routin
   browser: {
     title: "Set up the X browser window",
     intro:
-      "Scout reads X in your own Chrome, in a dedicated window with a separate profile. Check that Chrome is detected here. Logging in to X happens in that window; the Open X window button unlocks once you acknowledge the rules on the last step, and it stays available in Settings under General & Browser.",
+      "Scout reads X in your own Chrome, in a dedicated window with a separate profile. Check that Chrome is detected here. Open the X window below and log in to X there once; the login is kept. The button stays available in Settings under General & Browser.",
   },
   providers: {
     title: "Connect an AI provider",
@@ -117,6 +121,6 @@ export function browserHint(info: { install: unknown | null; running: boolean } 
   if (!info.install) return { done: false, text: "No Chrome, Chromium or Brave found. Install one or set its path below." };
   if (info.running) return { done: true, text: "X window is open. Log in to X there once; the login is kept." };
   return rulesAcknowledged
-    ? { done: true, text: "Chrome found. Open the X window and log in to X once." }
-    : { done: true, text: "Chrome found. Logging in unlocks after you acknowledge the rules on the last step." };
+    ? { done: true, text: "Chrome found. Open the X window and log in to X once, or skip and do it later in Settings." }
+    : { done: true, text: "Chrome found. Logging in unlocks after you acknowledge the rules." };
 }

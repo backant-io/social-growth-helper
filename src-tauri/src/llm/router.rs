@@ -400,6 +400,18 @@ impl LlmRouter {
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, LlmError> {
+        self.complete_json_for_task_versioned(db, task_name, system_prompt, user_prompt, None).await
+    }
+
+    /// Same as [`Self::complete_json_for_task`], logging which prompt version produced the text (LLM-19).
+    pub async fn complete_json_for_task_versioned(
+        &self,
+        db: &Mutex<Connection>,
+        task_name: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+        prompt_version: Option<u32>,
+    ) -> Result<String, LlmError> {
         let task_type = TaskType::parse(task_name).ok_or_else(|| {
             LlmError::new(
                 LlmErrorKind::InvalidConfig,
@@ -415,7 +427,7 @@ impl LlmRouter {
             reasoning_effort: None,
             max_tokens: None,
             json_schema: None,
-            prompt_version: None,
+            prompt_version,
         };
         let resp = self.complete(db, req, None).await?;
         if let Some(v) = resp.structured_json {

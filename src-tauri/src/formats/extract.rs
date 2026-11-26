@@ -23,6 +23,7 @@ pub fn build_request(post_text: &str) -> JsonRequest {
         task: TASK_FORMAT_EXTRACTION,
         system: SYSTEM.to_string(),
         user: format!("<post>\n{fenced}\n</post>"),
+        slots: None,
     }
 }
 

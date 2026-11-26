@@ -1044,6 +1044,11 @@ function PromptsPanel() {
         </div>
       </div>
       {msg && <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-400">{msg}</p>}
+      {["post_scoring", "reply_drafting", "ogc_generation"].includes(selectedTask) && (
+        <p className="mt-2 text-xs text-zinc-500">
+          An override applies to Scout scoring, Reply Studio drafts, Creator and the Style bench. In Scout, Reply Studio and Creator the safety rules and output format are always added, and the post input is appended if the template leaves out its placeholder.
+        </p>
+      )}
       <div className="mt-3 space-y-3">
         <label className="block text-xs font-medium text-zinc-600 dark:text-zinc-400">
           System prompt
