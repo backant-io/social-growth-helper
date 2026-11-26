@@ -460,8 +460,13 @@ mod tests {
         let starter = ensure_active_layout(&conn, &pid).unwrap();
         assert!(starter.is_starter);
         assert_eq!(starter.version, 1);
-        let starter_count = list_widgets(&conn, &starter.id).unwrap().len();
+        let starter_list = list_widgets(&conn, &starter.id).unwrap();
+        let starter_count = starter_list.len();
         assert_eq!(starter_count, starter_widgets().len());
+        assert!(
+            starter_list.iter().any(|w| w.title == "OGC Published" && w.spec.chart_type == ChartType::Kpi),
+            "starter layout must include OGC Published KPI card"
+        );
 
         // Save a new version before editing (ANL-21)
         let v2 = clone_layout(&conn, &pid, &starter.id, None, true).unwrap();
@@ -522,6 +527,15 @@ mod tests {
         let restored = switch_layout(&conn, &pid, &v2.id).unwrap();
         assert_eq!(restored.id, v2.id);
         assert_eq!(list_widgets(&conn, &restored.id).unwrap().len(), starter_count + 1);
+
+        // Verify layout and resized widget positions persist across closing and reopening SQLite
+        drop(conn);
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let persisted_layout = ensure_active_layout(&conn, &pid).unwrap();
+        assert_eq!(persisted_layout.id, v2.id);
+        let persisted_widgets = list_widgets(&conn, &persisted_layout.id).unwrap();
+        let persisted_added = persisted_widgets.iter().find(|w| w.id == added.id).unwrap();
+        assert_eq!(persisted_added.position, WidgetPosition { x: 0, y: 12, w: 12, h: 3 });
 
         // Remove widget and delete duplicate layout
         remove_widget(&conn, &pid, &v2.id, &added.id).unwrap();

@@ -8,11 +8,14 @@ describe("Phase 4 analytics frontend", () => {
     resetPreviewStore();
   });
 
-  it("loads the 12-widget starter dashboard and supports add, reprompt, version, and reset", async () => {
+  it("loads the 12-widget starter dashboard and supports add, reprompt, drag/resize persistence, version, and reset", async () => {
     const dash = await analyticsApi.getDashboard(30);
     expect(dash.active_layout.is_starter).toBe(true);
     expect(dash.widgets.length).toBe(12);
     expect(dash.widgets.every((w) => w.error === null && w.data !== null)).toBe(true);
+    expect(dash.widgets.some((w) => w.widget.title === "OGC Published" && w.widget.spec.chart_type === "kpi")).toBe(true);
+    expect(dash.schedule.items.length).toBeGreaterThan(0);
+    expect(dash.schedule.items[0].checkpoints.map((c) => c.label)).toEqual(["1h", "6h", "24h", "72h", "7d"]);
 
     // Reprompt a new scatter widget and add it
     const reprompted = await analyticsApi.repromptWidget(
@@ -31,6 +34,14 @@ describe("Phase 4 analytics frontend", () => {
     );
     const afterAdd = await analyticsApi.getDashboard(30);
     expect(afterAdd.widgets.length).toBe(13);
+
+    // Drag reorder + resize width & height persists (ANL-15)
+    await analyticsApi.updatePositions(dash.active_layout.id, [
+      { widget_id: added.id, position: { x: 0, y: 0, w: 12, h: 3 } },
+    ]);
+    const afterResize = await analyticsApi.getDashboard(30);
+    const moved = afterResize.widgets.find((w) => w.widget.id === added.id)!;
+    expect(moved.widget.position).toEqual({ x: 0, y: 0, w: 12, h: 3 });
 
     // Follow-up reprompt edits existing widget
     const edited = await analyticsApi.repromptWidget("filter to claude only", added.spec, 30);

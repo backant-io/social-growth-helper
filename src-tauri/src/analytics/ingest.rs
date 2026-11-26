@@ -594,6 +594,7 @@ mod tests {
                 dom_result: json!({}),
             },
         );
+        let too_old = format_unix(now_unix_secs() - 45 * 86_400);
         pages.insert(
             "https://x.com/pavel".into(),
             AnalyticsPageCapture {
@@ -605,7 +606,8 @@ mod tests {
                     "followersText": "4,510 Followers",
                     "posts": [
                         { "id": "9001", "text": "sharp reply", "postedAt": recent, "views": "5.4K Views", "likes": "140 Likes" },
-                        { "id": "9999", "text": "Posted manually from phone", "postedAt": recent, "views": "1.1K Views", "likes": "25 Likes", "replies": "3 Replies" }
+                        { "id": "9999", "text": "Posted manually from phone", "postedAt": recent, "views": "1.1K Views", "likes": "25 Likes", "replies": "3 Replies" },
+                        { "id": "7777", "text": "Older than 30d window", "postedAt": too_old, "views": "300 Views", "likes": "5 Likes" }
                     ]
                 }),
             },
@@ -643,6 +645,10 @@ mod tests {
             .query_row("SELECT draft_kind FROM analytics_snapshots WHERE platform_post_id = '9999'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(ext_kind, "external");
+        let old_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM analytics_snapshots WHERE platform_post_id = '7777'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old_count, 0, "posts older than the 30-day backfill window must be skipped");
         assert!(jobs.active().is_empty(), "job guard must be released after sync");
     }
 

@@ -7,11 +7,16 @@ import { SyncHealthBanner } from "./SyncHealthBanner";
 import type { DashboardSnapshot, DashboardWidget, WidgetPositionUpdate, WidgetSpec } from "./types";
 import { WidgetCard } from "./WidgetCard";
 
+const AUTO_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+
 export function AnalyticsPage() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [windowDays, setWindowDays] = useState<number>(30);
   const [customizeMode, setCustomizeMode] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [autoCheckEnabled, setAutoCheckEnabled] = useState(false);
+  const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
+  const [dragOverWidgetId, setDragOverWidgetId] = useState<string | null>(null);
   const [lastSyncNote, setLastSyncNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [builderTarget, setBuilderTarget] = useState<{ open: boolean; widget: DashboardWidget | null }>({
@@ -33,24 +38,38 @@ export function AnalyticsPage() {
     void loadDashboard(windowDays);
   }, [loadDashboard, windowDays]);
 
-  async function handleSync(backfillDays?: number) {
-    setSyncing(true);
-    setError(null);
-    setLastSyncNote(null);
-    try {
-      const report = await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
-      setLastSyncNote(
-        `Synced in ${report.duration_ms}ms${report.used_dedicated_tab ? " (dedicated tab)" : ""}${
-          report.health.backfill_posts_added > 0 ? ` · +${report.health.backfill_posts_added} backfilled` : ""
-        }`,
-      );
-      await loadDashboard(windowDays);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSyncing(false);
-    }
-  }
+  const handleSync = useCallback(
+    async (backfillDays?: number) => {
+      setSyncing(true);
+      setError(null);
+      setLastSyncNote(null);
+      try {
+        const report = await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
+        setLastSyncNote(
+          `Synced in ${report.duration_ms}ms${report.used_dedicated_tab ? " (dedicated tab)" : ""}${
+            report.health.backfill_posts_added > 0 ? ` · +${report.health.backfill_posts_added} backfilled` : ""
+          }`,
+        );
+        await loadDashboard(windowDays);
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setSyncing(false);
+      }
+    },
+    [loadDashboard, windowDays],
+  );
+
+  // Foreground-only opt-in checkpoint polling (ANL-05); strictly off by default and cleared on unmount (SEC-04).
+  useEffect(() => {
+    if (!autoCheckEnabled) return;
+    const id = window.setInterval(() => {
+      if (!syncing && snapshot && (snapshot.schedule.posts_due_now > 0 || snapshot.schedule.missed_windows > 0)) {
+        void handleSync(undefined);
+      }
+    }, AUTO_CHECK_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [autoCheckEnabled, syncing, snapshot, handleSync]);
 
   async function handleAcceptWidget(spec: WidgetSpec, sourcePrompt: string) {
     if (!snapshot) return;
@@ -87,13 +106,8 @@ export function AnalyticsPage() {
     }
   }
 
-  async function handleMoveWidget(index: number, delta: -1 | 1) {
+  async function persistOrder(reordered: DashboardWidget[]) {
     if (!snapshot) return;
-    const target = index + delta;
-    if (target < 0 || target >= snapshot.widgets.length) return;
-    const reordered = snapshot.widgets.map((w) => w.widget);
-    const [moved] = reordered.splice(index, 1);
-    reordered.splice(target, 0, moved);
     const updates: WidgetPositionUpdate[] = reordered.map((w, idx) => ({
       widget_id: w.id,
       position: { ...w.position, y: idx, x: 0 },
@@ -106,11 +120,35 @@ export function AnalyticsPage() {
     }
   }
 
-  async function handleResizeWidth(widget: DashboardWidget, w: number) {
+  async function handleMoveWidget(index: number, delta: -1 | 1) {
+    if (!snapshot) return;
+    const target = index + delta;
+    if (target < 0 || target >= snapshot.widgets.length) return;
+    const reordered = snapshot.widgets.map((w) => w.widget);
+    const [moved] = reordered.splice(index, 1);
+    reordered.splice(target, 0, moved);
+    await persistOrder(reordered);
+  }
+
+  async function handleDropWidget(targetWidgetId: string) {
+    const fromId = draggedWidgetId;
+    setDraggedWidgetId(null);
+    setDragOverWidgetId(null);
+    if (!snapshot || !fromId || fromId === targetWidgetId) return;
+    const list = snapshot.widgets.map((w) => w.widget);
+    const fromIdx = list.findIndex((w) => w.id === fromId);
+    const toIdx = list.findIndex((w) => w.id === targetWidgetId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    const [moved] = list.splice(fromIdx, 1);
+    list.splice(toIdx, 0, moved);
+    await persistOrder(list);
+  }
+
+  async function handleResizeWidget(widget: DashboardWidget, w: number, h: number) {
     if (!snapshot) return;
     try {
       await analyticsApi.updatePositions(snapshot.active_layout.id, [
-        { widget_id: widget.id, position: { ...widget.position, w } },
+        { widget_id: widget.id, position: { ...widget.position, w, h } },
       ]);
       await loadDashboard(windowDays);
     } catch (e) {
@@ -182,7 +220,17 @@ export function AnalyticsPage() {
         health={snapshot.last_health}
         schedule={snapshot.schedule}
         lastSyncNote={lastSyncNote}
+        syncing={syncing}
+        autoCheckEnabled={autoCheckEnabled}
+        onToggleAutoCheck={setAutoCheckEnabled}
+        onSyncDue={() => void handleSync(undefined)}
       />
+
+      {customizeMode && (
+        <div className="rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50/70 dark:bg-sky-950/30 px-3.5 py-2 text-xs text-sky-800 dark:text-sky-300">
+          Customize mode active: drag cards to reorder, drag the bottom-right corner handle (or pick width/height) to resize, or remove widgets. Changes save immediately.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-rose-200 dark:border-rose-900 bg-rose-50 dark:bg-rose-950/40 px-4 py-2.5 text-xs text-rose-700 dark:text-rose-300">
@@ -219,13 +267,22 @@ export function AnalyticsPage() {
               key={item.widget.id}
               item={item}
               customizeMode={customizeMode}
+              isDragging={draggedWidgetId === item.widget.id}
+              isDropTarget={dragOverWidgetId === item.widget.id && draggedWidgetId !== item.widget.id}
               canMoveUp={idx > 0}
               canMoveDown={idx < snapshot.widgets.length - 1}
               onReprompt={() => setBuilderTarget({ open: true, widget: item.widget })}
               onExportCsv={() => void handleExportCsv(item.widget)}
               onRemove={() => void handleRemoveWidget(item.widget.id)}
               onMove={(delta) => void handleMoveWidget(idx, delta)}
-              onResizeWidth={(w) => void handleResizeWidth(item.widget, w)}
+              onResize={(w, h) => void handleResizeWidget(item.widget, w, h)}
+              onDragStart={() => setDraggedWidgetId(item.widget.id)}
+              onDragOver={() => setDragOverWidgetId(item.widget.id)}
+              onDrop={() => void handleDropWidget(item.widget.id)}
+              onDragEnd={() => {
+                setDraggedWidgetId(null);
+                setDragOverWidgetId(null);
+              }}
             />
           ))}
         </div>
