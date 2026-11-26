@@ -14,26 +14,11 @@ const MAX_OPS: usize = 10;
 const MAX_LINE: usize = 280;
 const MAX_BANNED: usize = 80;
 
-const DEFAULT_RUBRIC_BASE: &str = "A post is high potential when:\n\
-- it is gaining momentum early (fresh, with engagement growing fast)\n\
-- it invites a reply (a question, a claim, an open loop)\n\
-- there is room for a sharp or funny take that adds something\n\
-- the audience overlaps with the people you want to reach";
-
-/// Rubric used as the base of the first learned version when Scout has not seeded one yet.
-pub fn default_rubric_text(prefs: &repo::Preferences) -> String {
-    let mut t = DEFAULT_RUBRIC_BASE.to_string();
-    if !prefs.niche_topics.is_empty() {
-        t.push_str(&format!("\nNiche topics: {}", prefs.niche_topics.join(", ")));
-    }
-    if !prefs.prefer_accounts.is_empty() {
-        t.push_str(&format!("\nPrefer authors: {}", prefs.prefer_accounts.iter().map(|h| format!("@{h}")).collect::<Vec<_>>().join(", ")));
-    }
-    if !prefs.avoid_accounts.is_empty() {
-        t.push_str(&format!("\nAvoid authors: {}", prefs.avoid_accounts.iter().map(|h| format!("@{h}")).collect::<Vec<_>>().join(", ")));
-    }
-    t.push_str(&format!("\nLanguages: {}", prefs.languages.join(", ")));
-    t
+/// Rubric used as the base of the first learned version when nothing is stored yet. Scout owns the text
+/// (`scout::score::DEFAULT_RUBRIC`) and persists it as v1 on first open; this only covers a profile that has
+/// not been opened yet.
+pub fn default_rubric_text() -> String {
+    crate::scout::score::DEFAULT_RUBRIC.to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,8 +176,7 @@ pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<RubricSta
             weights: serde_json::from_str(&w).map_err(|e| AppError::Other(format!("corrupt rubric weights: {e}")))?,
         },
         None => {
-            let prefs = repo::get_preferences(conn, profile_id)?.unwrap_or_default();
-            RubricState { version: None, text: default_rubric_text(&prefs), weights: BTreeMap::new() }
+            RubricState { version: None, text: default_rubric_text(), weights: BTreeMap::new() }
         }
     })
 }

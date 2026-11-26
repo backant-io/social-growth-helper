@@ -78,7 +78,10 @@ pub fn learning_reject(state: State<'_, AppState>, insight_id: String) -> AppRes
 pub fn learning_versions(state: State<'_, AppState>, kind: String) -> AppResult<Vec<VersionInfo>> {
     let db = state.db.lock().unwrap();
     match kind.as_str() {
-        "rubric" => versions::rubric_versions(&db, &state.profile_id),
+        "rubric" => {
+            crate::scout::repo::ensure_default_rubric(&db, &state.profile_id)?;
+            versions::rubric_versions(&db, &state.profile_id)
+        }
         _ => Err(AppError::Validation("only the scout rubric has versions here; style versions are on the Style page".into())),
     }
 }

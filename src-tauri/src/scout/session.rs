@@ -3,7 +3,7 @@
 use super::filter::{classify, FilterConfig, FilterCounts, DEFAULT_MAX_AGE_SECS};
 use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead};
 use super::repo::{self, SessionParams};
-use super::score::{apply_preferences, build_scoring_prompt, default_rubric, heuristic_score, parse_scores, Candidate, Score, BATCH_SIZE};
+use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
 use crate::browser::service::{BrowserService, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
 use crate::control::{EventSink, KillSwitch};
@@ -183,14 +183,9 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     let (prefs, rubric, rubric_version) = {
         let db = env.db.lock().unwrap();
         let prefs = get_preferences(&db, env.profile_id).ok().flatten().unwrap_or_default();
-        let active = repo::active_rubric(&db, env.profile_id).ok().flatten();
-        match active {
-            Some((v, text)) => (prefs, text, v),
-            None => {
-                let r = default_rubric(&prefs);
-                (prefs, r, 0)
-            }
-        }
+        let (v, text) = repo::ensure_default_rubric(&db, env.profile_id).unwrap_or_else(|_| (0, super::score::DEFAULT_RUBRIC.to_string()));
+        let rubric = rubric_with_preferences(&text, &prefs);
+        (prefs, rubric, v)
     };
 
     let watchlist = get_watchlist(&env.db.lock().unwrap());

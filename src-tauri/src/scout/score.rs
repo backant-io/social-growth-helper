@@ -27,16 +27,27 @@ pub struct Score {
     pub reasoning: String,
 }
 
-pub fn default_rubric(prefs: &Preferences) -> String {
+/// The built-in rubric. It is stored as rubric v1 the first time the app is opened (`repo::ensure_default_rubric`)
+/// so Scout and Learning read, version and roll back one and the same text.
+pub const DEFAULT_RUBRIC: &str = "Score each post 0-100 for how good a reply opportunity it is for this user.\n\
+High: early momentum, a question or open take that invites replies, room for a sharp or funny angle, overlap with the user's niche.\n\
+Low: ragebait, giveaways, posts already buried in replies, pure ads, topics outside the niche.";
+
+/// The user's current preferences, appended to whichever rubric version is active so that editing preferences
+/// in Settings takes effect without minting a rubric version.
+pub fn preference_context(prefs: &Preferences) -> String {
     let topics = if prefs.niche_topics.is_empty() { "no fixed niche yet".to_string() } else { prefs.niche_topics.join(", ") };
-    let prefer = if prefs.prefer_accounts.is_empty() { "none".to_string() } else { prefs.prefer_accounts.iter().map(|a| format!("@{a}")).collect::<Vec<_>>().join(", ") };
-    let langs = prefs.languages.join(", ");
+    let handles = |list: &[String]| if list.is_empty() { "none".to_string() } else { list.iter().map(|a| format!("@{a}")).collect::<Vec<_>>().join(", ") };
     format!(
-        "Score each post 0-100 for how good a reply opportunity it is for this user.\n\
-         High: early momentum, a question or open take that invites replies, room for a sharp or funny angle, overlap with the user's niche.\n\
-         Low: ragebait, giveaways, posts already buried in replies, pure ads, topics outside the niche.\n\
-         Niche topics: {topics}. Preferred accounts: {prefer}. Languages: {langs}."
+        "Niche topics: {topics}. Preferred accounts: {}. Avoided accounts: {}. Languages: {}.",
+        handles(&prefs.prefer_accounts),
+        handles(&prefs.avoid_accounts),
+        prefs.languages.join(", ")
     )
+}
+
+pub fn rubric_with_preferences(rubric: &str, prefs: &Preferences) -> String {
+    format!("{}\n{}", rubric.trim_end(), preference_context(prefs))
 }
 
 /// Thumbnails of the batch in the order `image_index` refers to.
@@ -216,9 +227,9 @@ mod tests {
     }
 
     #[test]
-    fn default_rubric_contains_onboarding_answers() {
-        let prefs = Preferences { niche_topics: vec!["local-first".into()], prefer_accounts: vec!["a".into()], languages: vec!["en".into(), "de".into()], ..Default::default() };
-        let r = default_rubric(&prefs);
-        assert!(r.contains("local-first") && r.contains("@a") && r.contains("en, de"));
+    fn rubric_gets_current_preferences_appended() {
+        let prefs = Preferences { niche_topics: vec!["local-first".into()], prefer_accounts: vec!["a".into()], avoid_accounts: vec!["spam".into()], languages: vec!["en".into(), "de".into()], ..Default::default() };
+        let r = rubric_with_preferences(DEFAULT_RUBRIC, &prefs);
+        assert!(r.starts_with("Score each post") && r.contains("local-first") && r.contains("@a") && r.contains("@spam") && r.contains("en, de"));
     }
 }

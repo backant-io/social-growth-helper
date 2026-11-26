@@ -95,6 +95,21 @@ pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<Option<(i
         .optional()?)
 }
 
+/// Active rubric, storing the built-in default as version 1 when the profile has no rubric yet (SCT-09).
+pub fn ensure_default_rubric(conn: &Connection, profile_id: &str) -> AppResult<(i64, String)> {
+    if let Some(active) = active_rubric(conn, profile_id)? {
+        return Ok(active);
+    }
+    let any: i64 = conn.query_row("SELECT count(*) FROM learning_rubrics WHERE profile_id = ?1", [profile_id], |r| r.get(0))?;
+    if any == 0 {
+        conn.execute(
+            "INSERT INTO learning_rubrics (profile_id, scout_criteria_text, weights_json, is_active, created_at) VALUES (?1, ?2, '{}', 1, ?3)",
+            rusqlite::params![profile_id, super::score::DEFAULT_RUBRIC, crate::util::now_rfc3339()],
+        )?;
+    }
+    Ok(active_rubric(conn, profile_id)?.unwrap_or((0, super::score::DEFAULT_RUBRIC.to_string())))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn insert_evaluation(conn: &Connection, observed_id: &str, session_id: &str, rubric_version: i64, model: &str, score: f64, angle: &str, reasoning: &str) -> AppResult<String> {
     let id = new_id();
