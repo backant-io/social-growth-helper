@@ -10,7 +10,7 @@ use crate::error::{AppError, AppResult};
 use crate::secrets::SecretsService;
 use crate::storage::{self, MIGRATIONS};
 use crate::util::{new_id, now_rfc3339};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -98,6 +98,39 @@ pub(crate) fn user_table_names(conn: &Connection, schema: &str) -> AppResult<Vec
         .map(|(n, _)| n.clone())
         .filter(|n| !virtuals.iter().any(|v| n.len() > v.len() && n.starts_with(v) && n.as_bytes()[v.len()] == b'_'))
         .collect())
+}
+
+fn is_virtual(conn: &Connection, schema: &str, table: &str) -> AppResult<bool> {
+    let sql: Option<String> = conn
+        .query_row(&format!("SELECT sql FROM {schema}.sqlite_master WHERE type='table' AND name=?1"), [table], |r| r.get(0))
+        .optional()?
+        .flatten();
+    Ok(sql.is_some_and(|s| s.trim_start().to_ascii_uppercase().starts_with("CREATE VIRTUAL TABLE")))
+}
+
+/// The few-shot search index is derived from `style_examples`, so import never copies it. It is emptied and
+/// rebuilt from the imported examples with the same columns Phase 2 writes (`style::repo::sync_example_fts`).
+fn rebuild_example_fts(conn: &Connection) -> AppResult<i64> {
+    if !has_table(conn, "style_examples_fts")? || !has_table(conn, "style_examples")? {
+        return Ok(0);
+    }
+    conn.execute("DELETE FROM style_examples_fts", [])?;
+    let rows: Vec<(String, String, String, String, String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, profile_id, kind, COALESCE(source_context_text,''), example_text, COALESCE(why_it_works,''), tags_json FROM style_examples",
+        )?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))?;
+        mapped.collect::<Result<_, _>>()?
+    };
+    for (id, profile, kind, ctx, text, why, tags_json) in &rows {
+        let tags: Vec<String> = serde_json::from_str(tags_json).unwrap_or_default();
+        conn.execute(
+            "INSERT INTO style_examples_fts (example_id, profile_id, kind, source_context_text, example_text, why_it_works, tags_text)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![id, profile, kind, ctx, text, why, tags.join(" ")],
+        )?;
+    }
+    Ok(rows.len() as i64)
 }
 
 fn columns(conn: &Connection, schema: &str, table: &str) -> AppResult<Vec<String>> {
@@ -290,6 +323,9 @@ pub fn import_from(conn: &Connection, profile_id: &str, work_dir: &Path, backup_
         let mut copied = BTreeMap::new();
         let main_tables = user_table_names(conn, "main")?;
         for t in user_table_names(conn, "imp")?.into_iter().filter(|t| !skip(t) && main_tables.contains(t)) {
+            if is_virtual(conn, "main", &t)? {
+                continue;
+            }
             let main_cols = columns(conn, "main", &t)?;
             let cols: Vec<String> = columns(conn, "imp", &t)?.into_iter().filter(|c| main_cols.contains(c)).map(|c| q(&c)).collect();
             if cols.is_empty() {
@@ -298,6 +334,10 @@ pub fn import_from(conn: &Connection, profile_id: &str, work_dir: &Path, backup_
             let list = cols.join(", ");
             let n = conn.execute(&format!("INSERT INTO main.{t_q} ({list}) SELECT {list} FROM imp.{t_q}", t_q = q(&t)), [])?;
             copied.insert(t, n as i64);
+        }
+        let indexed = rebuild_example_fts(conn)?;
+        if has_table(conn, "style_examples_fts")? {
+            copied.insert("style_examples_fts".to_string(), indexed);
         }
         conn.execute("UPDATE profiles SET handle=?1, display_name=?2 WHERE id=?3", params![snap_handle, snap_display, profile_id])?;
         let violations = {
@@ -391,13 +431,43 @@ mod tests {
             assert!(!db_bytes.windows(needle.len()).any(|w| w == needle.as_bytes()), "{needle} must not be in the export");
         }
         let style: serde_json::Value = serde_json::from_slice(&read_entry(&mut zip, "style.json", MAX_SMALL_BYTES).unwrap()).unwrap();
-        assert_eq!(style["style"]["banned_patterns"][0], "great point");
+        assert!(style["style"]["banned_patterns"].as_array().unwrap().contains(&serde_json::json!("great point")));
         let m = read_manifest(&dest).unwrap();
         assert_eq!(m.tables["app_settings"], 0);
         assert_eq!(m.tables["app_acknowledgements"], 0);
         assert_eq!(m.tables["reply_drafts"], 1);
         assert_eq!(m.schema_version, storage::latest_version());
         assert!(export_to(&c, &pid, &d.path().join("work"), &dest).is_err(), "never overwrites");
+    }
+
+    #[test]
+    fn import_rebuilds_the_example_index_instead_of_trusting_the_archive() {
+        let (d, c, pid) = db();
+        populate(&c, &pid);
+        c.execute("DELETE FROM style_examples_fts", []).unwrap();
+        c.execute(
+            "INSERT INTO style_examples_fts (example_id, profile_id, kind, source_context_text, example_text, why_it_works, tags_text)
+             VALUES ('ghost', ?1, 'reply', '', 'phantom stale text', '', '')",
+            [&pid],
+        )
+        .unwrap();
+        let dest = d.path().join("export.zip");
+        export_to(&c, &pid, &d.path().join("work"), &dest).unwrap();
+
+        let d2 = tempdir().unwrap();
+        let (c2, _) = storage::open(&d2.path().join("b.db"), &d2.path().join("bk")).unwrap();
+        let pid2 = repo::ensure_default_profile(&c2, "/other/profile/dir").unwrap();
+        let s = import_from(&c2, &pid2, &d2.path().join("work"), &d2.path().join("bk"), &dest, &secrets()).unwrap();
+        assert_eq!(s.tables["style_examples_fts"], 1);
+
+        let count = |q: &str| -> i64 { c2.query_row(q, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT count(*) FROM style_examples_fts WHERE style_examples_fts MATCH 'planning'"), 1);
+        assert_eq!(count("SELECT count(*) FROM style_examples_fts WHERE style_examples_fts MATCH 'phantom'"), 0);
+        let (ex, fts): (i64, i64) = c2.query_row("SELECT (SELECT count(*) FROM style_examples), (SELECT count(*) FROM style_examples_fts)", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(ex, fts, "one index row per example");
+        let fts_profile: String = c2.query_row("SELECT profile_id FROM style_examples_fts LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(fts_profile, pid2);
+        c2.execute("INSERT INTO style_examples_fts(style_examples_fts) VALUES('integrity-check')", []).unwrap();
     }
 
     #[test]
@@ -420,12 +490,14 @@ mod tests {
         assert_eq!(s.tables["reply_drafts"], 1);
         let hits: i64 = c2.query_row("SELECT count(*) FROM style_examples_fts WHERE style_examples_fts MATCH 'planning'", [], |r| r.get(0)).unwrap();
         assert_eq!(hits, 1, "promoted examples stay searchable after import");
+        let found = crate::style::repo::search_style_examples(&c2, &pid2, None, "planning shipping", 5).unwrap();
+        assert_eq!(found.len(), 1, "Phase 2 retrieval finds the imported example for this profile");
         assert!(!s.tables.keys().any(|t| t.ends_with("_data") || t.ends_with("_idx") || t.ends_with("_docsize") || t.ends_with("_config")));
         assert_eq!(s.accounts_needing_keys, 1);
         assert!(s.safety_backup.is_some());
 
         let style = active_style(&c2, &pid2).unwrap();
-        assert_eq!(style.banned, vec!["great point"]);
+        assert!(style.banned.contains(&"great point".to_string()));
         assert_eq!(repo::get_preferences(&c2, &pid2).unwrap().unwrap().niche_topics, vec!["rust"]);
         let owner: String = c2.query_row("SELECT profile_id FROM reply_drafts WHERE id='d1'", [], |r| r.get(0)).unwrap();
         assert_eq!(owner, pid2, "data is re-homed to this machine's profile");

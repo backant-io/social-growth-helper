@@ -786,7 +786,7 @@ mod tests {
     }
 
     fn style() -> StyleState {
-        StyleState { version: None, free_text: String::new(), rules: vec![], banned: vec![] }
+        StyleState::empty()
     }
 
     #[test]

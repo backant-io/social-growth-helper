@@ -155,6 +155,24 @@ pub struct StyleState {
     pub free_text: String,
     pub rules: Vec<String>,
     pub banned: Vec<String>,
+    pub max_reply_chars: i64,
+    pub emoji_policy: String,
+    pub hashtag_policy: String,
+}
+
+#[cfg(test)]
+impl StyleState {
+    pub fn empty() -> Self {
+        StyleState {
+            version: None,
+            free_text: String::new(),
+            rules: vec![],
+            banned: vec![],
+            max_reply_chars: 220,
+            emoji_policy: "minimal".into(),
+            hashtag_policy: "none".into(),
+        }
+    }
 }
 
 pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<RubricState> {
@@ -179,23 +197,18 @@ pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<RubricSta
     })
 }
 
+/// The style the app is using now, read through Phase 2's `get_active_style_guide` so the unsaved starter guide
+/// is the base when nothing has been saved yet. `version` is `None` until a guide row exists.
 pub fn active_style(conn: &Connection, profile_id: &str) -> AppResult<StyleState> {
-    let row = conn
-        .query_row(
-            "SELECT version, free_text_guide, learned_rules_json, banned_patterns_json FROM style_guides
-             WHERE profile_id=?1 AND is_active=1 ORDER BY version DESC LIMIT 1",
-            [profile_id],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)),
-        )
-        .optional()?;
-    let parse = |s: &str| -> AppResult<Vec<String>> {
-        serde_json::from_str(s).map_err(|e| AppError::Other(format!("corrupt style JSON: {e}")))
-    };
-    Ok(match row {
-        Some((version, free_text, rules, banned)) => {
-            StyleState { version: Some(version), free_text, rules: parse(&rules)?, banned: parse(&banned)? }
-        }
-        None => StyleState { version: None, free_text: String::new(), rules: vec![], banned: vec![] },
+    let g = crate::style::repo::get_active_style_guide(conn, profile_id)?;
+    Ok(StyleState {
+        version: (g.version > 0).then_some(i64::from(g.version)),
+        free_text: g.free_text_guide,
+        rules: g.learned_rules,
+        banned: g.banned_patterns,
+        max_reply_chars: i64::from(g.max_reply_chars),
+        emoji_policy: g.emoji_policy.as_str().to_string(),
+        hashtag_policy: g.hashtag_policy.as_str().to_string(),
     })
 }
 
@@ -358,9 +371,20 @@ pub fn apply(conn: &Connection, profile_id: &str, patch: &Patch, insight_id: Opt
                 Some(v) => v,
                 None => {
                     conn.execute(
-                        "INSERT INTO style_guides (id, profile_id, version, free_text_guide, learned_rules_json, banned_patterns_json, is_active, created_at, note)
-                         VALUES (?1,?2,1,?3,'[]','[]',0,?4,'Starting point before learning changes')",
-                        params![new_id(), profile_id, cur.free_text, now],
+                        "INSERT INTO style_guides (id, profile_id, version, free_text_guide, learned_rules_json, banned_patterns_json,
+                                                   max_reply_chars, emoji_policy, hashtag_policy, is_active, created_at, note)
+                         VALUES (?1,?2,1,?3,?4,?5,?6,?7,?8,0,?9,'Starting point before learning changes')",
+                        params![
+                            new_id(),
+                            profile_id,
+                            cur.free_text,
+                            serde_json::to_string(&cur.rules).expect("rules serialize"),
+                            serde_json::to_string(&cur.banned).expect("banned serialize"),
+                            cur.max_reply_chars,
+                            cur.emoji_policy,
+                            cur.hashtag_policy,
+                            now
+                        ],
                     )?;
                     1
                 }
@@ -371,8 +395,9 @@ pub fn apply(conn: &Connection, profile_id: &str, patch: &Patch, insight_id: Opt
                 |r| r.get(0),
             )?;
             conn.execute(
-                "INSERT INTO style_guides (id, profile_id, version, free_text_guide, learned_rules_json, banned_patterns_json, is_active, created_at, note)
-                 VALUES (?1,?2,?3,?4,?5,?6,1,?7,'Applied from Learning')",
+                "INSERT INTO style_guides (id, profile_id, version, free_text_guide, learned_rules_json, banned_patterns_json,
+                                           max_reply_chars, emoji_policy, hashtag_policy, is_active, created_at, note)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,'Applied from Learning')",
                 params![
                     new_id(),
                     profile_id,
@@ -380,6 +405,9 @@ pub fn apply(conn: &Connection, profile_id: &str, patch: &Patch, insight_id: Opt
                     cur.free_text,
                     serde_json::to_string(&rules).expect("rules serialize"),
                     serde_json::to_string(&banned).expect("banned serialize"),
+                    cur.max_reply_chars,
+                    cur.emoji_policy,
+                    cur.hashtag_policy,
                     now
                 ],
             )?;
@@ -528,17 +556,71 @@ pub(crate) mod tests {
         assert_eq!((ch.from_version, ch.to_version), (Some(1), Some(2)));
         let s = active_style(&c, &pid).unwrap();
         assert_eq!(s.rules, vec!["Keep replies under 140 characters"]);
-        assert_eq!(s.banned, vec!["great point"]);
+        assert!(s.banned.contains(&"great point".to_string()), "added next to the starter guide's banned phrases");
+        let starter_banned = s.banned.len() - 1;
 
         c.execute("UPDATE style_guides SET free_text_guide='Dry and curious' WHERE version=2", []).unwrap();
         apply(&c, &pid, &Patch { target: PatchTarget::Style, ops: vec![PatchOp::AddBanned { pattern: "love this".into() }] }, None).unwrap();
         let s = active_style(&c, &pid).unwrap();
         assert_eq!((s.version, s.free_text.as_str()), (Some(3), "Dry and curious"), "free-text guide is carried forward untouched");
-        assert_eq!(s.banned.len(), 2);
+        assert_eq!(s.banned.len(), starter_banned + 2);
         let again = apply(&c, &pid, &Patch { target: PatchTarget::Style, ops: vec![PatchOp::AddBanned { pattern: "GREAT POINT".into() }] }, None);
         assert!(again.is_err(), "duplicates are rejected");
         let rm = apply(&c, &pid, &Patch { target: PatchTarget::Style, ops: vec![PatchOp::RemoveRule { text: "nope".into() }] }, None);
         assert!(rm.is_err());
+    }
+
+    #[test]
+    fn style_patch_copies_phase2_fields_from_the_active_guide() {
+        use crate::style::{EmojiPolicy, HashtagPolicy, StyleGuideInput};
+        let (_d, c, pid) = db();
+        crate::style::repo::save_style_guide_version(
+            &c,
+            &pid,
+            StyleGuideInput {
+                free_text_guide: "Dry and curious".into(),
+                learned_rules: vec![],
+                banned_patterns: vec!["circle back".into()],
+                max_reply_chars: 140,
+                emoji_policy: EmojiPolicy::None,
+                hashtag_policy: HashtagPolicy::Max1,
+                note: Some("mine".into()),
+            },
+        )
+        .unwrap();
+        let ch = apply(&c, &pid, &Patch { target: PatchTarget::Style, ops: vec![rule("Lead with the point")] }, None).unwrap();
+        assert_eq!((ch.from_version, ch.to_version), (Some(1), Some(2)));
+
+        let g = crate::style::repo::get_active_style_guide(&c, &pid).unwrap();
+        assert_eq!(g.version, 2);
+        assert_eq!(g.max_reply_chars, 140);
+        assert_eq!(g.emoji_policy, EmojiPolicy::None);
+        assert_eq!(g.hashtag_policy, HashtagPolicy::Max1);
+        assert_eq!(g.free_text_guide, "Dry and curious");
+        assert_eq!(g.banned_patterns, vec!["circle back"]);
+        assert_eq!(g.learned_rules, vec!["Lead with the point"]);
+        assert_eq!(g.note.as_deref(), Some("Applied from Learning"));
+    }
+
+    #[test]
+    fn first_style_patch_builds_on_the_starter_guide_and_keeps_its_baseline() {
+        use crate::style::{EmojiPolicy, HashtagPolicy};
+        let (_d, c, pid) = db();
+        let starter = crate::style::repo::get_active_style_guide(&c, &pid).unwrap();
+        assert_eq!(starter.version, 0);
+        apply(&c, &pid, &Patch { target: PatchTarget::Style, ops: vec![rule("Lead with the point")] }, None).unwrap();
+
+        let versions = crate::style::repo::list_style_guide_versions(&c, &pid).unwrap();
+        assert_eq!(versions.len(), 2);
+        let (v2, v1) = (&versions[0], &versions[1]);
+        assert!(v2.is_active && !v1.is_active);
+        for g in [v1, v2] {
+            assert_eq!(g.free_text_guide, starter.free_text_guide);
+            assert_eq!(g.banned_patterns, starter.banned_patterns);
+            assert_eq!((g.max_reply_chars, g.emoji_policy, g.hashtag_policy), (220, EmojiPolicy::Minimal, HashtagPolicy::None));
+        }
+        assert!(v1.learned_rules.is_empty());
+        assert_eq!(v2.learned_rules, vec!["Lead with the point"]);
     }
 
     pub(crate) fn seed_published_draft(c: &Connection, pid: &str, id: &str, text: &str) {

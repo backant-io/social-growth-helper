@@ -273,7 +273,8 @@ pub(crate) mod tests {
     fn nothing_changes_until_a_human_accepts() {
         let (_d, c, pid) = db();
         let id = insert_draft(&c, &pid, &draft("k1", "great point"), 40, 30, "d").unwrap().unwrap();
-        assert!(active_style(&c, &pid).unwrap().banned.is_empty());
+        let before = active_style(&c, &pid).unwrap();
+        assert_eq!(before.version, None);
         let ins = get(&c, &pid, &id).unwrap();
         assert_eq!(ins.diff.iter().filter(|l| l.kind == "add").count(), 1, "the card shows the exact change");
         let n: i64 = c.query_row("SELECT count(*) FROM style_guides", [], |r| r.get(0)).unwrap();
@@ -281,7 +282,7 @@ pub(crate) mod tests {
 
         let ch = accept(&c, &pid, &id, None).unwrap();
         assert_eq!(ch.kind, "style");
-        assert_eq!(active_style(&c, &pid).unwrap().banned, vec!["great point"]);
+        assert_eq!(active_style(&c, &pid).unwrap().banned.last().map(String::as_str), Some("great point"));
         let ins = get(&c, &pid, &id).unwrap();
         assert_eq!((ins.status.as_str(), ins.applied_version), ("accepted", ch.to_version));
         assert!(!ins.edited);
@@ -293,10 +294,11 @@ pub(crate) mod tests {
     fn rejecting_leaves_everything_untouched() {
         let (_d, c, pid) = db();
         let id = insert_draft(&c, &pid, &draft("k1", "great point"), 40, 30, "d").unwrap().unwrap();
+        let before = active_style(&c, &pid).unwrap();
         reject(&c, &pid, &id).unwrap();
         assert_eq!(get(&c, &pid, &id).unwrap().status, "rejected");
         assert!(accept(&c, &pid, &id, None).is_err());
-        assert!(active_style(&c, &pid).unwrap().banned.is_empty());
+        assert_eq!(active_style(&c, &pid).unwrap(), before);
         assert_eq!(proposed_count(&c, &pid).unwrap(), 0);
     }
 
@@ -307,7 +309,8 @@ pub(crate) mod tests {
         let mine = Patch { target: PatchTarget::Style, ops: vec![PatchOp::AddBanned { pattern: "great point!".into() }, PatchOp::AddRule { text: "No flattery".into() }] };
         accept(&c, &pid, &id, Some(mine.clone())).unwrap();
         let s = active_style(&c, &pid).unwrap();
-        assert_eq!((s.banned, s.rules), (vec!["great point!".to_string()], vec!["No flattery".to_string()]));
+        assert!(s.banned.contains(&"great point!".to_string()));
+        assert_eq!(s.rules, vec!["No flattery".to_string()]);
         let ins = get(&c, &pid, &id).unwrap();
         assert!(ins.edited);
         assert_eq!(ins.patch, mine);

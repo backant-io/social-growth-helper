@@ -38,10 +38,20 @@ pub fn learning_proposed_count(state: State<'_, AppState>) -> AppResult<i64> {
     store::proposed_count(&db, &state.profile_id)
 }
 
+/// Light runs the rule-based pass. Deep also asks the `learning_analysis` model through the router; a model
+/// failure (unset route, offline, rate limit) never fails the pass.
 #[tauri::command]
-pub fn learning_reflect(state: State<'_, AppState>, mode: Mode) -> AppResult<ReflectionSummary> {
-    let db = state.db.lock().unwrap();
-    reflection::run(&db, &state.profile_id, mode, vec![], None)
+pub async fn learning_reflect(state: State<'_, AppState>, mode: Mode) -> AppResult<ReflectionSummary> {
+    match mode {
+        Mode::Light => {
+            let db = state.db.lock().unwrap();
+            reflection::run(&db, &state.profile_id, Mode::Light, vec![], None)
+        }
+        Mode::Deep => {
+            let llm = reflection::RouterLlm::new(state.llm_router.clone(), state.db.clone());
+            reflection::run_deep_with_llm(&state.db, &state.profile_id, &llm).await
+        }
+    }
 }
 
 #[tauri::command]

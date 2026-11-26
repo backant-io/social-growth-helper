@@ -10,6 +10,7 @@ use super::outcomes::{self, OutcomeItem};
 use super::patch::{self, Patch};
 use super::store;
 use crate::error::{AppError, AppResult};
+use crate::llm::router::LlmRouter;
 use crate::storage::repo;
 use crate::util::{new_id, now_rfc3339};
 use rusqlite::{params, Connection};
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 /// A light pass runs on app open when the last pass is older than this.
 pub const AUTO_INTERVAL_HOURS: i64 = 12;
@@ -221,8 +223,8 @@ pub fn run_if_due(conn: &Connection, profile_id: &str, now_unix: i64) -> AppResu
 }
 
 // ---------------------------------------------------------------------------------------------
-// Model synthesis (LRN-05 deep pass). The router that picks and calls the model lands with the provider
-// phase; it implements `ReflectionLlm`. Everything it returns is parsed and validated here.
+// Model synthesis (LRN-05 deep pass). `RouterLlm` calls the model through the Phase 2 router; everything it
+// returns is parsed and validated here.
 // ---------------------------------------------------------------------------------------------
 
 pub type LlmFuture<'a> = Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
@@ -230,6 +232,31 @@ pub type LlmFuture<'a> = Pin<Box<dyn Future<Output = Result<String, String>> + S
 /// Sends a prompt to the `learning_analysis` route and returns the raw model text.
 pub trait ReflectionLlm: Send + Sync {
     fn complete<'a>(&'a self, system: &'a str, user: &'a str) -> LlmFuture<'a>;
+}
+
+/// Adapter that sends the deep-pass prompt through the Phase 2 router on the `learning_analysis` route.
+pub struct RouterLlm {
+    router: Arc<LlmRouter>,
+    db: Arc<Mutex<Connection>>,
+}
+
+impl RouterLlm {
+    pub const TASK: &'static str = "learning_analysis";
+
+    pub fn new(router: Arc<LlmRouter>, db: Arc<Mutex<Connection>>) -> Self {
+        Self { router, db }
+    }
+}
+
+impl ReflectionLlm for RouterLlm {
+    fn complete<'a>(&'a self, system: &'a str, user: &'a str) -> LlmFuture<'a> {
+        Box::pin(async move {
+            self.router
+                .complete_json_for_task(&self.db, Self::TASK, system, user)
+                .await
+                .map_err(|e| e.to_string())
+        })
+    }
 }
 
 pub const LLM_SYSTEM_PROMPT: &str = "You review how a person edits AI-drafted replies and how their posts performed. \
@@ -357,7 +384,7 @@ mod tests {
         let cards = store::list(&c, &pid, &["proposed"]).unwrap();
         assert!(cards.iter().all(|i| i.low_confidence && i.confidence <= 0.5));
         assert!(cards.iter().any(|i| i.category == "anti_pattern" && i.hypothesis.contains("great point")));
-        assert!(active_style(&c, &pid).unwrap().banned.is_empty());
+        assert_eq!(active_style(&c, &pid).unwrap().version, None, "a pass never writes a style version");
         assert_eq!(active_rubric(&c, &pid).unwrap(), before_rubric);
 
         let again = run(&c, &pid, Mode::Light, vec![], None).unwrap();
@@ -426,6 +453,74 @@ mod tests {
         let s = run_deep_with_llm(&lock, &pid, &bad).await.unwrap();
         assert!(!s.used_llm);
         assert!(s.note.contains("timeout"));
+    }
+
+    #[tokio::test]
+    async fn router_llm_uses_the_learning_analysis_route_and_reports_an_unset_route() {
+        use crate::llm::providers::mock::MockLlmProvider;
+        use crate::llm::repo::{ProviderAccount, ProviderAccountConfig, TaskModelRoutePatch};
+        use crate::llm::{ProviderCapabilities, ProviderType, TaskType};
+
+        let (_d, c, pid) = db();
+        let db = Arc::new(Mutex::new(c));
+        let router = Arc::new(LlmRouter::new());
+        let llm = RouterLlm::new(router.clone(), db.clone());
+
+        let s = run_deep_with_llm(&db, &pid, &llm).await.unwrap();
+        assert!(!s.used_llm, "no route configured yet");
+        assert!(s.note.contains("analysis model call failed"), "{}", s.note);
+
+        {
+            let conn = db.lock().unwrap();
+            crate::llm::repo::upsert_provider_account(
+                &conn,
+                &ProviderAccount {
+                    id: "p1".into(),
+                    provider_type: ProviderType::AnthropicApi,
+                    label: "p1".into(),
+                    keychain_ref: None,
+                    billing_lane: ProviderType::AnthropicApi.billing_lane(),
+                    status: "connected".into(),
+                    last_verified_at: None,
+                    last_error: None,
+                    config: ProviderAccountConfig::default(),
+                },
+            )
+            .unwrap();
+            crate::llm::repo::save_task_route(
+                &conn,
+                TaskModelRoutePatch {
+                    task_type: TaskType::LearningAnalysis,
+                    provider_account_id: Some("p1".into()),
+                    model_id: Some("m1".into()),
+                    reasoning_effort: None,
+                    temperature: None,
+                    fallback_account_id: None,
+                    fallback_model_id: None,
+                    max_calls_per_hour: None,
+                },
+            )
+            .unwrap();
+        }
+        let mock = Arc::new(MockLlmProvider::new(
+            "p1",
+            ProviderType::AnthropicApi,
+            ProviderCapabilities { vision: false, json_schema: true, streaming: false, thinking: false },
+        ));
+        mock.push_ok(r#"```json
+{"proposals":[{"category":"x","hypothesis":"Lead with the point","confidence":0.6,"evidence":["e"],"patch":{"target":"style","ops":[{"op":"add_rule","text":"Lead with the point"}]}}]}
+```"#);
+        router.register_provider(mock.clone());
+
+        let s = run_deep_with_llm(&db, &pid, &llm).await.unwrap();
+        assert!(s.used_llm, "{}", s.note);
+        assert_eq!(s.insights_created, 1);
+        let calls = mock.recorded_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].task_type, TaskType::LearningAnalysis);
+        let conn = db.lock().unwrap();
+        let cards = store::list(&conn, &pid, &["proposed"]).unwrap();
+        assert!(cards.iter().any(|i| i.source == "llm"));
     }
 
     #[test]

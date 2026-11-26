@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(routes, 7, "route slots are kept, unset");
         let handle: String = f.conn.query_row("SELECT handle FROM profiles WHERE id=?1", [&f.pid], |r| r.get(0)).unwrap();
         assert_eq!(handle, "");
-        assert!(active_style(&f.conn, &f.pid).unwrap().banned.is_empty());
+        assert_eq!(active_style(&f.conn, &f.pid).unwrap().version, None, "style guides are gone");
         assert_eq!(repo::ensure_default_profile(&f.conn, "/x").unwrap(), f.pid, "the running app's profile id still works");
         assert!(repo::save_preferences(&f.conn, &f.pid, repo::Preferences::default()).is_ok(), "app is usable again");
         let fk_on: i64 = f.conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
