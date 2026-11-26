@@ -263,17 +263,6 @@ mod tests {
         let db = dir.path().join("app.db");
         let (mut conn, _) = open(&db, &dir.path().join("b")).unwrap();
         let before = table_count(&conn);
-        let bad = [
-            Migration { version: 1, name: "a", sql: "SELECT 1;" },
-            Migration { version: 2, name: "b", sql: "SELECT 1;" },
-            Migration { version: 3, name: "c", sql: "SELECT 1;" },
-            Migration { version: 4, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" },
-        ];
-        let err = migrate(&mut conn, &bad, None).unwrap_err();
-        assert!(err.to_string().contains("migration 4"));
-        assert_eq!(user_version(&conn).unwrap(), latest_version());
-    },
-    Migration {
         let top = MIGRATIONS.last().unwrap().version;
         let bad = [Migration { version: top + 1, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" }];
         let err = migrate(&mut conn, &bad, None).unwrap_err();
