@@ -1,6 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { listen } from "../lib/api";
-import { p3 } from "../phase3/api";
+import { useEffect, useRef, type ReactNode } from "react";
 
 export const panel = "border-t border-zinc-200 pt-5 pb-1 dark:border-zinc-800";
 export const btn =
@@ -148,22 +146,4 @@ export function LoadingBlock({ label = "Loading...", rows = 3 }: { label?: strin
       <span className="sr-only">{label}</span>
     </div>
   );
-}
-
-/** Live kill-switch state shared by the shell bar, the sidebar and every screen that can write to X. */
-export function useKillSwitch(): boolean {
-  const [engaged, setEngaged] = useState(false);
-  useEffect(() => {
-    let alive = true;
-    p3.killSwitch().then((v) => alive && setEngaged(v)).catch(() => undefined);
-    const off = listen<boolean>("kill:changed", setEngaged);
-    const onPreview = (e: Event) => setEngaged((e as CustomEvent<boolean>).detail);
-    window.addEventListener("sgh:kill", onPreview);
-    return () => {
-      alive = false;
-      window.removeEventListener("sgh:kill", onPreview);
-      void off.then((f) => f());
-    };
-  }, []);
-  return engaged;
 }

@@ -7,10 +7,9 @@ import { btn, field, muted, panel, primary } from "./ui";
 interface Props {
   locked: boolean;
   xRunning: boolean;
-  paused: boolean;
 }
 
-export function SourcesPanel({ locked, xRunning, paused }: Props) {
+export function SourcesPanel({ locked, xRunning }: Props) {
   const api = creatorApi();
   const [watch, setWatch] = useState<WatchEntry[]>([]);
   const [handle, setHandle] = useState("");
@@ -55,7 +54,6 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
 
   return (
     <div className="space-y-4">
-      {paused && <Notice tone="warn">Everything is paused, so scans are off. Resume in the bar above.</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {notice && <Notice tone="ok">{notice}</Notice>}
       {!thresholds && !settings && !error && <LoadingBlock label="Loading sources" />}
@@ -95,8 +93,8 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
                   <button
                     type="button"
                     className={btn}
-                    disabled={busy !== null || locked || !xRunning || paused}
-                    title={paused ? "Paused. Resume in the bar above." : xRunning ? undefined : "Open the X window first (Settings)"}
+                    disabled={busy !== null || locked || !xRunning}
+                    title={xRunning ? undefined : "Open the X window first (Settings)"}
                     onClick={() =>
                       run(`scan-${w.id}`, async () => {
                         const s = await api.watchScan(w.id);

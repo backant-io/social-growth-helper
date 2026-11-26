@@ -20,7 +20,6 @@ import { StylePage } from "./pages/StylePage";
 import { p3 } from "./phase3/api";
 import { ActivityPage } from "./phase3/ActivityPage";
 import { CommandPalette, ShortcutHelp } from "./phase3/CommandPalette";
-import { KillBar } from "./phase3/KillBar";
 import { matchShortcut, type PaletteCommand } from "./phase3/logic";
 import { ReplyStudio } from "./phase3/ReplyStudio";
 import { ScoutPage } from "./phase3/ScoutPage";
@@ -42,6 +41,10 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     setStatus(await api.onboardingStatus());
+  }, []);
+
+  useEffect(() => {
+    void p3.killSwitch().then((on) => (on ? p3.setKillSwitch(false) : undefined)).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -153,7 +156,6 @@ export default function App() {
     <div className="flex h-full">
       <Sidebar active={section} onSelect={setSection} locked={locked} badges={{ learning: proposed }} />
       <div className="atmosphere flex min-w-0 flex-1 flex-col">
-      <KillBar />
       {setupIncomplete && <SetupSkippedBanner onResume={resumeSetup} />}
       <BrowserStateBanner />
       <main data-tour="main" className="min-w-0 flex-1 overflow-y-auto px-10 py-9">
@@ -183,7 +185,7 @@ export default function App() {
         ) : locked && ["scout", "reply", "activity"].includes(section) ? (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         ) : section === "scout" ? (
-          <ScoutPage onOpenDraft={openDraft} onGoToSettings={() => setSection("settings")} />
+          <ScoutPage onOpenDraft={openDraft} />
         ) : section === "reply" ? (
           <ReplyStudio draftId={draftId} onOpenDraft={openDraft} onGoScout={() => setSection("scout")} onGoToSettings={() => setSection("settings")} />
         ) : section === "activity" ? (

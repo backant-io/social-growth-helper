@@ -1,7 +1,6 @@
 import type { SectionId } from "../lib/types";
 import { NavIcon } from "./icons";
 import { SECTIONS } from "./sections";
-import { useKillSwitch } from "./ui";
 
 interface Props {
   active: SectionId;
@@ -11,7 +10,6 @@ interface Props {
 }
 
 export function Sidebar({ active, onSelect, locked, badges }: Props) {
-  const paused = useKillSwitch();
   const renderItem = (s: (typeof SECTIONS)[number]) => {
     const isActive = s.id === active;
     return (
@@ -55,12 +53,6 @@ export function Sidebar({ active, onSelect, locked, badges }: Props) {
       </div>
       <ul className="space-y-0.5">{SECTIONS.filter((s) => s.id !== "settings").map(renderItem)}</ul>
       <div className="mt-auto space-y-3 pt-4">
-        {paused && (
-          <div role="status" className="flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-800 dark:border-red-900 dark:text-red-200">
-            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-red-600" />
-            Paused
-          </div>
-        )}
         <ul className="border-t border-zinc-200 pt-3 dark:border-zinc-800">{SECTIONS.filter((s) => s.id === "settings").map(renderItem)}</ul>
       </div>
     </nav>

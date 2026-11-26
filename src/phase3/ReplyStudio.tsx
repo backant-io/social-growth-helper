@@ -6,7 +6,7 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
 import type { ActionName, CompletionStatus, DraftView, ModelOption, PostActionState, QueueItem } from "./types";
-import { EmptyBlock, LoadingBlock, PageHeader, useKillSwitch } from "../components/ui";
+import { EmptyBlock, LoadingBlock, PageHeader } from "../components/ui";
 import { btn, btnGhost, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
 
 interface Props {
@@ -96,7 +96,6 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
     };
   }, [draftId]);
 
-  const paused = useKillSwitch();
   const editable = draft ? draft.status === "draft" || draft.status === "failed" : false;
   const dirty = draft ? text !== draft.edited_text : false;
   const chars = charInfo(text, MAX_CHARS);
@@ -211,7 +210,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const textAction = bundleText(draft.actions);
   const models = [...new Set(draft.variants.map((v) => v.model_used))];
   const offlineHint = offlineActionHint(online);
-  const canActNow = draft.status !== "publishing" && !paused;
+  const canActNow = draft.status !== "publishing";
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -267,7 +266,6 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
       </div>
 
       <div className="space-y-4">
-        {paused && <Notice tone="warn">Everything is paused, so nothing can be posted or clicked on X. Resume in the bar above to continue. You can keep editing.</Notice>}
         {error && <Notice tone="error">{error}</Notice>}
         <InlineModelGuard
           taskType="reply_drafting"
@@ -405,7 +403,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           </button>
           <div className="flex items-center gap-3">
             <span className={`text-xs ${muted}`}>Cmd/Ctrl+Enter</span>
-            <button type="button" className={btnPrimary} disabled={!online || !editable || paused || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? (paused ? "Paused. Resume in the bar above." : undefined)} onClick={() => void openConfirm()}>
+            <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? undefined} onClick={() => void openConfirm()}>
               {draft.status === "failed" ? "Retry publish" : "Review and publish"}
             </button>
           </div>

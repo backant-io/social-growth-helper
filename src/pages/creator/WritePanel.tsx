@@ -10,11 +10,10 @@ import { btn, field, muted, panel, primary } from "./ui";
 interface Props {
   locked: boolean;
   xRunning: boolean;
-  paused: boolean;
   onGoToSettings?: () => void;
 }
 
-export function WritePanel({ locked, xRunning, paused, onGoToSettings }: Props) {
+export function WritePanel({ locked, xRunning, onGoToSettings }: Props) {
   const api = creatorApi();
   const [formats, setFormats] = useState<FormatRecord[]>([]);
   const [drafts, setDrafts] = useState<OgcDraft[]>([]);
@@ -108,8 +107,7 @@ export function WritePanel({ locked, xRunning, paused, onGoToSettings }: Props) 
 
   return (
     <div className="space-y-4">
-      {paused && <Notice tone="warn">Everything is paused. You can write and edit, but nothing can be posted until you resume in the bar above.</Notice>}
-      {!paused && !xRunning && <Notice tone="info">The X window is closed. You can write and edit now; open it in Settings before publishing.</Notice>}
+      {!xRunning && <Notice tone="info">The X window is closed. You can write and edit now; open it in Settings before publishing.</Notice>}
 
       <InlineModelGuard
         taskType="ogc_generation"
@@ -165,8 +163,8 @@ export function WritePanel({ locked, xRunning, paused, onGoToSettings }: Props) 
               format={byId(d.viral_format_id)}
               threshold={settings.similarity_threshold}
               maxChars={settings.max_chars}
-              canPublish={xRunning && !locked && !paused}
-              publishBlock={paused ? "Paused. Resume in the bar above." : !xRunning ? "Open the X window first (Settings)" : undefined}
+              canPublish={xRunning && !locked}
+              publishBlock={!xRunning ? "Open the X window first (Settings)" : undefined}
               onChanged={(u) => setDrafts((cur) => cur.map((x) => (x.id === u.id ? u : x)))}
               onRemoved={(id) => setDrafts((cur) => cur.filter((x) => x.id !== id))}
             />
