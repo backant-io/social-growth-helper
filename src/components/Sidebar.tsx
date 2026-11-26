@@ -1,0 +1,38 @@
+import type { SectionId } from "../lib/types";
+import { SECTIONS } from "./sections";
+
+interface Props {
+  active: SectionId;
+  onSelect: (id: SectionId) => void;
+  locked: boolean;
+}
+
+export function Sidebar({ active, onSelect, locked }: Props) {
+  return (
+    <nav aria-label="Main" className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
+      <div className="mb-4 px-2 pt-2 text-sm font-semibold tracking-tight">Social Growth Helper</div>
+      <ul className="space-y-1">
+        {SECTIONS.map((s) => {
+          const isActive = s.id === active;
+          return (
+            <li key={s.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(s.id)}
+                aria-current={isActive ? "page" : undefined}
+                className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
+                  isActive
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "text-zinc-700 hover:bg-zinc-200 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                }`}
+              >
+                <span>{s.label}</span>
+                {locked && s.id !== "settings" && <span aria-label="locked" className="text-[10px] uppercase opacity-60">locked</span>}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
