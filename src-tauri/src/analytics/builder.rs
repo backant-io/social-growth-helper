@@ -13,8 +13,11 @@ use super::spec::{
     ChartType, FilterOp, SortDir, WidgetFilter, WidgetMetric, WidgetOptions, WidgetSort, WidgetSpec,
 };
 use crate::error::{AppError, AppResult};
+use crate::llm::router::LlmRouter;
+use crate::llm::TaskType;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuilderRouteStatus {
@@ -134,10 +137,42 @@ pub fn reprompt_widget_sync(
     })
 }
 
-/// Async entry point that uses an injected `BuilderCompleter` (Phase 2 LLM router) when configured,
-/// always validating untrusted LLM JSON strictly through [`parse_untrusted_spec_json`] (ANL-20).
+/// Routes `dashboard_builder` completions through Phase 2's [`LlmRouter`] using the configured task route.
+pub struct RouterBuilderCompleter<'a> {
+    pub router: &'a LlmRouter,
+    pub db: &'a Mutex<Connection>,
+}
+
+#[async_trait::async_trait]
+impl BuilderCompleter for RouterBuilderCompleter<'_> {
+    async fn complete_widget_spec(
+        &self,
+        system_prompt: &str,
+        user_prompt: &str,
+        current_spec: Option<&WidgetSpec>,
+    ) -> AppResult<String> {
+        let user = match current_spec {
+            Some(spec) => {
+                let current = serde_json::to_string(spec)
+                    .map_err(|e| AppError::Validation(format!("could not serialize current widget: {e}")))?;
+                format!(
+                    "Current WidgetSpec JSON:\n{current}\n\nApply this request and return the full updated WidgetSpec JSON:\n{user_prompt}"
+                )
+            }
+            None => user_prompt.to_string(),
+        };
+        self.router
+            .complete_json_for_task(self.db, TaskType::DashboardBuilder.as_str(), system_prompt, &user)
+            .await
+            .map_err(AppError::Llm)
+    }
+}
+
+/// Async entry point that uses an injected `BuilderCompleter` (Phase 2 LLM router) when the
+/// `dashboard_builder` route is configured, always validating untrusted LLM JSON strictly through
+/// [`parse_untrusted_spec_json`] (ANL-20). The database lock is never held across an `.await`.
 pub async fn reprompt_widget_with_completer(
-    conn: &Connection,
+    db: &Mutex<Connection>,
     profile_id: &str,
     prompt: &str,
     current_spec: Option<&WidgetSpec>,
@@ -150,14 +185,18 @@ pub async fn reprompt_widget_with_completer(
     }
     reject_unsafe_payload_text(trimmed)?;
 
-    let route_status = get_builder_route_status(conn)?;
+    let route_status = {
+        let conn = db.lock().unwrap();
+        get_builder_route_status(&conn)?
+    };
     if route_status.configured {
         if let Some(llm) = completer {
             let raw_json = llm
                 .complete_widget_spec(&builder_system_prompt(), trimmed, current_spec)
                 .await?;
             let spec = parse_untrusted_spec_json(&raw_json)?;
-            let preview = execute_widget(conn, profile_id, &spec, window_override_days)?;
+            let conn = db.lock().unwrap();
+            let preview = execute_widget(&conn, profile_id, &spec, window_override_days)?;
             return Ok(RepromptResult {
                 spec,
                 preview,
@@ -169,7 +208,8 @@ pub async fn reprompt_widget_with_completer(
         }
     }
 
-    reprompt_widget_sync(conn, profile_id, trimmed, current_spec, window_override_days)
+    let conn = db.lock().unwrap();
+    reprompt_widget_sync(&conn, profile_id, trimmed, current_spec, window_override_days)
 }
 
 /// Deterministic NL-to-WidgetSpec planner supporting both brand-new widgets and follow-up edits (ANL-19, ANL-22).
@@ -764,6 +804,73 @@ mod tests {
         // Unsafe write / secret requests are rejected by sandbox (ANL-20)
         assert!(reprompt_widget_sync(&conn, &pid, "DROP TABLE profiles", None, None).is_err());
         assert!(reprompt_widget_sync(&conn, &pid, "show provider_accounts api keys", None, None).is_err());
+    }
+
+    #[tokio::test]
+    async fn routes_reprompt_through_llm_router_when_dashboard_builder_is_configured() {
+        use crate::llm::providers::mock::MockLlmProvider;
+        use crate::llm::repo::{self as llm_repo, ProviderAccount, ProviderAccountConfig, TaskModelRoutePatch};
+        use crate::llm::router::LlmRouter;
+        use crate::llm::{BillingLane, ProviderCapabilities, ProviderType};
+        use std::sync::Arc;
+
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+        llm_repo::upsert_provider_account(
+            &conn,
+            &ProviderAccount {
+                id: "p1".into(),
+                provider_type: ProviderType::ClaudeCli,
+                label: "Claude CLI".into(),
+                keychain_ref: None,
+                billing_lane: BillingLane::Subscription,
+                status: "connected".into(),
+                last_verified_at: None,
+                last_error: None,
+                config: ProviderAccountConfig::default(),
+            },
+        )
+        .unwrap();
+        llm_repo::save_task_route(
+            &conn,
+            TaskModelRoutePatch {
+                task_type: TaskType::DashboardBuilder,
+                provider_account_id: Some("p1".into()),
+                model_id: Some("sonnet".into()),
+                reasoning_effort: None,
+                temperature: None,
+                fallback_account_id: None,
+                fallback_model_id: None,
+                max_calls_per_hour: None,
+            },
+        )
+        .unwrap();
+        let db = Mutex::new(conn);
+
+        let (mut llm_spec, _) = plan_widget_from_prompt("total impressions kpi", None).unwrap();
+        llm_spec.title = "From LLM".into();
+        let mock = Arc::new(MockLlmProvider::new(
+            "p1",
+            ProviderType::ClaudeCli,
+            ProviderCapabilities { vision: false, json_schema: true, streaming: false, thinking: false },
+        ));
+        mock.push_ok(serde_json::to_string(&llm_spec).unwrap());
+        let router = LlmRouter::new();
+        router.register_provider(mock.clone());
+
+        let completer = RouterBuilderCompleter { router: &router, db: &db };
+        let res = reprompt_widget_with_completer(&db, &pid, "make a kpi", None, None, Some(&completer))
+            .await
+            .unwrap();
+
+        assert_eq!(res.generated_by, "dashboard_builder_llm");
+        assert!(res.route_status.configured);
+        assert_eq!(res.spec.title, "From LLM");
+        let calls = mock.recorded_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].task_type, TaskType::DashboardBuilder);
+        assert!(calls[0].system_prompt.as_deref().unwrap_or_default().contains("read-only analytics widget spec compiler"));
     }
 
     #[test]

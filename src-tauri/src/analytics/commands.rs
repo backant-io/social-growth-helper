@@ -2,7 +2,10 @@
 //!
 //! Kept isolated under `analytics/` so `src-tauri/src/commands.rs` stays untouched for Phase 2/3 merges.
 
-use super::builder::{get_builder_route_status, reprompt_widget_sync, BuilderRouteStatus, RepromptResult};
+use super::builder::{
+    get_builder_route_status, reprompt_widget_with_completer, BuilderRouteStatus, RepromptResult,
+    RouterBuilderCompleter,
+};
 use super::csv::to_csv;
 use super::dashboard::{
     self, DashboardLayout, DashboardWidget, EvaluatedWidget, WidgetPositionUpdate,
@@ -67,7 +70,7 @@ pub async fn analytics_sync_stats(
     ingest::sync_stats(
         &state.db,
         &state.profile_id,
-        &state.browser,
+        state.browser.as_ref(),
         &state.jobs,
         options.unwrap_or_default(),
     )
@@ -193,20 +196,25 @@ pub fn analytics_preview_widget_spec(
 }
 
 #[tauri::command]
-pub fn analytics_reprompt_widget(
+pub async fn analytics_reprompt_widget(
     state: State<'_, AppState>,
     prompt: String,
     current_spec: Option<WidgetSpec>,
     window_days: Option<u32>,
 ) -> AppResult<RepromptResult> {
-    let conn = state.db.lock().unwrap();
-    reprompt_widget_sync(
-        &conn,
+    let completer = RouterBuilderCompleter {
+        router: &state.llm_router,
+        db: &state.db,
+    };
+    reprompt_widget_with_completer(
+        &state.db,
         &state.profile_id,
         &prompt,
         current_spec.as_ref(),
         window_days,
+        Some(&completer),
     )
+    .await
 }
 
 #[tauri::command]
