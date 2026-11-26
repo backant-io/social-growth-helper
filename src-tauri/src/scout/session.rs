@@ -1,13 +1,15 @@
 //! The scout loop: scroll the feed, read cards, filter locally, score in batches, fill the queue.
 
 use super::filter::{classify, FilterConfig, FilterCounts, DEFAULT_MAX_AGE_SECS};
-use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead};
+use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead, Metrics, ScrapedPost};
 use super::repo::{self, SessionParams};
 use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
 use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::{BrowserService, X_FOLLOWING_URL, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
 use crate::control::{EventSink, KillSwitch};
+use crate::formats::detect::{PostMetrics, ViralThresholds};
+use crate::formats::pipeline::{self, PostInput, PostSource};
 use crate::selectors;
 use crate::storage::repo::get_preferences;
 use rusqlite::Connection;
@@ -51,6 +53,28 @@ pub struct SessionSummary {
     pub filtered: FilterCounts,
     pub model: String,
     pub heuristic_scored: i64,
+    /// Over-performing posts newly stored as viral-format candidates during this session (OGC-06).
+    #[serde(default)]
+    pub format_candidates: i64,
+}
+
+/// Feeds every organic post the scout reads into continuous viral detection (OGC-06). It runs before the scout's
+/// own filters, because a stale or already-scored post can still be a good format source. Never fails the session.
+fn consider_for_formats(env: &ScoutEnv<'_>, thresholds: &ViralThresholds, post: &ScrapedPost, metrics: &Metrics, own_handle: Option<&str>) -> bool {
+    let (Some(id), Some(handle)) = (post.id.as_deref(), post.handle.as_deref()) else { return false };
+    if post.promoted || post.text.trim().is_empty() || own_handle.is_some_and(|me| me.eq_ignore_ascii_case(handle)) {
+        return false;
+    }
+    let input = PostInput {
+        platform_post_id: id.to_string(),
+        author_handle: handle.to_string(),
+        author_followers: None,
+        text: post.text.clone(),
+        metrics: PostMetrics { likes: metrics.likes, reposts: metrics.reposts, replies: metrics.replies, bookmarks: metrics.bookmarks, views: (metrics.views > 0).then_some(metrics.views) },
+        posted_at: post.time.clone(),
+    };
+    let db = env.db.lock().unwrap();
+    pipeline::consider_post(&db, env.profile_id, &input, PostSource::Scout, thresholds, false).map(|d| d.candidate.is_some()).unwrap_or(false)
 }
 
 fn now_unix() -> i64 {
@@ -209,6 +233,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     let (mut scored, mut queued, mut heuristic_scored) = (0i64, 0i64, 0i64);
     let mut model_name = String::from("heuristic");
     let mut empty_scrolls = 0u32;
+    let mut format_candidates = 0i64;
+    let viral_thresholds = {
+        let db = env.db.lock().unwrap();
+        crate::formats::repo::get_thresholds(&db).unwrap_or_default()
+    };
 
     let (prefs, rubric, rubric_version) = {
         let db = env.db.lock().unwrap();
@@ -306,6 +335,10 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             seen_in_session.insert(id.clone());
             new_ids += 1;
             target_new += 1;
+            let metrics = post.metrics_label.as_deref().map(parse_metrics_label).unwrap_or_default();
+            if consider_for_formats(env, &viral_thresholds, &post, &metrics, read.me.as_deref()) {
+                format_candidates += 1;
+            }
             let drop = {
                 let db = env.db.lock().unwrap();
                 classify(&post, &cfg, &|pid| repo::has_evaluation(&db, env.profile_id, pid))
@@ -314,7 +347,6 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                 filtered.record(d);
                 continue;
             }
-            let metrics = post.metrics_label.as_deref().map(parse_metrics_label).unwrap_or_default();
             let age_secs = post.time.as_deref().and_then(parse_rfc3339_unix).map(|t| (cfg.now_unix - t).max(0)).unwrap_or(3600);
             let v = velocity(&metrics, age_secs);
             candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, image: None });
@@ -385,7 +417,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     };
 
     let scanned = seen_in_session.len() as i64;
-    let summary = SessionSummary { reason: reason.clone(), scanned, scored, queued, filtered, model: model_name, heuristic_scored };
+    let summary = SessionSummary { reason: reason.clone(), scanned, scored, queued, filtered, model: model_name, heuristic_scored, format_candidates };
     {
         let db = env.db.lock().unwrap();
         let _ = repo::update_progress(&db, session_id, scanned, queued);
@@ -396,7 +428,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         env,
         "scout",
         &format!("Scout finished ({reason})"),
-        Some(&format!("{scanned} scanned, {scored} scored, {queued} queued")),
+        Some(&format!("{scanned} scanned, {scored} scored, {queued} queued, {format_candidates} viral format candidates")),
         Some(!matches!(reason.as_str(), "browser_error" | "logged_out" | "challenge" | "suspended" | "locked")),
     );
     summary
@@ -467,6 +499,35 @@ mod tests {
         assert_eq!(n, 8);
         let events = f.sink.0.lock().unwrap();
         assert!(events.iter().any(|(e, _)| e == "scout:progress") && events.last().unwrap().0 == "scout:finished");
+    }
+
+    #[tokio::test]
+    async fn over_performing_feed_posts_become_format_candidates_during_a_normal_run() {
+        let viral = |id: &str, handle: &str, promoted: bool| {
+            json!({
+                "id": id, "handle": handle, "author": "V", "text": format!("viral post {id}"), "lang": "en", "promoted": promoted,
+                "reply_restricted": false, "has_media": false, "time": crate::util::now_rfc3339(),
+                "metrics_label": "60 replies, 120 reposts, 900 likes, 80 bookmarks, 90000 views"
+            })
+        };
+        let mock = MockDriver::new().with_eval_fn(move |_| {
+            let mut f = feed(4, 0);
+            let posts = f["posts"].as_array_mut().unwrap();
+            posts.push(viral("5000", "star", false));
+            posts.push(viral("5001", "me", false));
+            posts.push(viral("5002", "paid", true));
+            f
+        });
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(7, None);
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!(s.format_candidates, 1, "ordinary, own and promoted posts are not candidates");
+        let db = f.db.lock().unwrap();
+        let cands = crate::formats::repo::list_candidates(&db, &f.profile, "pending", 10).unwrap();
+        assert_eq!(cands.len(), 1);
+        assert_eq!((cands[0].platform_post_id.as_str(), cands[0].source.as_str()), ("5000", "scout"));
     }
 
     #[tokio::test]

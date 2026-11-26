@@ -507,6 +507,7 @@ pub async fn sync_stats(
     health.recompute_status();
     {
         let conn = db.lock().unwrap();
+        let _ = crate::formats::winrate::recompute_personal_win_rates(&conn, profile_id);
         save_last_health(&conn, &health)?;
     }
 

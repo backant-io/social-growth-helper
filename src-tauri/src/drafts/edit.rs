@@ -24,22 +24,9 @@ fn norm(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-/// Returns a human-readable reason for every failed check; empty means the draft may be published.
-/// "Post still exists" is verified by the executor when it opens the post.
-pub fn pre_publish_problems(
-    text: &str,
-    bundle: &[ActionKind],
-    max_chars: usize,
-    banned: &[String],
-    recent_published: &[String],
-) -> Vec<String> {
+/// Text-only checks shared by replies, quotes and original posts: empty, too long, banned phrase, exact repeat.
+pub fn text_problems(text: &str, max_chars: usize, banned: &[String], recent_published: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
-    if bundle.is_empty() {
-        problems.push("No action is selected.".to_string());
-    }
-    if text_action(bundle).is_none() {
-        return problems;
-    }
     let t = text.trim();
     if t.is_empty() {
         problems.push("The text is empty.".into());
@@ -57,6 +44,26 @@ pub fn pre_publish_problems(
     if recent_published.iter().any(|r| norm(r) == norm(t)) {
         problems.push("You already posted exactly this text recently.".into());
     }
+    problems
+}
+
+/// Returns a human-readable reason for every failed check; empty means the draft may be published.
+/// "Post still exists" is verified by the executor when it opens the post.
+pub fn pre_publish_problems(
+    text: &str,
+    bundle: &[ActionKind],
+    max_chars: usize,
+    banned: &[String],
+    recent_published: &[String],
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    if bundle.is_empty() {
+        problems.push("No action is selected.".to_string());
+    }
+    if text_action(bundle).is_none() {
+        return problems;
+    }
+    problems.extend(text_problems(text, max_chars, banned, recent_published));
     problems
 }
 

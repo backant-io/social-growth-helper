@@ -269,6 +269,16 @@ pub(crate) fn claim(conn: &Connection, profile_id: &str, id: &str, expected_text
     Ok(ClaimedOgc { draft_id: id.to_string(), text, media })
 }
 
+/// Texts of the most recent published original posts, newest first, for the duplicate check.
+pub fn recent_published_texts(conn: &Connection, profile_id: &str, limit: i64) -> AppResult<Vec<String>> {
+    let mut st = conn.prepare(
+        "SELECT edited_text FROM ogc_drafts WHERE profile_id = ?1 AND status = 'published' AND edited_text <> '' \
+         ORDER BY published_at DESC LIMIT ?2",
+    )?;
+    let rows = st.query_map(params![profile_id, limit], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
 pub fn mark_published(conn: &Connection, profile_id: &str, id: &str, url: Option<&str>) -> AppResult<()> {
     conn.execute(
         "UPDATE ogc_drafts SET status='published', published_at=?1, published_url=?2, error_message=NULL WHERE id=?3 AND profile_id=?4",

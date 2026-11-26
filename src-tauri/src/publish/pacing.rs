@@ -67,6 +67,30 @@ fn count_since(conn: &Connection, profile_id: &str, action: &str, since: &str) -
     )?)
 }
 
+/// Successful text publishes since `since`: replies, quotes and original (OGC) posts.
+fn recent_text_posts(conn: &Connection, profile_id: &str, since: &str) -> AppResult<u32> {
+    let ogc: u32 = conn.query_row(
+        "SELECT COUNT(*) FROM publish_audit_log WHERE profile_id = ?1 AND target_kind = 'ogc' AND success = 1 AND created_at >= ?2",
+        params![profile_id, since],
+        |r| r.get(0),
+    )?;
+    Ok(count_since(conn, profile_id, "reply", since)? + count_since(conn, profile_id, "quote", since)? + ogc)
+}
+
+/// `Ok` when an original (OGC) post may be published now. It is a text publish, so the minimum gap applies;
+/// there is no per-day cap for it in [`PacingConfig`]. With pacing off this is always `Ok`.
+pub fn check_original_post(conn: &Connection, profile_id: &str, now_unix: i64) -> AppResult<Result<(), String>> {
+    let cfg = get(conn)?;
+    if !cfg.enabled || cfg.min_gap_sec == 0 {
+        return Ok(Ok(()));
+    }
+    let since = format_unix(now_unix - cfg.min_gap_sec as i64);
+    if recent_text_posts(conn, profile_id, &since)? > 0 {
+        return Ok(Err(format!("Pacing: wait {} seconds between posts.", cfg.min_gap_sec)));
+    }
+    Ok(Ok(()))
+}
+
 /// `Ok` when the action may run now. With pacing off this is always `Ok`.
 pub fn check(conn: &Connection, profile_id: &str, action: ActionKind, now_unix: i64) -> AppResult<Result<(), String>> {
     let cfg = get(conn)?;
@@ -80,8 +104,7 @@ pub fn check(conn: &Connection, profile_id: &str, action: ActionKind, now_unix: 
     }
     if action.is_text() && cfg.min_gap_sec > 0 {
         let since = format_unix(now_unix - cfg.min_gap_sec as i64);
-        let recent = count_since(conn, profile_id, "reply", &since)? + count_since(conn, profile_id, "quote", &since)?;
-        if recent > 0 {
+        if recent_text_posts(conn, profile_id, &since)? > 0 {
             return Ok(Err(format!("Pacing: wait {} seconds between posts.", cfg.min_gap_sec)));
         }
     }
@@ -165,5 +188,23 @@ mod tests {
         assert!(set(&conn, &PacingConfig { like: 20_000, ..Default::default() }).is_err());
         assert!(set(&conn, &PacingConfig { min_gap_sec: 99_999, ..Default::default() }).is_err());
         assert_eq!(usage(&conn, &profile, now()).unwrap().len(), 6);
+    }
+
+    #[test]
+    fn original_posts_respect_the_min_gap_and_count_toward_it() {
+        let (conn, profile) = db();
+        assert_eq!(check_original_post(&conn, &profile, now()).unwrap(), Ok(()), "off by default");
+        set(&conn, &PacingConfig { enabled: true, min_gap_sec: 120, ..Default::default() }).unwrap();
+        assert_eq!(check_original_post(&conn, &profile, now()).unwrap(), Ok(()));
+        event(&conn, &profile, "reply", true);
+        assert!(check_original_post(&conn, &profile, now()).unwrap().unwrap_err().contains("120 seconds"));
+        assert_eq!(check_original_post(&conn, &profile, now() + 3600).unwrap(), Ok(()));
+
+        let (conn, profile) = db();
+        set(&conn, &PacingConfig { enabled: true, min_gap_sec: 120, ..Default::default() }).unwrap();
+        crate::creator::drafts::write_audit(&conn, &profile, "d1", "ref", true, None, None, None).unwrap();
+        assert!(check_original_post(&conn, &profile, now()).unwrap().is_err(), "an OGC post blocks the next one");
+        assert!(check(&conn, &profile, ActionKind::Reply, now()).unwrap().is_err(), "and blocks a reply");
+        assert_eq!(check(&conn, &profile, ActionKind::Like, now()).unwrap(), Ok(()));
     }
 }
