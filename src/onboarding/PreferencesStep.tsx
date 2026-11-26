@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { btnPrimary, panel } from "../components/ui";
 import { joinList, parseList, stripHandle } from "../lib/lists";
 
 interface Props {
@@ -92,7 +93,7 @@ export function PreferencesStep({ onSaved, onBack }: Props) {
         <button type="button" onClick={onBack} className="rounded-lg px-4 py-2 text-sm text-zinc-600 dark:text-zinc-400">
           Back
         </button>
-        <button type="button" onClick={save} disabled={busy} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">
+        <button type="button" onClick={save} disabled={busy} className={btnPrimary}>
           Save and continue
         </button>
       </div>
@@ -105,16 +106,16 @@ export function PreferencesPanel() {
   const { fields, save, busy, saved } = usePreferencesForm();
 
   return (
-    <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800" aria-labelledby="prefs-h">
-      <h2 id="prefs-h" className="font-medium">
+    <section className={panel} aria-labelledby="prefs-h">
+      <h2 id="prefs-h" className="text-base font-medium">
         Scout preferences
       </h2>
-      <p className="mt-1 text-xs text-zinc-500">
+      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         Niche, accounts and languages that steer Scout&apos;s ranking. Changes apply to the next Scout session. Nothing here contacts X.
       </p>
       <div className="mt-3 space-y-4">{fields}</div>
       <div className="mt-4 flex items-center gap-3">
-        <button type="button" onClick={save} disabled={busy} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900">
+        <button type="button" onClick={save} disabled={busy} className={btnPrimary}>
           {busy ? "Saving..." : "Save preferences"}
         </button>
         {saved && <span role="status" className="text-xs text-emerald-600 dark:text-emerald-400">Saved</span>}
