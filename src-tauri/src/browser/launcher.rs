@@ -85,9 +85,20 @@ pub enum ReclaimOutcome {
 
 #[cfg(unix)]
 pub fn process_command_line(pid: u32) -> Option<String> {
-    let out = Command::new("ps").args(["-p", &pid.to_string(), "-o", "command="]).output().ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !s.is_empty()).then_some(s)
+    let out = Command::new("ps")
+        .args(["-ww", "-p", &pid.to_string(), "-o", "state=,command="])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let (state, cmd) = s.trim().split_once(char::is_whitespace)?;
+    if state.starts_with('Z') {
+        return None;
+    }
+    let cmd = cmd.trim();
+    (!cmd.is_empty()).then(|| cmd.to_string())
 }
 
 #[cfg(not(unix))]
@@ -197,9 +208,17 @@ mod tests {
         use super::*;
 
         fn spawn_marker(profile: &Path) -> Child {
-            // The marker in argv stands in for `--user-data-dir=<profile>` of a real Chrome.
+            // Use the POSIX `read` builtin with a piped stdin rather than `sleep`: on macOS,
+            // `/bin/sh` (bash) tail-call `exec`s a single external command like `sleep 120`,
+            // replacing argv and dropping `--user-data-dir=...` before `ps` observes it.
             Command::new("sh")
-                .args(["-c", "sleep 120", &format!("--user-data-dir={}", profile.display())])
+                .args([
+                    "-c",
+                    "read _",
+                    "chrome-test-marker",
+                    &format!("--user-data-dir={}", profile.display()),
+                ])
+                .stdin(Stdio::piped())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -212,6 +231,17 @@ mod tests {
             let profile = dir.path().join("x-default");
             std::fs::create_dir_all(&profile).unwrap();
             let mut child = spawn_marker(&profile);
+            let marker = format!("--user-data-dir={}", profile.display());
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+            while tokio::time::Instant::now() < deadline {
+                if process_command_line(child.id())
+                    .map(|cmd| cmd.contains(&marker))
+                    .unwrap_or(false)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
             write_record(&StaleRecord { pid: child.id(), port: 1, profile_dir: profile.display().to_string() }).unwrap();
 
             assert_eq!(reclaim_stale_chrome(&profile).await, ReclaimOutcome::Killed);
