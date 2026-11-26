@@ -29,6 +29,7 @@ import type {
   XaiDeviceChallenge,
   XaiOAuthPollResult,
 } from "./types";
+import type { BrowserStatus } from "./browserState";
 import { TASK_METAS } from "./types";
 import rulesText from "../../src-tauri/src/onboarding/rules_of_engagement.md?raw";
 
@@ -260,6 +261,18 @@ export const api = {
   },
   async closeX(): Promise<void> {
     return call("browser_close");
+  },
+  async browserStatus(): Promise<BrowserStatus | null> {
+    return inTauri() ? call("browser_status") : null;
+  },
+  async focusX(): Promise<void> {
+    return call("browser_focus_x");
+  },
+  async resumeBrowser(): Promise<BrowserStatus> {
+    return call("browser_resume");
+  },
+  async abortBrowserJob(): Promise<BrowserStatus> {
+    return call("browser_abort");
   },
   async readVisibleTweets(): Promise<VisibleTweet[]> {
     return call("browser_read_visible_tweets");

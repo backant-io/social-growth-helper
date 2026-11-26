@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { AnalyticsPage } from "./analytics/AnalyticsPage";
+import { BrowserStateBanner } from "./components/BrowserStateBanner";
 import { EmptyState } from "./components/EmptyState";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { QuitGuardModal } from "./components/QuitGuardModal";
@@ -119,6 +120,7 @@ export default function App() {
       <Sidebar active={section} onSelect={setSection} locked={locked} badges={{ learning: proposed }} />
       <div className="flex min-w-0 flex-1 flex-col">
       <KillBar />
+      <BrowserStateBanner />
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
         <OfflineBanner offline={!online} />
         {section === "settings" ? (

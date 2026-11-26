@@ -1,6 +1,7 @@
 //! Shared runtime for Phase 3 features: kill switch, completion provider slot, scout run slot, publish
 //! queue, the Tauri event sink with OS notifications, tray, and screenshot retention.
 
+use crate::browser::health::BrowserState;
 use crate::completion::{CompletionProvider, UnconfiguredProvider};
 use crate::control::{EventSink, KillSwitch};
 use crate::error::{AppError, AppResult};
@@ -104,6 +105,14 @@ impl EventSink for TauriSink {
                 let title = payload.get("title").and_then(|t| t.as_str()).unwrap_or("Social Growth Helper");
                 let body = payload.get("body").and_then(|t| t.as_str()).unwrap_or("");
                 let _ = self.0.notification().builder().title(title).body(body).show();
+            }
+        }
+        if event == "browser:halt" {
+            let state = self.0.state::<AppState>();
+            let kind = payload.get("state").and_then(|s| s.as_str()).and_then(BrowserState::parse);
+            let source = payload.get("source").and_then(|s| s.as_str()).unwrap_or("");
+            if let Some(kind) = kind {
+                state.browser_health.record_halt(kind, source);
             }
         }
         if event == "scout:finished" {
