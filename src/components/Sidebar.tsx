@@ -1,5 +1,6 @@
 import type { SectionId } from "../lib/types";
 import { SECTIONS } from "./sections";
+import { useKillSwitch } from "./ui";
 
 interface Props {
   active: SectionId;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export function Sidebar({ active, onSelect, locked, badges }: Props) {
+  const paused = useKillSwitch();
   return (
     <nav aria-label="Main" className="flex w-56 shrink-0 flex-col border-r border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
       <div className="mb-4 px-2 pt-2 text-sm font-semibold tracking-tight">Social Growth Helper</div>
@@ -39,6 +41,12 @@ export function Sidebar({ active, onSelect, locked, badges }: Props) {
           );
         })}
       </ul>
+      {paused && (
+        <div role="status" className="mt-auto flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-900 dark:bg-red-950 dark:text-red-100">
+          <span aria-hidden="true" className="h-2 w-2 rounded-full bg-red-600" />
+          Paused
+        </div>
+      )}
     </nav>
   );
 }

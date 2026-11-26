@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { btn, btnPrimary as primaryBtn, input as inputCls, panel, PageHeader, Tabs } from "../components/ui";
+import { btn, btnPrimary as primaryBtn, input as inputCls, LoadingBlock, panel, PageHeader, Tabs } from "../components/ui";
 import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { api } from "../lib/api";
 import { browserNotices } from "../lib/browserNotices";
@@ -861,7 +861,7 @@ function UsagePanel() {
     void load();
   }, [load]);
 
-  if (!dash) return <div className="text-sm text-zinc-500">Loading usage stats...</div>;
+  if (!dash) return <LoadingBlock label="Loading usage stats" />;
 
   return (
     <div className="space-y-4">
@@ -1094,7 +1094,7 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onData
   ];
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
+    <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader title="Settings" description="Your X window, AI providers, limits and data. Nothing here posts anything." />
       <Tabs label="Settings sections" tabs={tabs} active={tab} onChange={setTab} />
 

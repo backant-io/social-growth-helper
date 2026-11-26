@@ -15,3 +15,8 @@ body {
   -webkit-font-smoothing: antialiased;
   @apply bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
 }
+
+:focus-visible {
+  outline: 2px solid #71717a;
+  outline-offset: 2px;
+}

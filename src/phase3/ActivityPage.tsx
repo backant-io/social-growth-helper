@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { p3 } from "./api";
 import type { ActivityEntry, ChecklistReport } from "./types";
+import { EmptyBlock, PageHeader } from "../components/ui";
 import { btn, btnPrimary, input, muted, Notice, panel } from "./ui";
 
 const KIND_LABEL: Record<ActivityEntry["kind"], string> = { scout: "Scout", publish: "Publish", action: "Action", challenge: "Needs you", error: "Error" };
@@ -77,15 +78,11 @@ export function ActivityPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <header className="flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Activity</h1>
-          <p className={`mt-1 text-sm ${muted}`}>Everything the app did on X: scout runs, publishes, single actions, challenges and errors.</p>
-        </div>
-        <button type="button" className={btn} onClick={load}>
-          Refresh
-        </button>
-      </header>
+      <PageHeader
+        title="Activity"
+        description="Everything the app did on X: scout runs, publishes, single actions, challenges and errors."
+        actions={<button type="button" className={btn} onClick={load}>Refresh</button>}
+      />
       {error && <Notice tone="error">{error}</Notice>}
       <div className="flex flex-wrap gap-2" role="group" aria-label="Filter">
         {FILTERS.map((f) => (
@@ -95,7 +92,7 @@ export function ActivityPage() {
         ))}
       </div>
       {shown.length === 0 ? (
-        <p className={`rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm dark:border-zinc-700 ${muted}`}>Nothing here yet.</p>
+        <EmptyBlock title="Nothing here yet">{filter === "all" ? "Scout runs, publishes and errors will be listed here." : "No entries of this kind yet."}</EmptyBlock>
       ) : (
         <ul className="divide-y divide-zinc-200 rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
           {shown.map((e) => (

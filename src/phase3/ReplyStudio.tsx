@@ -205,7 +205,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const textAction = bundleText(draft.actions);
   const models = [...new Set(draft.variants.map((v) => v.model_used))];
   const offlineHint = offlineActionHint(online);
-  const canActNow = draft.status !== "publishing";
+  const canActNow = draft.status !== "publishing" && !paused;
 
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -259,6 +259,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
       </div>
 
       <div className="space-y-4">
+        {paused && <Notice tone="warn">Everything is paused, so nothing can be posted or clicked on X. Resume in the bar above to continue. You can keep editing.</Notice>}
         {error && <Notice tone="error">{error}</Notice>}
         {completion && !completion.drafting && (
           <InlineModelGuard
@@ -397,8 +398,8 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           </button>
           <div className="flex items-center gap-3">
             <span className={`text-xs ${muted}`}>Cmd/Ctrl+Enter</span>
-            <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint} onClick={() => void openConfirm()}>
-              {draft.status === "failed" ? "Retry publish" : "Publish..."}
+            <button type="button" className={btnPrimary} disabled={!online || !editable || paused || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? (paused ? "Paused. Resume in the bar above." : undefined)} onClick={() => void openConfirm()}>
+              {draft.status === "failed" ? "Retry publish" : "Review and publish"}
             </button>
           </div>
         </div>

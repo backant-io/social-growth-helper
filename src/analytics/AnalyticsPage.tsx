@@ -169,7 +169,7 @@ export function AnalyticsPage() {
 
   if (!snapshot) {
     return (
-      <div className="mx-auto max-w-7xl space-y-4">
+      <div className="mx-auto max-w-7xl space-y-6">
         <PageHeader title="Analytics" description="How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer." />
         {error ? (
           <Notice tone="error">{error}</Notice>
@@ -188,7 +188,7 @@ export function AnalyticsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-4">
+    <div className="mx-auto max-w-7xl space-y-6">
       <LayoutControls
         activeLayout={snapshot.active_layout}
         layouts={snapshot.layouts}

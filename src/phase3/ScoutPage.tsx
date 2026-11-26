@@ -5,6 +5,7 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { DURATION_PRESETS, POST_PRESETS, REASONS, compactCount, formatDuration, scoreTone } from "./logic";
 import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams, SessionView } from "./types";
+import { EmptyBlock, PageHeader, useKillSwitch } from "../components/ui";
 import { btn, btnPrimary, chip, input, muted, Notice, panel } from "./ui";
 
 interface Props {
@@ -44,6 +45,7 @@ function SessionRow({ s }: { s: SessionView }) {
 
 export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
   const [params, setParams] = useState<SessionParams>({ feed_source: "for_you", max_duration_sec: 600, max_posts: 100, stop_after_queued: null, threshold: 72 });
+  const killed = useKillSwitch();
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState<null | "manual" | "user_activity">(null);
   const [progress, setProgress] = useState<ScoutProgress | null>(null);
@@ -152,10 +154,7 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
-      <header>
-        <h1 className="text-xl font-semibold">Scout Queue</h1>
-        <p className={`mt-1 text-sm ${muted}`}>You choose how long to scroll and how many posts to read. Nothing is posted from here.</p>
-      </header>
+      <PageHeader title="Scout Queue" description="You choose how long to scroll and how many posts to read. Nothing is posted from here." />
 
       {completion && !completion.scoring && (
         <InlineModelGuard
@@ -165,12 +164,13 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
           hint="Until a model is chosen, posts get a quick local score from engagement and your topics."
         />
       )}
+      {killed && <Notice tone="warn">Everything is paused, so Scout cannot start. Resume in the bar above.</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {paused === "user_activity" && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}
       {paused === "manual" && <Notice tone="warn">Scout is paused. The session is kept; resume it when you are ready.</Notice>}
 
       <section className={panel} aria-labelledby="scout-start">
-        <h2 id="scout-start" className="mb-3 font-medium">New session</h2>
+        <h2 id="scout-start" className="mb-3 text-base font-medium">New session</h2>
         <fieldset disabled={running} className="space-y-4">
           <div>
             <div className={`mb-1 text-xs uppercase tracking-wide ${muted}`}>Duration</div>
@@ -242,7 +242,7 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
               </button>
             </>
           ) : (
-            <button type="button" className={btnPrimary} onClick={start} disabled={busy}>
+            <button type="button" className={btnPrimary} onClick={start} disabled={busy || killed} title={killed ? "Paused. Resume in the bar above." : undefined}>
               Start scouting
             </button>
           )}
@@ -255,15 +255,15 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
 
       <section aria-labelledby="queue-h">
         <div className="mb-2 flex items-baseline justify-between">
-          <h2 id="queue-h" className="font-medium">
+          <h2 id="queue-h" className="text-base font-medium">
             Worth answering ({queue.length})
           </h2>
           <span className={`text-xs ${muted}`}>J/K to move, Enter to draft, D to dismiss</span>
         </div>
         {queue.length === 0 ? (
-          <p className={`rounded-xl border border-dashed border-zinc-300 p-6 text-center text-sm dark:border-zinc-700 ${muted}`}>
-            Nothing queued above {params.threshold}. Start a session, or lower the minimum score.
-          </p>
+          <EmptyBlock title="Nothing queued yet">
+            Nothing is scoring above {params.threshold}. Start a session, or lower the minimum score.
+          </EmptyBlock>
         ) : (
           <ul className="space-y-3">
             {queue.map((item, i) => {
@@ -318,7 +318,7 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
 
       {recent.length > 0 && (
         <section className={panel} aria-labelledby="recent-h">
-          <h2 id="recent-h" className="mb-1 font-medium">Recent sessions</h2>
+          <h2 id="recent-h" className="mb-1 text-base font-medium">Recent sessions</h2>
           <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
             {recent.map((s) => (
               <SessionRow key={s.id} s={s} />

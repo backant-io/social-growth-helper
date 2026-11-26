@@ -421,7 +421,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   const hasOverride = Boolean(overrideSel.providerAccountId && overrideSel.modelId);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
+    <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader title="Style" description="Teach the app your voice: a guide, a few examples of your own writing, and a bench to test drafts against it." />
       <Tabs
         label="Style sections"

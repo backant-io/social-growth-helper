@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PageHeader, Tabs, useKillSwitch } from "../../components/ui";
 import { api } from "../../lib/api";
 import { FormatsPanel } from "./FormatsPanel";
 import { SourcesPanel } from "./SourcesPanel";
@@ -15,6 +16,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 export function CreatorPage({ locked }: { locked: boolean }) {
   const [tab, setTab] = useState<Tab>("write");
   const [xRunning, setXRunning] = useState(false);
+  const paused = useKillSwitch();
 
   useEffect(() => {
     let alive = true;
@@ -28,28 +30,13 @@ export function CreatorPage({ locked }: { locked: boolean }) {
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="text-xl font-semibold">Creator</h1>
-      <div role="tablist" aria-label="Creator sections" className="flex gap-1 border-b border-zinc-200 dark:border-zinc-800">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="tab"
-            id={`tab-${t.id}`}
-            aria-selected={tab === t.id}
-            aria-controls={`panel-${t.id}`}
-            onClick={() => setTab(t.id)}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm ${tab === t.id ? "border-zinc-900 font-medium dark:border-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"}`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`}>
-        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} />}
+    <div className="mx-auto max-w-3xl space-y-6">
+      <PageHeader title="Creator" description="Turn a rough thought into an original post, using formats that have worked for others. You approve every post before it goes to X." />
+      <Tabs label="Creator sections" idPrefix="creator" tabs={TABS} active={tab} onChange={setTab} />
+      <div role="tabpanel" id={`creator-panel-${tab}`} aria-labelledby={`creator-tab-${tab}`}>
+        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} paused={paused} />}
         {tab === "formats" && <FormatsPanel />}
-        {tab === "sources" && <SourcesPanel locked={locked} xRunning={xRunning} />}
+        {tab === "sources" && <SourcesPanel locked={locked} xRunning={xRunning} paused={paused} />}
       </div>
     </div>
   );

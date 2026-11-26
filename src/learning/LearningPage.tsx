@@ -70,7 +70,7 @@ export function LearningPage({ onProposedChange }: Props) {
 
   if (!data) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
+      <div className="mx-auto max-w-3xl space-y-6">
         <PageHeader title="Learning" description="What the app noticed about your edits and results, and small changes it suggests." />
         {message ? <Notice tone="error">{message.text}</Notice> : <LoadingBlock label="Loading suggestions" />}
       </div>
@@ -86,7 +86,7 @@ export function LearningPage({ onProposedChange }: Props) {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
+    <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
         title="Learning"
         description="The app compares your edits and results with what it drafted, then suggests small changes. Nothing changes until you apply it, and every change can be undone."
