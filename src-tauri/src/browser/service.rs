@@ -82,6 +82,38 @@ impl BrowserService {
         let v = d.eval_json(READ_VISIBLE_TWEETS_JS).await?;
         serde_json::from_value(v).map_err(|e| BrowserError::Evaluation(format!("unexpected tweet payload: {e}")))
     }
+
+    pub async fn navigate(&self, url: &str) -> Result<(), BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.navigate(url).await
+    }
+
+    pub async fn eval_json(&self, expression: &str) -> Result<serde_json::Value, BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.eval_json(expression).await
+    }
+
+    pub async fn insert_text(&self, text: &str) -> Result<(), BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.insert_text(text).await
+    }
+
+    pub async fn click_point(&self, x: f64, y: f64) -> Result<(), BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.click_point(x, y).await
+    }
 }
 
 #[cfg(test)]

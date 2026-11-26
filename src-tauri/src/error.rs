@@ -14,6 +14,8 @@ pub enum AppError {
     Secret(#[from] crate::secrets::SecretError),
     #[error(transparent)]
     Browser(#[from] crate::browser::BrowserError),
+    #[error("[llm:{code}] {msg}", code = .0.error_code(), msg = .0)]
+    Llm(#[from] crate::llm::LlmError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]

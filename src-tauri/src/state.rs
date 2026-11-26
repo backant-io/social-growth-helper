@@ -1,11 +1,12 @@
 use crate::browser::chrome_driver::ChromeCdpDriver;
 use crate::browser::service::BrowserService;
 use crate::lifecycle::JobRegistry;
+use crate::llm::router::LlmRouter;
 use crate::secrets::SecretsService;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct AppPaths {
     pub data_dir: PathBuf,
@@ -35,22 +36,34 @@ impl AppPaths {
 
 pub struct AppState {
     pub paths: AppPaths,
-    pub db: Mutex<Connection>,
+    pub db: Arc<Mutex<Connection>>,
     pub profile_id: String,
-    pub secrets: SecretsService,
-    pub browser: BrowserService,
+    pub secrets: Arc<SecretsService>,
+    pub browser: Arc<BrowserService>,
+    pub llm_router: Arc<LlmRouter>,
+    pub http: reqwest::Client,
     pub jobs: JobRegistry,
     pub quit_approved: AtomicBool,
 }
 
 impl AppState {
     pub fn new(paths: AppPaths, db: Connection, profile_id: String) -> Self {
+        let db = Arc::new(Mutex::new(db));
+        let secrets = Arc::new(SecretsService::system());
+        let browser = Arc::new(BrowserService::new(Box::new(ChromeCdpDriver::new())));
+        let llm_router = Arc::new(LlmRouter::new());
+        {
+            let conn = db.lock().unwrap();
+            let _ = llm_router.sync_from_db(&conn, secrets.clone(), browser.clone());
+        }
         Self {
             paths,
-            db: Mutex::new(db),
+            db,
             profile_id,
-            secrets: SecretsService::system(),
-            browser: BrowserService::new(Box::new(ChromeCdpDriver::new())),
+            secrets,
+            browser,
+            llm_router,
+            http: reqwest::Client::new(),
             jobs: JobRegistry::new(),
             quit_approved: AtomicBool::new(false),
         }

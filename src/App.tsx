@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "./components/EmptyState";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { QuitGuardModal } from "./components/QuitGuardModal";
 import { Sidebar } from "./components/Sidebar";
 import { SECTIONS } from "./components/sections";
 import { api, listen } from "./lib/api";
+import { useOnlineStatus } from "./lib/errors";
 import type { OnboardingStatus, QuitGuardPayload, SectionId } from "./lib/types";
 import { Onboarding, type OnboardingMode } from "./onboarding/Onboarding";
 import { SettingsPage } from "./pages/SettingsPage";
+import { StylePage } from "./pages/StylePage";
 
 export default function App() {
   const [section, setSection] = useState<SectionId>("scout");
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [overlay, setOverlay] = useState<OnboardingMode | null>(null);
   const [quitJobs, setQuitJobs] = useState<string[] | null>(null);
+  const online = useOnlineStatus();
 
   const refresh = useCallback(async () => {
     setStatus(await api.onboardingStatus());
@@ -50,8 +54,21 @@ export default function App() {
     <div className="flex h-full">
       <Sidebar active={section} onSelect={setSection} locked={locked} />
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
+        <OfflineBanner offline={!online} />
         {section === "settings" ? (
-          <SettingsPage rules={status?.rules ?? null} onReplayTour={() => setOverlay("tour")} onReadRules={() => setOverlay("rules")} />
+          <SettingsPage
+            rules={status?.rules ?? null}
+            offline={!online}
+            onReplayTour={() => setOverlay("tour")}
+            onReadRules={() => setOverlay("rules")}
+          />
+        ) : section === "style" ? (
+          <StylePage
+            locked={locked}
+            offline={!online}
+            onReviewRules={() => setOverlay("rules")}
+            onOpenSettings={() => setSection("settings")}
+          />
         ) : (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         )}
