@@ -49,7 +49,7 @@ export function PublishSettings() {
 
       <section className={panel} aria-labelledby="pace-h">
         <div className="flex items-center justify-between">
-          <h2 id="pace-h" className="font-medium">Pacing limits</h2>
+          <h2 id="pace-h" className="font-display text-lg font-semibold tracking-tight">Pacing limits</h2>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={pacing.enabled} onChange={(e) => setPacing({ ...pacing, enabled: e.target.checked })} />
             Enforce daily limits
@@ -74,7 +74,7 @@ export function PublishSettings() {
       </section>
 
       <section className={panel} aria-labelledby="notify-h">
-        <h2 id="notify-h" className="font-medium">Notifications</h2>
+        <h2 id="notify-h" className="font-display text-lg font-semibold tracking-tight">Notifications</h2>
         <label className="mt-2 flex items-center gap-2 text-sm">
           <input type="checkbox" checked={notify.enabled} onChange={(e) => setNotify({ ...notify, enabled: e.target.checked })} />
           Show desktop notifications
@@ -93,7 +93,7 @@ export function PublishSettings() {
       </section>
 
       <section className={panel} aria-labelledby="watch-h">
-        <h2 id="watch-h" className="font-medium">Watchlist</h2>
+        <h2 id="watch-h" className="font-display text-lg font-semibold tracking-tight">Watchlist</h2>
         <p className={`mt-1 text-sm ${muted}`}>Accounts Scout can scan for reply opportunities. Comma or newline separated handles.</p>
         <textarea value={watch} onChange={(e) => setWatch(e.target.value)} rows={2} aria-label="Watchlist handles" className={`${input} mt-2 w-full`} />
         <button
@@ -111,7 +111,7 @@ export function PublishSettings() {
       </section>
 
       <section className={panel} aria-labelledby="ret-h">
-        <h2 id="ret-h" className="font-medium">Screenshot retention</h2>
+        <h2 id="ret-h" className="font-display text-lg font-semibold tracking-tight">Screenshot retention</h2>
         <p className={`mt-1 text-sm ${muted}`}>Before and after screenshots of each publish are kept on this computer and deleted after this many days.</p>
         <div className="mt-2 flex items-center gap-2">
           <input type="number" min={1} max={365} value={retention} onChange={(e) => setRetention(Number(e.target.value))} aria-label="Retention days" className={`${input} w-24`} />

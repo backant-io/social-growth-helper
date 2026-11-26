@@ -25,6 +25,28 @@ export function chip(active: boolean): string {
   }`;
 }
 
+/** Joined pill group for choosing one of a few presets. */
+export function Segmented<T extends string | number>({ label, options, value, onChange, disabled }: { label: string; options: Array<{ value: T; label: string }>; value: T | null; onChange: (v: T) => void; disabled?: boolean }) {
+  return (
+    <div role="group" aria-label={label} className="inline-flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-700">
+      {options.map((o, i) => (
+        <button
+          key={String(o.value)}
+          type="button"
+          disabled={disabled}
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-3 py-1.5 text-sm transition-colors disabled:opacity-40 ${i > 0 ? "border-l border-zinc-300 dark:border-zinc-700" : ""} ${
+            value === o.value ? "bg-zinc-950 text-white dark:bg-zinc-100 dark:text-zinc-950" : "hover:bg-zinc-100 dark:hover:bg-zinc-900"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Modal({ title, children, onClose, wide, actions }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean; actions?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -47,14 +69,9 @@ export function Modal({ title, children, onClose, wide, actions }: { title: stri
 }
 
 export function Notice({ tone, children }: { tone: "info" | "warn" | "error" | "ok"; children: ReactNode }) {
-  const c = {
-    info: "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900 dark:bg-sky-950 dark:text-sky-200",
-    warn: "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200",
-    error: "border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200",
-    ok: "border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
-  }[tone];
+  const bar = { info: "border-zinc-400", warn: "border-amber-500", error: "border-red-600", ok: "border-emerald-600" }[tone];
   return (
-    <div role={tone === "error" ? "alert" : "status"} className={`rounded-lg border px-3.5 py-2.5 text-sm ${c}`}>
+    <div role={tone === "error" ? "alert" : "status"} className={`border-l-2 ${bar} bg-zinc-100/70 py-2 pr-3 pl-3.5 text-sm text-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-200`}>
       {children}
     </div>
   );
@@ -102,22 +119,32 @@ export function Tabs<T extends string>({ label, tabs, active, onChange, idPrefix
   );
 }
 
-/** Dashed placeholder used when a list has nothing in it yet. Say what the list is for and what to do next. */
+/** Empty list placeholder. Say what the list is for and what to do next. */
 export function EmptyBlock({ title, children, action }: { title?: string; children: ReactNode; action?: ReactNode }) {
   return (
-    <div className="rounded-xl border border-dashed border-zinc-300 bg-[radial-gradient(circle_at_1px_1px,var(--dot)_1px,transparent_0)] bg-[length:18px_18px] p-8 text-center text-sm dark:border-zinc-700">
-      {title && <p className="font-display text-base font-semibold tracking-tight">{title}</p>}
-      <p className={`${title ? "mt-1" : ""} ${muted}`}>{children}</p>
-      {action && <div className="mt-3 flex justify-center gap-2">{action}</div>}
+    <div className="relative overflow-hidden rounded-xl border border-zinc-200 px-8 py-12 text-center text-sm dark:border-zinc-800">
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,var(--dot)_1px,transparent_0)] bg-[length:18px_18px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_75%)]" />
+      <div className="relative">
+        {title && <p className="font-display text-base font-semibold tracking-tight">{title}</p>}
+        <p className={`${title ? "mt-1" : ""} mx-auto max-w-md ${muted}`}>{children}</p>
+        {action && <div className="mt-4 flex justify-center gap-2">{action}</div>}
+      </div>
     </div>
   );
 }
 
-export function LoadingBlock({ label = "Loading..." }: { label?: string }) {
+export function LoadingBlock({ label = "Loading...", rows = 3 }: { label?: string; rows?: number }) {
   return (
-    <div role="status" aria-live="polite" className="space-y-3" aria-label={label}>
-      <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
-      <div className="h-16 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900" />
+    <div role="status" aria-live="polite" className="divide-y divide-zinc-200 border-t border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800" aria-label={label}>
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="flex animate-pulse gap-4 py-4">
+          <div className="h-8 w-10 rounded bg-zinc-100 dark:bg-zinc-900" />
+          <div className="flex-1 space-y-2">
+            <div className="h-3 w-1/4 rounded bg-zinc-100 dark:bg-zinc-900" />
+            <div className="h-3 w-4/5 rounded bg-zinc-100 dark:bg-zinc-900" />
+          </div>
+        </div>
+      ))}
       <span className="sr-only">{label}</span>
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../lib/api";
+import { btnPrimary, input } from "./ui";
 import type { ModelInfo, ProviderAccountView } from "../lib/types";
 
 export interface ModelSelection {
@@ -89,9 +90,7 @@ export function ModelPicker({
       <div className="flex flex-wrap items-center gap-1.5">
         <select
           aria-label={ariaLabel}
-          className={`min-w-[14rem] rounded-lg border border-zinc-300 bg-transparent px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900 ${
-            compact ? "text-xs" : "text-sm"
-          }`}
+          className={`${input} min-w-[15rem] ${compact ? "py-1.5 text-xs" : ""}`}
           value={encoded}
           onChange={(e) => onChange(decodeModelChoice(e.target.value))}
         >
@@ -118,36 +117,21 @@ export function ModelPicker({
         {providers.length > 0 && onProvidersUpdated && (
           <button
             type="button"
-            className="rounded-lg border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+            className="px-1.5 py-1 text-xs text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-50"
             onClick={() => setAddingFor(addingFor ? null : value.providerAccountId ?? providers[0].id)}
             title="Add a custom model ID"
           >
-            {addingFor ? "Cancel" : "+ Custom ID"}
+            {addingFor ? "Cancel" : "Custom ID"}
           </button>
         )}
       </div>
 
-      {selected && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-500">
-          <span
-            className={`rounded px-1.5 py-0.5 font-medium ${
-              selected.account.billing_lane === "subscription"
-                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300"
-                : "bg-zinc-200 text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
-            }`}
-          >
-            {selected.account.billing_lane === "subscription" ? "Subscription" : "API"}
-          </span>
-          {selected.model.capabilities.vision && (
-            <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">Vision</span>
-          )}
-          {selected.model.capabilities.json_schema && (
-            <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">JSON Schema</span>
-          )}
-          {selected.model.capabilities.thinking && (
-            <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">Thinking</span>
-          )}
-        </div>
+      {selected && !compact && (
+        <p className="text-xs text-zinc-500">
+          {selected.account.billing_lane === "subscription" ? "Subscription" : "API billing"}
+          {selected.model.capabilities.vision ? " / Vision" : ""}
+          {selected.model.capabilities.thinking ? " / Thinking" : ""}
+        </p>
       )}
 
       {requireVision && selected && !selected.model.capabilities.vision && (
@@ -160,7 +144,7 @@ export function ModelPicker({
         <div className="flex flex-wrap items-center gap-1.5 pt-1">
           <select
             aria-label="Provider for custom model"
-            className="rounded-lg border border-zinc-300 bg-transparent px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+            className={`${input} py-1 text-xs`}
             value={addingFor}
             onChange={(e) => setAddingFor(e.target.value)}
           >
@@ -172,7 +156,7 @@ export function ModelPicker({
           </select>
           <input
             aria-label="Custom model ID"
-            className="min-w-[12rem] rounded-lg border border-zinc-300 bg-transparent px-2.5 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+            className={`${input} min-w-[12rem] py-1 text-xs`}
             placeholder="e.g. grok-4.20 or claude-opus-4-6"
             value={customModel}
             onChange={(e) => setCustomModel(e.target.value)}
@@ -181,7 +165,7 @@ export function ModelPicker({
             type="button"
             disabled={busy || !customModel.trim()}
             onClick={() => void handleAddCustom()}
-            className="rounded-lg bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+            className={`${btnPrimary} py-1 text-xs`}
           >
             Add
           </button>

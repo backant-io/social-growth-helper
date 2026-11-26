@@ -121,7 +121,7 @@ export function Onboarding({ mode, rulesAcknowledged, onFinished, onRulesAcknowl
               </div>
             </div>
           )}
-          {(step.kind === "browser" || step.kind === "providers" || step.kind === "style" || step.kind === "routing") && (
+          {(step.kind === "browser" || step.kind === "providers" || step.kind === "style") && (
             <SetupStep kind={step.kind} rulesAcknowledged={rulesAcknowledged} onBack={back} onNext={wizard && isLast ? () => void finishTour() : next} finish={wizard && isLast} />
           )}
           {step.kind === "rules" && (

@@ -73,7 +73,7 @@ export const TOUR_STEPS: TourStep[] = [
   },
 ];
 
-export type WizardStepKind = "tour" | "preferences" | "browser" | "providers" | "style" | "routing" | "rules";
+export type WizardStepKind = "tour" | "preferences" | "browser" | "providers" | "style" | "rules";
 
 export interface WizardStep {
   kind: WizardStepKind;
@@ -82,7 +82,7 @@ export interface WizardStep {
 
 /**
  * Order of the first-run wizard: the tour, the rules acknowledgement, then preferences and guided
- * setup (Chrome and X login, providers, style, routing). The acknowledgement comes before setup so
+ * setup (Chrome and X login, one AI connection, style). The acknowledgement comes before setup so
  * the X window can be opened for the login. Pass `rulesAcknowledged` to skip a step already done.
  */
 export function wizardOrder(rulesAcknowledged = false): WizardStep[] {
@@ -93,27 +93,22 @@ export function wizardOrder(rulesAcknowledged = false): WizardStep[] {
     { kind: "browser" },
     { kind: "providers" },
     { kind: "style" },
-    { kind: "routing" },
   ];
 }
 
-export const SETUP_STEP_COPY: Record<"browser" | "providers" | "style" | "routing", { title: string; intro: string }> = {
+export const SETUP_STEP_COPY: Record<"browser" | "providers" | "style", { title: string; intro: string }> = {
   browser: {
     title: "Set up the X browser window",
     intro:
-      "Scout reads X in your own Chrome, in a dedicated window with a separate profile. Check that Chrome is detected here. Open the X window below and log in to X there once; the login is kept. The button stays available in Settings under General & Browser.",
+      "Scout reads X in your own Chrome, in a dedicated window with a separate profile. Check that Chrome is detected here. Open the X window below and log in to X there once; the login is kept. The button stays available in Settings under General.",
   },
   providers: {
-    title: "Connect an AI provider",
-    intro: "Pick at least one provider so drafts and scoring can run. Keys go to your OS keychain. You can skip this and connect later in Settings under AI Providers.",
+    title: "Connect an AI",
+    intro: "Pick one. A sensible model is chosen for every task automatically, and API providers list their live models. Keys go to your OS keychain. You can do this later in Settings under AI models.",
   },
   style: {
     title: "Write your style guide",
     intro: "A few sentences about how you write. Drafts follow this guide. Examples, banned phrases and the test bench live in the Style section.",
-  },
-  routing: {
-    title: "Choose a model for each task",
-    intro: "Each task can use a different provider and model. You can change this any time in Settings under Task Routing.",
   },
 };
 
@@ -125,15 +120,8 @@ export interface SetupHint {
 export function providerHint(providers: Array<{ status: string }>): SetupHint {
   const n = providers.filter((p) => p.status === "connected").length;
   return n > 0
-    ? { done: true, text: `${n} provider${n === 1 ? "" : "s"} connected.` }
-    : { done: false, text: "No provider connected yet." };
-}
-
-export function routingHint(routes: Array<{ provider_account_id: string | null; model_id: string | null }>): SetupHint {
-  const set = routes.filter((r) => r.provider_account_id && r.model_id).length;
-  return set > 0
-    ? { done: true, text: `${set} of ${routes.length} tasks have a model.` }
-    : { done: false, text: "No task has a model yet. Unset tasks ask you to choose when first used." };
+    ? { done: true, text: `${n} provider${n === 1 ? "" : "s"} connected. Default models are set.` }
+    : { done: false, text: "Nothing connected yet. You can skip and do this later." };
 }
 
 export function browserHint(info: { install: unknown | null; running: boolean } | null, rulesAcknowledged: boolean): SetupHint {

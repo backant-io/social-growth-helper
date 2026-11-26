@@ -5,25 +5,25 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { DURATION_PRESETS, POST_PRESETS, REASONS, compactCount, formatDuration, scoreTone } from "./logic";
 import type { QueueItem, ScoutProgress, SessionParams, SessionView } from "./types";
-import { EmptyBlock, PageHeader, useKillSwitch } from "../components/ui";
-import { btn, btnPrimary, chip, input, muted, Notice, panel } from "./ui";
+import { EmptyBlock, LoadingBlock, PageHeader, Segmented, useKillSwitch } from "../components/ui";
+import { btn, btnGhost, btnPrimary, chip, input, muted, Notice } from "./ui";
 
 interface Props {
   onOpenDraft: (draftId: string) => void;
   onGoToSettings?: () => void;
 }
 
-const TONE = { high: "bg-emerald-600", mid: "bg-amber-500", low: "bg-zinc-400" } as const;
+const TONE = { high: "bg-zinc-950 dark:bg-zinc-50", mid: "bg-zinc-500", low: "bg-zinc-300 dark:bg-zinc-700" } as const;
 
 function Progress({ p, params }: { p: ScoutProgress | null; params: SessionParams }) {
   const pct = p ? Math.min(100, Math.round((p.scanned / params.max_posts) * 100)) : 0;
   return (
-    <div className="mt-3" aria-live="polite">
-      <div className="h-2 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-        <div className="h-full bg-zinc-900 transition-all dark:bg-zinc-100" style={{ width: `${pct}%` }} />
+    <div aria-live="polite">
+      <div className="h-0.5 overflow-hidden bg-zinc-200 dark:bg-zinc-800">
+        <div className="h-full bg-zinc-950 transition-all dark:bg-zinc-50" style={{ width: `${pct}%` }} />
       </div>
-      <p className={`mt-1 text-xs ${muted}`}>
-        {p ? `${p.scanned} of ${params.max_posts} posts read, ${p.queued} queued, ${formatDuration(p.elapsed_sec)} of ${formatDuration(params.max_duration_sec)}` : "Starting..."}
+      <p className={`mt-2 font-mono text-xs ${muted}`}>
+        {p ? `${p.scanned}/${params.max_posts} read / ${p.queued} queued / ${formatDuration(p.elapsed_sec)} of ${formatDuration(params.max_duration_sec)}` : "Starting..."}
       </p>
     </div>
   );
@@ -34,10 +34,10 @@ function SessionRow({ s }: { s: SessionView }) {
   return (
     <li className="flex flex-wrap items-baseline justify-between gap-2 py-2 text-sm">
       <span>{new Date(s.started_at).toLocaleString()}</span>
-      <span className={muted}>
-        {s.posts_scanned} read, {s.posts_queued} queued
-        {sum ? `, ${sum.heuristic_scored > 0 ? "local score" : sum.model}` : ""}
-        {s.ended_reason ? `, ${s.ended_reason.replace(/_/g, " ")}` : ""}
+      <span className={`font-mono text-xs ${muted}`}>
+        {s.posts_scanned} read / {s.posts_queued} queued
+        {sum ? ` / ${sum.heuristic_scored > 0 ? "local score" : sum.model}` : ""}
+        {s.ended_reason ? ` / ${s.ended_reason.replace(/_/g, " ")}` : ""}
       </span>
     </li>
   );
@@ -56,6 +56,9 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const budgetLoaded = useRef(false);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [more, setMore] = useState(false);
 
   const reload = useCallback(async () => {
     const [status, q] = await Promise.all([p3.scoutStatus(), p3.scoutQueue()]);
@@ -65,6 +68,7 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
     budgetLoaded.current = true;
     setParams((p) => ({ ...p, ...(remembered ?? {}), threshold: status.threshold }));
     setQueue(q);
+    setLoaded(true);
     setSelected((i) => Math.min(i, Math.max(0, q.length - 1)));
   }, []);
 
@@ -143,16 +147,37 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
     else return false;
   });
 
-  const numField = (label: string, value: number, set: (n: number) => void, min: number, max: number) => (
+  const visible = queue.filter((i) => {
+    const q = filter.trim().toLowerCase();
+    return !q || i.post.handle.toLowerCase().includes(q) || i.post.text.toLowerCase().includes(q);
+  });
+  const commitThreshold = () => void p3.setThreshold(params.threshold).then(() => p3.scoutQueue().then(setQueue));
+
+  const numField = (label: string, value: number | string, set: (n: number) => void, min: number, max: number, placeholder?: string) => (
     <label className="flex items-center gap-2 text-sm">
       <span className={muted}>{label}</span>
-      <input type="number" min={min} max={max} value={value} onChange={(e) => set(Number(e.target.value))} className={`${input} w-24`} />
+      <input type="number" min={min} max={max} placeholder={placeholder} value={value} onChange={(e) => set(Number(e.target.value))} className={`${input} w-24`} />
     </label>
   );
 
+  const actions = running ? (
+    <>
+      <button type="button" className={btn} onClick={togglePause}>
+        {paused === "manual" ? "Resume" : "Pause"}
+      </button>
+      <button type="button" className={btn} onClick={stop}>
+        Stop
+      </button>
+    </>
+  ) : (
+    <button type="button" data-testid="scout-start" className={btnPrimary} onClick={start} disabled={busy || killed} title={killed ? "Paused. Resume in the bar above." : undefined}>
+      Start scouting
+    </button>
+  );
+
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader title="Scout Queue" description="You choose how long to scroll and how many posts to read. Nothing is posted from here." />
+    <div className="mx-auto max-w-4xl space-y-8">
+      <PageHeader title="Scout" description="Read your feed for a set time and keep the posts worth answering. Nothing is posted from here." actions={actions} />
 
       <InlineModelGuard
         taskType="post_scoring"
@@ -165,32 +190,38 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
       {paused === "user_activity" && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}
       {paused === "manual" && <Notice tone="warn">Scout is paused. The session is kept; resume it when you are ready.</Notice>}
 
-      <section className={panel} aria-labelledby="scout-start">
-        <h2 id="scout-start" className="mb-3 text-base font-medium">New session</h2>
-        <fieldset disabled={running} className="space-y-4">
-          <div>
-            <div className={`mb-1 text-xs uppercase tracking-wide ${muted}`}>Duration</div>
-            <div className="flex flex-wrap items-center gap-2">
-              {DURATION_PRESETS.map((m) => (
-                <button key={m} type="button" className={chip(params.max_duration_sec === m * 60)} onClick={() => setParams({ ...params, max_duration_sec: m * 60 })}>
-                  {m} min
-                </button>
-              ))}
-              {numField("Custom (min)", Math.round(params.max_duration_sec / 60), (n) => setParams({ ...params, max_duration_sec: Math.max(1, n) * 60 }), 1, 240)}
-            </div>
-          </div>
-          <div>
-            <div className={`mb-1 text-xs uppercase tracking-wide ${muted}`}>Posts to read</div>
-            <div className="flex flex-wrap items-center gap-2">
-              {POST_PRESETS.map((n) => (
-                <button key={n} type="button" className={chip(params.max_posts === n)} onClick={() => setParams({ ...params, max_posts: n })}>
-                  {n}
-                </button>
-              ))}
-              {numField("Custom", params.max_posts, (n) => setParams({ ...params, max_posts: n }), 5, 2000)}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-4">
+      <section aria-labelledby="scout-start" className="space-y-4">
+        <div className="flex items-baseline justify-between">
+          <h2 id="scout-start" className="eyebrow">
+            Session
+          </h2>
+          <span className="font-mono text-xs text-zinc-500">
+            {formatDuration(params.max_duration_sec)} / up to {params.max_posts} posts
+          </span>
+        </div>
+        <fieldset disabled={running} className="flex flex-wrap items-center gap-x-6 gap-y-3 disabled:opacity-60">
+          <Segmented
+            label="Duration"
+            value={params.max_duration_sec / 60}
+            options={DURATION_PRESETS.map((m) => ({ value: m, label: `${m} min` }))}
+            onChange={(m) => setParams({ ...params, max_duration_sec: m * 60 })}
+          />
+          <Segmented label="Posts to read" value={params.max_posts} options={POST_PRESETS.map((n) => ({ value: n, label: `${n} posts` }))} onChange={(n) => setParams({ ...params, max_posts: n })} />
+          <select aria-label="Source" value={params.feed_source} onChange={(e) => setParams({ ...params, feed_source: e.target.value as SessionParams["feed_source"] })} className={input}>
+            <option value="for_you">For You feed</option>
+            <option value="following">Following feed</option>
+            <option value="watchlist">Watchlist accounts</option>
+            <option value="both">For You + Watchlist</option>
+            <option value="all">All sources</option>
+          </select>
+          <button type="button" className={btnGhost} aria-expanded={more} onClick={() => setMore(!more)}>
+            {more ? "Fewer options" : "More options"}
+          </button>
+        </fieldset>
+        {more && (
+          <fieldset disabled={running} className="flex flex-wrap items-center gap-x-6 gap-y-3">
+            {numField("Custom minutes", Math.round(params.max_duration_sec / 60), (n) => setParams({ ...params, max_duration_sec: Math.max(1, n) * 60 }), 1, 240)}
+            {numField("Custom posts", params.max_posts, (n) => setParams({ ...params, max_posts: n }), 5, 2000)}
             <label className="flex items-center gap-2 text-sm">
               <span className={muted}>Stop after</span>
               <input
@@ -204,109 +235,113 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
               />
               <span className={muted}>queued</span>
             </label>
+          </fieldset>
+        )}
+        {running && <Progress p={progress} params={params} />}
+      </section>
+
+      <section aria-labelledby="queue-h" className="space-y-3">
+        <div className="flex flex-wrap items-end justify-between gap-3 border-t border-zinc-200 pt-5 dark:border-zinc-800">
+          <div>
+            <h2 id="queue-h" className="font-display text-lg font-semibold tracking-tight">
+              Worth answering <span className="font-mono text-sm font-normal text-zinc-500">{queue.length}</span>
+            </h2>
+            <p className="mt-0.5 font-mono text-xs text-zinc-500">J/K move / Enter draft / D dismiss</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <input aria-label="Filter queue" type="search" placeholder="Filter by handle or text" value={filter} onChange={(e) => setFilter(e.target.value)} className={`${input} w-52`} />
             <label className="flex items-center gap-2 text-sm">
-              <span className={muted}>Source</span>
-              <select value={params.feed_source} onChange={(e) => setParams({ ...params, feed_source: e.target.value as SessionParams["feed_source"] })} className={input}>
-                <option value="for_you">For You feed</option>
-                <option value="following">Following feed</option>
-                <option value="watchlist">Watchlist accounts</option>
-                <option value="both">For You + Watchlist</option>
-                <option value="all">All sources</option>
-              </select>
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <span className={muted}>Minimum score {params.threshold}</span>
+              <span className={muted}>
+                Min score <span className="font-mono text-zinc-950 dark:text-zinc-50">{params.threshold}</span>
+              </span>
               <input
                 type="range"
                 min={0}
                 max={100}
                 value={params.threshold}
                 onChange={(e) => setParams({ ...params, threshold: Number(e.target.value) })}
-                onMouseUp={() => void p3.setThreshold(params.threshold).then(() => p3.scoutQueue().then(setQueue))}
-                onKeyUp={() => void p3.setThreshold(params.threshold).then(() => p3.scoutQueue().then(setQueue))}
+                onMouseUp={commitThreshold}
+                onKeyUp={commitThreshold}
                 aria-label="Minimum score"
+                className="w-28 accent-zinc-950 dark:accent-zinc-50"
               />
             </label>
           </div>
-        </fieldset>
-        <div className="mt-4 flex items-center gap-3">
-          {running ? (
-            <>
-              <button type="button" className={btn} onClick={togglePause}>
-                {paused === "manual" ? "Resume session" : "Pause session"}
-              </button>
-              <button type="button" className={btn} onClick={stop}>
-                Stop session
-              </button>
-            </>
-          ) : (
-            <button type="button" className={btnPrimary} onClick={start} disabled={busy || killed} title={killed ? "Paused. Resume in the bar above." : undefined}>
-              Start scouting
-            </button>
-          )}
-          <span className={`text-xs ${muted}`}>
-            {formatDuration(params.max_duration_sec)}, up to {params.max_posts} posts
-          </span>
         </div>
-        {running && <Progress p={progress} params={params} />}
-      </section>
 
-      <section aria-labelledby="queue-h">
-        <div className="mb-2 flex items-baseline justify-between">
-          <h2 id="queue-h" className="text-base font-medium">
-            Worth answering ({queue.length})
-          </h2>
-          <span className={`text-xs ${muted}`}>J/K to move, Enter to draft, D to dismiss</span>
-        </div>
-        {queue.length === 0 ? (
-          <EmptyBlock title="Nothing queued yet">
-            Nothing is scoring above {params.threshold}. Start a session, or lower the minimum score.
+        {!loaded ? (
+          <LoadingBlock label="Loading the queue" />
+        ) : queue.length === 0 ? (
+          <EmptyBlock
+            title="Nothing queued yet"
+            action={
+              running ? undefined : (
+                <button type="button" className={btnPrimary} onClick={start} disabled={busy || killed}>
+                  Start scouting
+                </button>
+              )
+            }
+          >
+            {running ? `Scout is reading your feed. Posts scoring above ${params.threshold} appear here as they are found.` : `Nothing scores above ${params.threshold} yet. Start a session, or lower the minimum score.`}
           </EmptyBlock>
+        ) : visible.length === 0 ? (
+          <EmptyBlock>No queued post matches "{filter}".</EmptyBlock>
         ) : (
-          <ul className="space-y-3">
-            {queue.map((item, i) => {
+          <ul className="divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            {visible.map((item) => {
+              const i = queue.indexOf(item);
               const tone = scoreTone(item.score);
+              const active = i === selected;
               return (
                 <li
                   key={item.evaluation_id}
-                  aria-current={i === selected ? "true" : undefined}
+                  aria-current={active ? "true" : undefined}
                   onClick={() => setSelected(i)}
-                  className={`rounded-xl border p-4 ${i === selected ? "border-zinc-900 dark:border-zinc-100" : "border-zinc-200 dark:border-zinc-800"}`}
+                  className={`relative grid cursor-default grid-cols-[3rem_1fr] gap-x-4 py-4 pl-4 transition-colors ${active ? "bg-zinc-100/70 dark:bg-zinc-900/60" : "hover:bg-zinc-50 dark:hover:bg-zinc-900/30"}`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium">@{item.post.handle}</div>
-                      <p className="mt-1 whitespace-pre-wrap text-sm">{item.post.text}</p>
-                    </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold text-white ${TONE[tone]}`} title={`Scored by ${item.model_used}`}>
-                      {Math.round(item.score)}
-                    </span>
+                  {active && <span aria-hidden="true" className="absolute inset-y-0 left-0 w-0.5 bg-zinc-950 dark:bg-zinc-50" />}
+                  <div title={`Scored by ${item.model_used}`}>
+                    <div className="font-mono text-2xl leading-none font-medium tabular-nums">{Math.round(item.score)}</div>
+                    <div aria-hidden="true" className={`mt-2 h-0.5 w-6 ${TONE[tone]}`} />
                   </div>
-                  <p className={`mt-2 text-xs ${muted}`}>
-                    {compactCount(item.metrics.likes)} likes, {compactCount(item.metrics.reposts)} reposts, {compactCount(item.metrics.replies)} replies
-                  </p>
-                  <p className="mt-2 text-sm"><span className="font-medium">Angle:</span> {item.angle}</p>
-                  <p className={`text-sm ${muted}`}>{item.reasoning}</p>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button type="button" className={btnPrimary} onClick={() => void draft(item)}>
-                      {item.draft_id ? "Continue draft" : "Draft reply"}
-                    </button>
-                    <a href={item.post.url} target="_blank" rel="noreferrer" className={btn}>
-                      View on X
-                    </a>
-                    <button type="button" className={btn} onClick={() => setDismissing(dismissing === item.evaluation_id ? null : item.evaluation_id)} aria-expanded={dismissing === item.evaluation_id}>
-                      Dismiss
-                    </button>
-                  </div>
-                  {dismissing === item.evaluation_id && (
-                    <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Why dismiss">
-                      {REASONS.map((r) => (
-                        <button key={r.id} type="button" className={chip(false)} onClick={() => void dismiss(item, r.id)}>
-                          {r.label}
-                        </button>
-                      ))}
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
+                      <span className="text-sm font-medium">@{item.post.handle}</span>
+                      <span className="font-mono text-xs text-zinc-500">
+                        {compactCount(item.metrics.likes)} likes / {compactCount(item.metrics.reposts)} reposts / {compactCount(item.metrics.replies)} replies
+                      </span>
                     </div>
-                  )}
+                    <p className={`mt-1 text-sm leading-relaxed whitespace-pre-wrap ${active ? "" : "line-clamp-2"}`}>{item.post.text}</p>
+                    {active && (
+                      <>
+                        <p className="mt-3 text-sm">
+                          <span className="eyebrow mr-2">Angle</span>
+                          {item.angle}
+                        </p>
+                        <p className={`mt-1 text-sm ${muted}`}>{item.reasoning}</p>
+                        <div className="mt-4 flex flex-wrap items-center gap-2">
+                          <button type="button" className={btnPrimary} onClick={() => void draft(item)}>
+                            {item.draft_id ? "Continue draft" : "Draft reply"}
+                          </button>
+                          <a href={item.post.url} target="_blank" rel="noreferrer" className={btn}>
+                            View on X
+                          </a>
+                          <button type="button" className={btnGhost} onClick={() => setDismissing(dismissing === item.evaluation_id ? null : item.evaluation_id)} aria-expanded={dismissing === item.evaluation_id}>
+                            Dismiss
+                          </button>
+                        </div>
+                        {dismissing === item.evaluation_id && (
+                          <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Why dismiss">
+                            {REASONS.map((r) => (
+                              <button key={r.id} type="button" className={chip(false)} onClick={() => void dismiss(item, r.id)}>
+                                {r.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </li>
               );
             })}
@@ -315,14 +350,16 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
       </section>
 
       {recent.length > 0 && (
-        <section className={panel} aria-labelledby="recent-h">
-          <h2 id="recent-h" className="mb-1 text-base font-medium">Recent sessions</h2>
-          <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
+        <details className="group">
+          <summary className="eyebrow cursor-pointer list-none hover:text-zinc-950 dark:hover:text-zinc-50">
+            Recent sessions <span className="font-mono">{recent.length}</span>
+          </summary>
+          <ul className="mt-2 divide-y divide-zinc-200 dark:divide-zinc-800">
             {recent.map((s) => (
               <SessionRow key={s.id} s={s} />
             ))}
           </ul>
-        </section>
+        </details>
       )}
     </div>
   );

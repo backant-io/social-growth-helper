@@ -421,7 +421,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   const hasOverride = Boolean(overrideSel.providerAccountId && overrideSel.modelId);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader title="Style" description="Teach the app your voice: a guide, a few examples of your own writing, and a bench to test drafts against it." />
       <Tabs
         label="Style sections"
@@ -460,7 +460,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
           <section className={panel}>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <h2 className="font-medium">Style Guide</h2>
+                <h2 className="font-display text-lg font-semibold tracking-tight">Style Guide</h2>
                 <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
                   {guide && guide.version > 0 ? `v${guide.version} active` : "Unsaved starter"}
                 </span>
@@ -749,7 +749,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
           )}
 
           <section className={panel}>
-            <h2 className="font-medium">Add Few-Shot Example</h2>
+            <h2 className="font-display text-lg font-semibold tracking-tight">Add Few-Shot Example</h2>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <select
                 aria-label="New example kind"
@@ -885,7 +885,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
           )}
 
           <section className={panel}>
-            <h2 className="font-medium">Test Input</h2>
+            <h2 className="font-display text-lg font-semibold tracking-tight">Test Input</h2>
             <div className="mt-3 space-y-3">
               <div className="flex flex-wrap gap-2">
                 <input

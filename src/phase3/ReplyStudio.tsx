@@ -6,8 +6,8 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
 import type { ActionName, CompletionStatus, DraftView, ModelOption, PostActionState, QueueItem } from "./types";
-import { LoadingBlock, useKillSwitch } from "../components/ui";
-import { btn, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
+import { EmptyBlock, LoadingBlock, PageHeader, useKillSwitch } from "../components/ui";
+import { btn, btnGhost, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
 
 interface Props {
   draftId: string | null;
@@ -160,19 +160,25 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
 
   if (!draftId) {
     return (
-      <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
-        <h1 className="mb-2 text-xl font-semibold tracking-tight">Reply Studio</h1>
-        <p className={`text-sm ${muted}`}>Pick a post from the Scout Queue to draft a reply in your voice.</p>
-        <button type="button" className={`${btnPrimary} mt-4`} onClick={onGoScout}>
-          Go to Scout Queue
-        </button>
+      <div className="mx-auto max-w-4xl space-y-8">
+        <PageHeader title="Reply Studio" description="Draft, edit and publish a reply to one post, in your voice. You approve every action." />
+        <EmptyBlock
+          title="No post selected"
+          action={
+            <button type="button" className={btnPrimary} onClick={onGoScout}>
+              Open Scout
+            </button>
+          }
+        >
+          Pick a post in Scout and choose Draft reply. It opens here with three variants to edit.
+        </EmptyBlock>
       </div>
     );
   }
   if (!draft) {
     return (
-      <div className="mx-auto max-w-3xl space-y-4">
-        <h1 className="text-xl font-semibold tracking-tight">Reply Studio</h1>
+      <div className="mx-auto max-w-4xl space-y-8">
+        <PageHeader title="Reply Studio" />
         {error ? <Notice tone="error">{error}</Notice> : <LoadingBlock label="Loading draft" />}
       </div>
     );
@@ -210,13 +216,15 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   return (
     <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
       <div className="space-y-4">
-        <header className="flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight">Reply Studio</h1>
-          <div className="flex gap-2">
-            <button type="button" className={btn} onClick={() => void move(-1)} aria-label="Previous queue item">Prev</button>
-            <button type="button" className={btn} onClick={() => void move(1)} aria-label="Next queue item">Next</button>
-          </div>
-        </header>
+        <PageHeader
+          title="Reply Studio"
+          actions={
+            <>
+              <button type="button" className={btnGhost} onClick={() => void move(-1)} aria-label="Previous queue item">Prev</button>
+              <button type="button" className={btnGhost} onClick={() => void move(1)} aria-label="Next queue item">Next</button>
+            </>
+          }
+        />
         <section className={panel} aria-label="Original post">
           <div className="flex items-baseline justify-between">
             <span className="text-sm font-medium">@{draft.post.handle}</span>
@@ -234,12 +242,12 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           )}
         </section>
         <section className={panel} aria-label="Why this post was picked">
-          <h2 className="mb-1 text-base font-medium">Why this post{draft.score != null ? ` (score ${Math.round(draft.score)})` : ""}</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Why this post{draft.score != null ? ` (score ${Math.round(draft.score)})` : ""}</h2>
           {draft.angle && <p className="text-sm"><span className="font-medium">Angle:</span> {draft.angle}</p>}
           {draft.reasoning && <p className={`mt-1 text-sm ${muted}`}>{draft.reasoning}</p>}
         </section>
         <section className={panel} aria-label="Actions on this post">
-          <h2 className="mb-1 text-base font-medium">Do it now</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Do it now</h2>
           <p className={`mb-3 text-xs ${muted}`}>One click, one action, in the X window. Reply and Quote go through Publish below.</p>
           <div className="grid grid-cols-2 gap-2">
             {ACTION_ORDER.filter((a) => !ACTION_META[a].text).map((a) => {
@@ -285,7 +293,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
 
         <section className={panel} aria-label="Variants">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-medium">Variants</h2>
+            <h2 className="font-display text-lg font-semibold tracking-tight">Variants</h2>
             <div className="flex flex-wrap gap-2">
               {TRANSFORMS.map((t) => (
                 <button key={t.id} type="button" className={chip(false)} disabled={!editable || busy !== null} onClick={() => void transform(t.id)}>
@@ -307,7 +315,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
                       disabled={!editable}
                       onClick={() => void pick(v.id)}
                       aria-pressed={current}
-                      className={`w-full rounded-lg border p-3 text-left text-sm ${current ? "border-zinc-900 dark:border-zinc-100" : "border-zinc-200 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900"}`}
+                      className={`w-full rounded-lg border p-3.5 text-left text-sm transition-colors ${current ? "border-zinc-950 bg-zinc-100/70 dark:border-zinc-50 dark:bg-zinc-900/60" : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-600"}`}
                     >
                       <p className="whitespace-pre-wrap">{v.text}</p>
                       <p className={`mt-1 text-xs ${muted}`}>{[v.tone, v.model_used].filter(Boolean).join(" . ")}</p>
@@ -358,7 +366,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
         </section>
 
         <section className={panel} aria-label="Publish bundle">
-          <h2 className="mb-2 text-base font-medium">What Publish will do</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">What Publish will do</h2>
           <div className="flex flex-wrap gap-2">
             {ACTION_ORDER.map((a) => (
               <button key={a} type="button" disabled={!editable || busy !== null} className={chip(draft.actions.includes(a))} aria-pressed={draft.actions.includes(a)} onClick={() => void toggleBundle(a)}>

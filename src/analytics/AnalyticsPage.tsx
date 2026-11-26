@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Notice, PageHeader } from "../components/ui";
+import { btn, btnPrimary, EmptyBlock, Notice, PageHeader } from "../components/ui";
 import { analyticsApi } from "./api";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
@@ -169,12 +169,12 @@ export function AnalyticsPage() {
 
   if (!snapshot) {
     return (
-      <div className="mx-auto max-w-7xl space-y-6">
+      <div className="mx-auto max-w-6xl space-y-8">
         <PageHeader title="Analytics" description="How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer." />
         {error ? (
           <Notice tone="error">{error}</Notice>
         ) : (
-          <div className="grid grid-cols-12 gap-4">
+          <div className="grid grid-cols-12 gap-5">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div
                 key={i}
@@ -188,7 +188,7 @@ export function AnalyticsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-8">
       <LayoutControls
         activeLayout={snapshot.active_layout}
         layouts={snapshot.layouts}
@@ -234,29 +234,23 @@ export function AnalyticsPage() {
       {error && <Notice tone="error">{error}</Notice>}
 
       {snapshot.widgets.length === 0 ? (
-        <div className="space-y-3 rounded-xl border border-dashed border-zinc-300 p-6 text-center dark:border-zinc-700">
-          <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            This layout has no widgets yet.
-          </div>
-          <div className="flex justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => setBuilderTarget({ open: true, widget: null })}
-              className="rounded-lg bg-sky-600 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-            >
-              + Reprompt Widget
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
-              className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-3.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200"
-            >
-              Restore Starter Layout
-            </button>
-          </div>
-        </div>
+        <EmptyBlock
+          title="This layout has no widgets yet"
+          action={
+            <>
+              <button type="button" onClick={() => setBuilderTarget({ open: true, widget: null })} className={btnPrimary}>
+                Add a widget
+              </button>
+              <button type="button" onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())} className={btn}>
+                Restore starter layout
+              </button>
+            </>
+          }
+        >
+          Widgets show your numbers as KPIs and charts.
+        </EmptyBlock>
       ) : (
-        <div className="grid grid-cols-12 gap-4">
+        <div className="grid grid-cols-12 gap-5">
           {snapshot.widgets.map((item, idx) => (
             <WidgetCard
               key={item.widget.id}

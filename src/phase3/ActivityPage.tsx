@@ -32,7 +32,7 @@ function Checklist() {
 
   return (
     <section className={panel} aria-labelledby="chk-h">
-      <h2 id="chk-h" className="font-medium">Live action check</h2>
+      <h2 id="chk-h" className="font-display text-lg font-semibold tracking-tight">Live action check</h2>
       <p className={`mt-1 text-sm ${muted}`}>
         Run on a post you own or a throwaway test post. Like, bookmark, repost and follow are done and then undone; reply and quote are checked by hand. The result is saved with the selector version so X changes show up quickly.
       </p>
@@ -77,7 +77,7 @@ export function ActivityPage() {
   const shown = entries.filter((e) => filter === "all" || e.kind === filter);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader
         title="Activity"
         description="Everything the app did on X: scout runs, publishes, single actions, challenges and errors."

@@ -119,7 +119,7 @@ export function WritePanel({ locked, xRunning, paused, onGoToSettings }: Props) 
       />
 
       <section className={panel} aria-labelledby="w-h">
-        <h2 id="w-h" className="text-base font-medium">New original post</h2>
+        <h2 id="w-h" className="font-display text-lg font-semibold tracking-tight">New original post</h2>
         <p className={`mt-1 text-sm ${muted}`}>Write a rough thought. The app fits it into a format that has worked for others and drafts three versions in your voice.</p>
         <ol className={`mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs ${muted}`} aria-label="How it works">
           <li><span className="font-medium text-zinc-900 dark:text-zinc-100">1.</span> Write a draft</li>

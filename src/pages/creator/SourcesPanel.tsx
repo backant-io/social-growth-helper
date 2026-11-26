@@ -61,7 +61,7 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
       {!thresholds && !settings && !error && <LoadingBlock label="Loading sources" />}
 
       <section className={panel} aria-labelledby="wl-h">
-        <h2 id="wl-h" className="text-base font-medium">Creator watchlist</h2>
+        <h2 id="wl-h" className="font-display text-lg font-semibold tracking-tight">Creator watchlist</h2>
         <p className={`mt-1 text-sm ${muted}`}>Creators whose posts you want to learn from. A scan opens one creator's profile in your X window, reads what is on screen and flags posts that over-perform. It only runs when you press Scan.</p>
         <form
           className="mt-3 flex flex-wrap gap-2"
@@ -116,7 +116,7 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
 
       {thresholds && (
         <section className={panel} aria-labelledby="th-h">
-          <h2 id="th-h" className="text-base font-medium">What counts as viral</h2>
+          <h2 id="th-h" className="font-display text-lg font-semibold tracking-tight">What counts as viral</h2>
           <p className={`mt-1 text-sm ${muted}`}>A post is flagged when it clears the minimum engagement and either beats the creator's follower count by the reach multiple or is saved unusually often. The defaults are a starting point; tune them against what you see.</p>
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
             {numField("Minimum engagement", thresholds.min_engagement, (n) => setThresholds({ ...thresholds, min_engagement: n }))}
@@ -133,7 +133,7 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
 
       {settings && (
         <section className={panel} aria-labelledby="cs-h">
-          <h2 id="cs-h" className="text-base font-medium">Writing</h2>
+          <h2 id="cs-h" className="font-display text-lg font-semibold tracking-tight">Writing</h2>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block text-sm">
               <span className="mb-1 block text-zinc-500">Originality warning at {Math.round(settings.similarity_threshold * 100)}% overlap</span>

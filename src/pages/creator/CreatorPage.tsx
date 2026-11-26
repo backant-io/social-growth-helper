@@ -30,7 +30,7 @@ export function CreatorPage({ locked, onGoToSettings }: { locked: boolean; onGoT
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader title="Creator" description="Turn a rough thought into an original post, using formats that have worked for others. You approve every post before it goes to X." />
       <Tabs label="Creator sections" idPrefix="creator" tabs={TABS} active={tab} onChange={setTab} />
       <div role="tabpanel" id={`creator-panel-${tab}`} aria-labelledby={`creator-tab-${tab}`}>

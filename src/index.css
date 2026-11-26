@@ -90,11 +90,53 @@
   --color-zinc-900: #121212;
   --color-zinc-950: #080808;
 
+  /* Accent families collapse onto the neutral scale: no hues except status. */
+  --color-sky-50: #f9f9f9;
+  --color-sky-100: #f3f3f3;
+  --color-sky-200: #e6e6e6;
+  --color-sky-300: #d2d2d2;
+  --color-sky-400: #a0a0a0;
+  --color-sky-500: #767676;
+  --color-sky-600: #5a5a5a;
+  --color-sky-700: #3f3f3f;
+  --color-sky-800: #242424;
+  --color-sky-900: #121212;
+  --color-sky-950: #080808;
+  --color-violet-50: #f9f9f9;
+  --color-violet-100: #f3f3f3;
+  --color-violet-200: #e6e6e6;
+  --color-violet-300: #d2d2d2;
+  --color-violet-400: #a0a0a0;
+  --color-violet-500: #767676;
+  --color-violet-600: #5a5a5a;
+  --color-violet-700: #3f3f3f;
+  --color-violet-800: #242424;
+  --color-violet-900: #121212;
+  --color-violet-950: #080808;
+  --color-blue-50: #f9f9f9;
+  --color-blue-100: #f3f3f3;
+  --color-blue-200: #e6e6e6;
+  --color-blue-300: #d2d2d2;
+  --color-blue-400: #a0a0a0;
+  --color-blue-500: #767676;
+  --color-blue-600: #5a5a5a;
+  --color-blue-700: #3f3f3f;
+  --color-blue-800: #242424;
+  --color-blue-900: #121212;
+  --color-blue-950: #080808;
+  --color-indigo-50: #f9f9f9;
+  --color-indigo-100: #f3f3f3;
+  --color-indigo-200: #e6e6e6;
+  --color-indigo-300: #d2d2d2;
+  --color-indigo-400: #a0a0a0;
+  --color-indigo-500: #767676;
+  --color-indigo-600: #5a5a5a;
+  --color-indigo-700: #3f3f3f;
+  --color-indigo-800: #242424;
+  --color-indigo-900: #121212;
+  --color-indigo-950: #080808;
+
   /* Status colours stay recognisable but are pulled toward neutral. */
-  --color-sky-50: #f4f4f4;
-  --color-sky-200: #dcdcdc;
-  --color-sky-900: #1c1c1c;
-  --color-sky-950: #141414;
   --color-amber-50: #faf6ec;
   --color-amber-100: #f4ebd2;
   --color-amber-200: #e9d9ab;

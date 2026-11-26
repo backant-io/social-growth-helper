@@ -41,7 +41,7 @@ export function DataPanel({ onDataChanged }: Props) {
 
   return (
     <section className={panel} aria-labelledby="data-h">
-      <h2 id="data-h" className="font-medium">Your data</h2>
+      <h2 id="data-h" className="font-display text-lg font-semibold tracking-tight">Your data</h2>
       <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
         Everything lives on this computer. Export a copy to move to another machine, or delete it all. Exports never include API keys, cookies or your X login.
       </p>

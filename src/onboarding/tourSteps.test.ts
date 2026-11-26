@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { browserHint, providerHint, routingHint, SETUP_STEP_COPY, TOUR_STEPS, wizardOrder } from "./tourSteps";
+import { browserHint, providerHint, SETUP_STEP_COPY, TOUR_STEPS, wizardOrder } from "./tourSteps";
 
 describe("wizard order", () => {
   it("shows the tour, then the rules acknowledgement, before any setup step", () => {
     const order = wizardOrder();
     expect(order[TOUR_STEPS.length].kind).toBe("rules");
-    expect(order.at(-1)?.kind).toBe("routing");
+    expect(order.at(-1)?.kind).toBe("style");
     expect(order.filter((s) => s.kind === "tour")).toHaveLength(TOUR_STEPS.length);
     expect(order.slice(0, TOUR_STEPS.length).every((s) => s.kind === "tour")).toBe(true);
   });
@@ -34,10 +34,10 @@ describe("tour content", () => {
 });
 
 describe("guided setup steps", () => {
-  it("walks the rules, preferences, Chrome and X login, providers, style guide and model routing", () => {
+  it("walks the rules, preferences, Chrome and X login, one AI connection and the style guide", () => {
     const kinds = wizardOrder().map((s) => s.kind).filter((k) => k !== "tour");
-    expect(kinds).toEqual(["rules", "preferences", "browser", "providers", "style", "routing"]);
-    expect(Object.keys(SETUP_STEP_COPY)).toEqual(["browser", "providers", "style", "routing"]);
+    expect(kinds).toEqual(["rules", "preferences", "browser", "providers", "style"]);
+    expect(Object.keys(SETUP_STEP_COPY)).toEqual(["browser", "providers", "style"]);
   });
 
   it("reports Chrome detection and when login unlocks", () => {
@@ -48,10 +48,8 @@ describe("guided setup steps", () => {
     expect(browserHint({ install: {}, running: true }, true).text).toContain("Log in to X");
   });
 
-  it("reports provider and routing progress", () => {
+  it("reports provider progress", () => {
     expect(providerHint([{ status: "disconnected" }]).done).toBe(false);
-    expect(providerHint([{ status: "connected" }, { status: "connected" }]).text).toBe("2 providers connected.");
-    expect(routingHint([{ provider_account_id: null, model_id: null }]).done).toBe(false);
-    expect(routingHint([{ provider_account_id: "a", model_id: "m" }, { provider_account_id: null, model_id: null }]).text).toBe("1 of 2 tasks have a model.");
+    expect(providerHint([{ status: "connected" }, { status: "connected" }]).text).toContain("2 providers connected");
   });
 });

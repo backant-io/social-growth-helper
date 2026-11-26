@@ -832,7 +832,7 @@ function previewReprompt(prompt: string, currentSpec: WidgetSpec | null, windowD
       provider_type: null,
       provider_label: null,
       model_id: null,
-      note: "No model is assigned to dashboard_builder yet (Settings → Model Routing). Using built-in deterministic widget planner.",
+      note: "No model is assigned to dashboard_builder yet (Settings → AI models). Using built-in deterministic widget planner.",
     },
     summary: `Preview ready (${spec.chart_type} over ${spec.view}).`,
   };
@@ -906,7 +906,7 @@ export const analyticsApi = {
         provider_type: null,
         provider_label: null,
         model_id: null,
-        note: "No model is assigned to dashboard_builder yet (Settings → Model Routing). Using built-in deterministic widget planner.",
+        note: "No model is assigned to dashboard_builder yet (Settings → AI models). Using built-in deterministic widget planner.",
       },
       window_days: windowDays,
     };

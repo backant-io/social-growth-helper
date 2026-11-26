@@ -142,7 +142,7 @@ export function WidgetCard({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} flex flex-col rounded-xl border bg-transparent/80 p-4 shadow-sm transition-all ${
+      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} group flex flex-col rounded-lg border bg-transparent p-5 transition-all ${
         isDropTarget
           ? "border-sky-500 ring-2 ring-sky-500/50"
           : customizeMode
@@ -162,7 +162,7 @@ export function WidgetCard({
             </span>
           )}
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+            <h3 className="eyebrow leading-snug">
               {widget.title}
             </h3>
             {!isKpi && widget.spec.options.subtitle && (
@@ -226,7 +226,7 @@ export function WidgetCard({
               </button>
             </>
           ) : (
-            <>
+            <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               <button
                 type="button"
                 onClick={onReprompt}
@@ -243,7 +243,7 @@ export function WidgetCard({
               >
                 CSV
               </button>
-            </>
+            </div>
           )}
         </div>
       </header>

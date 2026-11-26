@@ -22,23 +22,17 @@ export function SyncHealthBanner({
 }: SyncHealthBannerProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const badgeStyle =
-    !health
-      ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-      : health.status === "ok"
-        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-        : health.status === "warning"
-          ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-          : "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300";
+  const dot = !health ? "bg-zinc-300 dark:bg-zinc-700" : health.status === "ok" ? "bg-emerald-600" : health.status === "warning" ? "bg-amber-500" : "bg-red-600";
 
   const hasDetails = (health?.issues.length ?? 0) > 0 || schedule.items.length > 0;
   const hasDue = schedule.posts_due_now > 0 || schedule.missed_windows > 0;
 
   return (
-    <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/60 px-4 py-2.5 text-xs">
+    <div className="text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={`rounded-full px-2 py-0.5 font-medium ${badgeStyle}`}>
+          <span className="inline-flex items-center gap-1.5 font-medium text-zinc-900 dark:text-zinc-100">
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${dot}`} />
             {!health ? "Not synced yet" : health.status === "ok" ? "Ingest healthy" : `Ingest ${health.status}`}
           </span>
 
@@ -53,12 +47,12 @@ export function SyncHealthBanner({
             </span>
           )}
 
-          {lastSyncNote && <span className="text-sky-700 dark:text-sky-400">{lastSyncNote}</span>}
+          {lastSyncNote && <span className="text-zinc-500">{lastSyncNote}</span>}
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-zinc-500">
           <span>
-            Checkpoints (1h/6h/24h/72h/7d):{" "}
+            Checkpoints:{" "}
             <strong className="text-zinc-800 dark:text-zinc-200">{schedule.posts_due_now}</strong> due
             {schedule.missed_windows > 0 && (
               <span className="ml-1 text-amber-600 dark:text-amber-400">
@@ -72,7 +66,7 @@ export function SyncHealthBanner({
               type="button"
               disabled={syncing}
               onClick={onSyncDue}
-              className="rounded border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/60 px-2 py-0.5 font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-950 disabled:opacity-40"
+              className="rounded border border-zinc-300 px-2 py-0.5 font-medium hover:border-zinc-900 disabled:opacity-40 dark:border-zinc-700"
             >
               Sync Due
             </button>
@@ -95,7 +89,7 @@ export function SyncHealthBanner({
             <button
               type="button"
               onClick={() => setExpanded((v) => !v)}
-              className="text-sky-600 dark:text-sky-400 hover:underline"
+              className="underline-offset-2 hover:text-zinc-950 hover:underline dark:hover:text-zinc-50"
             >
               {expanded ? "Hide details" : `Details${health?.issues.length ? ` (${health.issues.length})` : ""}`}
             </button>

@@ -3,8 +3,9 @@ import { btn, btnGhost, btnPrimary } from "../components/ui";
 import { api } from "../lib/api";
 import { useOnlineStatus } from "../lib/errors";
 import type { BrowserInfo, ProviderAccountView, StyleGuide, TaskModelRoute } from "../lib/types";
-import { BrowserPanel, ProvidersPanel, RoutingPanel } from "../pages/SettingsPage";
-import { browserHint, providerHint, routingHint, SETUP_STEP_COPY, type SetupHint } from "./tourSteps";
+import { BrowserPanel } from "../pages/SettingsPage";
+import { ModelsPanel } from "../pages/ModelsPanel";
+import { browserHint, providerHint, SETUP_STEP_COPY, type SetupHint } from "./tourSteps";
 
 type SetupKind = keyof typeof SETUP_STEP_COPY;
 
@@ -117,7 +118,7 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
   }, []);
 
   useEffect(() => {
-    if (kind === "providers" || kind === "routing") void loadLlm();
+    if (kind === "providers") void loadLlm();
     if (kind !== "browser") return;
     const poll = () => void api.browserInfo().then(setInfo);
     poll();
@@ -135,7 +136,7 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
   if (kind === "providers") {
     return (
       <Frame kind={kind} hint={providerHint(providers)} onBack={onBack} onNext={onNext} finish={finish}>
-        <ProvidersPanel providers={providers} offline={offline} onChanged={loadLlm} />
+        <ModelsPanel compact providers={providers} routes={routes} offline={offline} onChanged={loadLlm} />
       </Frame>
     );
   }
@@ -147,9 +148,5 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
       </Frame>
     );
   }
-  return (
-    <Frame kind={kind} hint={routingHint(routes)} onBack={onBack} onNext={onNext} finish={finish}>
-      <RoutingPanel providers={providers} routes={routes} onChanged={loadLlm} />
-    </Frame>
-  );
+  return null;
 }

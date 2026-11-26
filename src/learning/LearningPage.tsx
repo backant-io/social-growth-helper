@@ -70,7 +70,7 @@ export function LearningPage({ onProposedChange }: Props) {
 
   if (!data) {
     return (
-      <div className="mx-auto max-w-3xl space-y-6">
+      <div className="mx-auto max-w-4xl space-y-8">
         <PageHeader title="Learning" description="What the app noticed about your edits and results, and small changes it suggests." />
         {message ? <Notice tone="error">{message.text}</Notice> : <LoadingBlock label="Loading suggestions" />}
       </div>
@@ -86,7 +86,7 @@ export function LearningPage({ onProposedChange }: Props) {
   ];
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-8">
       <PageHeader
         title="Learning"
         description="The app compares your edits and results with what it drafted, then suggests small changes. Nothing changes until you apply it, and every change can be undone."
@@ -167,7 +167,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.edit.removed.length > 0 && (
         <section className={panel}>
-          <h2 className="text-base font-medium">Phrases you keep deleting</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Phrases you keep deleting</h2>
           <ul className="mt-2 flex flex-wrap gap-2 text-xs">
             {s.edit.removed.map((p) => (
               <li key={p.phrase} className="rounded-full bg-red-50 px-2 py-0.5 text-red-800 dark:bg-red-950 dark:text-red-300">
@@ -192,7 +192,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.timing.age.length > 0 && (
         <section className={panel}>
-          <h2 className="text-base font-medium">Results by how fast you replied</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Results by how fast you replied</h2>
           <p className="text-xs text-zinc-500">1.0x is your typical result, adjusted for the author's reach.</p>
           <Bars rows={s.timing.age} />
           {s.timing.tier.length > 0 && (
@@ -206,7 +206,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.models.length > 0 && (
         <section className={panel}>
-          <h2 className="text-base font-medium">Which model drafts fit you best</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Which model drafts fit you best</h2>
           <table className="mt-2 w-full text-sm">
             <thead className="text-left text-xs text-zinc-500">
               <tr><th className="font-normal">Model</th><th className="font-normal">Drafts</th><th className="font-normal">Used with light edits</th><th className="font-normal">Results</th></tr>
@@ -224,7 +224,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {s.dismissal.dismissed > 0 && (
         <section className={panel}>
-          <h2 className="text-base font-medium">What you skip</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">What you skip</h2>
           <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
             You dismissed {s.dismissal.dismissed} posts and replied to {s.dismissal.drafted}.
             {s.dismissal.reasons.length > 0 && ` Most common reason: ${s.dismissal.reasons[0][0]} (${s.dismissal.reasons[0][1]}).`}
@@ -234,7 +234,7 @@ function SignalsTab({ data, onChanged }: { data: LearningOverview; onChanged: ()
 
       {(s.best.length > 0 || s.weakest.length > 0) && (
         <section className={panel}>
-          <h2 className="text-base font-medium">Best and weakest replies</h2>
+          <h2 className="font-display text-lg font-semibold tracking-tight">Best and weakest replies</h2>
           <ul className="mt-2 space-y-2 text-sm">
             {[...s.best.map((b) => ({ ...b, tone: "best" })), ...s.weakest.map((b) => ({ ...b, tone: "weak" }))].map((b) => (
               <li key={`${b.tone}-${b.draft_id}`} className="flex justify-between gap-3">
@@ -283,7 +283,7 @@ function MinSample({ value, onSaved }: { value: number; onSaved: () => void }) {
   };
   return (
     <section className={panel}>
-      <h2 className="text-base font-medium">Minimum sample</h2>
+      <h2 className="font-display text-lg font-semibold tracking-tight">Minimum sample</h2>
       <p className="mt-1 text-xs text-zinc-500">Below this many published replies, suggestions are marked low confidence.</p>
       <div className="mt-2 flex items-center gap-2">
         <input aria-label="Minimum published replies" inputMode="numeric" className={`${input} w-24`} value={text} onChange={(e) => setText(e.target.value)} />
@@ -316,7 +316,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       {loadError && <p role="alert" className="text-sm text-red-600">{loadError}</p>}
 
       <section className={panel} aria-label="Scout rubric versions">
-        <h2 className="text-base font-medium">Scout rubric</h2>
+        <h2 className="font-display text-lg font-semibold tracking-tight">Scout rubric</h2>
         {rubric.length === 0 ? (
           <p className="mt-1 text-sm text-zinc-500">No versions yet. The first change you apply creates one.</p>
         ) : (
@@ -363,7 +363,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       </section>
 
       <section className={panel} aria-label="Examples">
-        <h2 className="text-base font-medium">Kept examples</h2>
+        <h2 className="font-display text-lg font-semibold tracking-tight">Kept examples</h2>
         <p className="mt-1 text-xs text-zinc-500">Replies you chose to keep. They guide the voice of future drafts.</p>
         {examples.length === 0 ? (
           <p className="mt-2 text-sm text-zinc-500">Nothing here yet.</p>
@@ -385,7 +385,7 @@ function HistoryTab({ data, busy, run }: { data: LearningOverview; busy: boolean
       </section>
 
       <section className={panel} aria-label="Change log">
-        <h2 className="text-base font-medium">Change log</h2>
+        <h2 className="font-display text-lg font-semibold tracking-tight">Change log</h2>
         {changelog.length === 0 ? (
           <p className="mt-2 text-sm text-zinc-500">No changes yet.</p>
         ) : (

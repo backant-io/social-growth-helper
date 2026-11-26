@@ -26,7 +26,7 @@ export function InsightCard({ insight, busy, onAccept, onReject }: Props) {
         <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-medium dark:bg-zinc-800">{categoryLabel(insight.category)}</span>
         <span className="text-zinc-500">Changes: {targetLabel(insight.patch.target)}</span>
         <span
-          className={`rounded-full px-2 py-0.5 ${insight.low_confidence ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" : "bg-zinc-100 dark:bg-zinc-800"}`}
+          className={`rounded-full px-2 py-0.5 ${insight.low_confidence ? "border border-zinc-400 text-zinc-700 dark:border-zinc-600 dark:text-zinc-300" : "bg-zinc-100 dark:bg-zinc-800"}`}
           title={`Confidence ${(insight.confidence * 100).toFixed(0)}% from ${insight.sample_size} published replies`}
         >
           {confidenceLabel(insight.confidence)} confidence{insight.low_confidence ? " (small sample)" : ""}
