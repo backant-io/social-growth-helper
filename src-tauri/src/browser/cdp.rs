@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Message;
 
 /// CDP methods that must never be sent. `Runtime.enable` makes `consoleAPICalled` serialization
@@ -34,6 +34,7 @@ pub struct CleanCdpSession {
     next_id: AtomicU64,
     tx: mpsc::UnboundedSender<Message>,
     pending: Pending,
+    events: broadcast::Sender<Value>,
     log: Arc<StdMutex<Vec<String>>>,
     closed: Arc<AtomicBool>,
 }
@@ -50,6 +51,7 @@ impl CleanCdpSession {
         let (mut sink, mut stream) = ws.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
         let pending: Pending = Arc::default();
+        let (events, _) = broadcast::channel::<Value>(256);
         let closed = Arc::new(AtomicBool::new(false));
 
         tokio::spawn(async move {
@@ -62,12 +64,18 @@ impl CleanCdpSession {
         });
 
         let reader_pending = pending.clone();
+        let reader_events = events.clone();
         let reader_closed = closed.clone();
         tokio::spawn(async move {
             while let Some(Ok(msg)) = stream.next().await {
                 let Message::Text(text) = msg else { continue };
                 let Ok(v) = serde_json::from_str::<Value>(text.as_str()) else { continue };
-                let Some(id) = v.get("id").and_then(Value::as_u64) else { continue };
+                let Some(id) = v.get("id").and_then(Value::as_u64) else {
+                    if v.get("method").is_some() {
+                        let _ = reader_events.send(v);
+                    }
+                    continue;
+                };
                 let result = match v.get("error") {
                     Some(err) => Err(BrowserError::CdpProtocol {
                         code: err.get("code").and_then(Value::as_i64).unwrap_or(-1),
@@ -85,7 +93,12 @@ impl CleanCdpSession {
             }
         });
 
-        Ok(Self { next_id: AtomicU64::new(1), tx, pending, log: Arc::default(), closed })
+        Ok(Self { next_id: AtomicU64::new(1), tx, pending, events, log: Arc::default(), closed })
+    }
+
+    /// Subscribe to CDP events (e.g. `Network.responseReceived` during explicit analytics sync).
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Value> {
+        self.events.subscribe()
     }
 
     pub fn is_closed(&self) -> bool {

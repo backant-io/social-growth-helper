@@ -1,7 +1,7 @@
 //! Application-facing wrapper over a [`BrowserDriver`]: serialises access, makes launch idempotent,
 //! and guarantees the X window is closed when the app quits (BRW-16).
 
-use super::{BrowserDriver, BrowserError, ChromeLaunchConfig};
+use super::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, ChromeLaunchConfig};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -113,6 +113,15 @@ impl BrowserService {
             return Err(BrowserError::Disconnected);
         }
         d.click_point(x, y).await
+    }
+
+    /// Captures an X analytics page in a dedicated tab with temporary passive network sniffing (BRW-13, ANL-04).
+    pub async fn capture_analytics_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.capture_analytics_page(req).await
     }
 }
 

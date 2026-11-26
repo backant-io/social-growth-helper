@@ -31,6 +31,33 @@ pub struct WindowBounds {
     pub height: u32,
 }
 
+/// Request for read-only analytics capture on a dedicated tab with passive network sniffing (BRW-13, ANL-04).
+#[derive(Debug, Clone)]
+pub struct AnalyticsPageRequest {
+    pub url: String,
+    /// Case-insensitive URL substrings (e.g. GraphQL operation names `AccountOverviewQuery`, `TweetActivityQuery`).
+    pub network_url_filters: Vec<String>,
+    /// Read-only JS evaluated in an isolated world as DOM fallback / page metadata.
+    pub dom_script: String,
+    /// Extra settle window after load so async X GraphQL analytics responses arrive.
+    pub settle_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CapturedNetworkResponse {
+    pub url: String,
+    pub status: i64,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AnalyticsPageCapture {
+    pub final_url: String,
+    pub used_dedicated_tab: bool,
+    pub network_responses: Vec<CapturedNetworkResponse>,
+    pub dom_result: serde_json::Value,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum BrowserError {
     #[error("forbidden CDP method attempted: {0}")]
@@ -73,4 +100,19 @@ pub trait BrowserDriver: Send + Sync {
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError>;
     /// Graceful `Browser.close` so Chrome flushes cookies and storage before exiting (BRW-16).
     async fn close_gracefully(&mut self) -> Result<(), BrowserError>;
+
+    /// Opens an analytics page in a dedicated tab (BRW-13) with temporary passive `Network` capture (ANL-04)
+    /// and isolated-world DOM extraction. Default implementation falls back to `navigate` + `eval_json`
+    /// so lightweight test drivers do not need to override it.
+    async fn capture_analytics_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
+        self.navigate(&req.url).await?;
+        let dom_result = self.eval_json(&req.dom_script).await?;
+        let final_url = self.current_url().await.unwrap_or(req.url);
+        Ok(AnalyticsPageCapture {
+            final_url,
+            used_dedicated_tab: false,
+            network_responses: vec![],
+            dom_result,
+        })
+    }
 }
