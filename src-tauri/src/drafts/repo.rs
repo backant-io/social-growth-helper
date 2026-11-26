@@ -1,6 +1,8 @@
 use super::bundle::{self, ActionKind};
 use super::edit::edit_distance;
-use super::generate::{StyleContext, Variant};
+use super::generate::{StyleContext, StyleShot, Variant};
+use crate::style::repo::{get_active_style_guide, retrieve_examples_for_prompt};
+use crate::style::ExampleKind;
 use crate::error::{AppError, AppResult};
 use crate::util::{new_id, now_rfc3339};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -67,18 +69,33 @@ pub fn post_url(handle: &str, id: &str) -> String {
 }
 
 pub fn load_style(conn: &Connection, profile_id: &str) -> AppResult<StyleContext> {
-    let row = conn
-        .query_row(
-            "SELECT version, free_text_guide, banned_patterns_json FROM style_guides
-             WHERE profile_id = ?1 AND is_active = 1 ORDER BY version DESC LIMIT 1",
-            [profile_id],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
-        )
-        .optional()?;
-    Ok(match row {
-        Some((version, guide, banned)) => StyleContext { version, guide, banned: serde_json::from_str(&banned).unwrap_or_default() },
-        None => StyleContext::default(),
+    let guide = get_active_style_guide(conn, profile_id)?;
+    if guide.version == 0 {
+        return Ok(StyleContext::default());
+    }
+    Ok(StyleContext {
+        version: i64::from(guide.version),
+        guide: guide.free_text_guide,
+        banned: guide.banned_patterns,
+        learned_rules: guide.learned_rules,
+        max_reply_chars: Some(guide.max_reply_chars),
+        emoji_policy: guide.emoji_policy,
+        hashtag_policy: guide.hashtag_policy,
+        examples: vec![],
     })
+}
+
+/// How many few-shot examples go into a drafting prompt.
+pub const FEW_SHOT_LIMIT: usize = 4;
+
+/// The active style guide plus pinned, FTS-matched and top-performing examples for `post_text` (STY-03).
+pub fn load_style_for_generation(conn: &Connection, profile_id: &str, post_text: &str) -> AppResult<StyleContext> {
+    let mut style = load_style(conn, profile_id)?;
+    style.examples = retrieve_examples_for_prompt(conn, profile_id, ExampleKind::Reply, post_text, FEW_SHOT_LIMIT)?
+        .into_iter()
+        .map(|r| StyleShot { context: r.example.source_context_text, text: r.example.example_text, why: r.example.why_it_works })
+        .collect();
+    Ok(style)
 }
 
 pub fn post_by_observed(conn: &Connection, observed_id: &str) -> AppResult<PostView> {
@@ -425,5 +442,82 @@ mod tests {
         let s = steps(&conn, &d).unwrap();
         assert_eq!(s.iter().map(|x| (x.action.as_str(), x.status.as_str())).collect::<Vec<_>>(), vec![("like", "done"), ("reply", "failed")]);
         assert_eq!(step_status(&conn, &d, ActionKind::Like).unwrap().as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn generation_uses_active_guide_constraints_and_retrieved_examples() {
+        use crate::completion::ScriptedProvider;
+        use crate::drafts::generate::{generate, GenRequest, Instruction};
+        use crate::style::repo::{save_style_guide_version, upsert_style_example};
+        use crate::style::{EmojiPolicy, ExampleKind, HashtagPolicy, StyleExampleInput, StyleGuideInput};
+
+        let (conn, profile) = db();
+        save_style_guide_version(
+            &conn,
+            &profile,
+            StyleGuideInput {
+                free_text_guide: "Terse infra engineer voice.".into(),
+                learned_rules: vec!["Lead with the fix".into()],
+                banned_patterns: vec!["synergy".into()],
+                max_reply_chars: 50,
+                emoji_policy: EmojiPolicy::None,
+                hashtag_policy: HashtagPolicy::None,
+                note: None,
+            },
+        )
+        .unwrap();
+        let ex = |text: &str, ctx: &str, source: &str, pinned: bool| StyleExampleInput {
+            id: None,
+            kind: ExampleKind::Reply,
+            source_context_text: Some(ctx.into()),
+            example_text: text.into(),
+            why_it_works: None,
+            tags: vec![],
+            pinned,
+            source: Some(source.into()),
+            performance_score: None,
+        };
+        upsert_style_example(&conn, &profile, ex("Pin your pool size to cores.", "tuning", "manual", true)).unwrap();
+        upsert_style_example(&conn, &profile, ex("PgBouncer in transaction mode fixes spikes.", "postgres serverless connections", "promoted_winner", false)).unwrap();
+        upsert_style_example(&conn, &profile, ex("Subgrid aligns card footers.", "css grid", "manual", false)).unwrap();
+
+        let style = load_style_for_generation(&conn, &profile, "Postgres connections keep exhausting on serverless").unwrap();
+        assert_eq!(style.max_reply_chars, Some(50));
+        assert_eq!(style.emoji_policy, EmojiPolicy::None);
+        assert_eq!(style.hashtag_policy, HashtagPolicy::None);
+        assert_eq!(style.learned_rules, vec!["Lead with the fix"]);
+        let texts: Vec<&str> = style.examples.iter().map(|e| e.text.as_str()).collect();
+        assert_eq!(texts[0], "Pin your pool size to cores.", "pinned first");
+        assert!(texts.contains(&"PgBouncer in transaction mode fixes spikes."), "promoted example is retrieved by FTS");
+
+        let provider = ScriptedProvider::new(vec![
+            r#"{"variants":[
+              {"tone":"a","text":"Use PgBouncer, transaction mode."},
+              {"tone":"b","text":"Use PgBouncer, transaction mode. It pools connections across every lambda invocation."},
+              {"tone":"c","text":"Pool it \ud83d\ude80"},
+              {"tone":"d","text":"Pool it #postgres"},
+              {"tone":"e","text":"More synergy needed"},
+              {"tone":"f","text":"Cap the pool."}
+            ]}"#,
+        ]);
+        let r = GenRequest {
+            quote: false,
+            handle: "dev",
+            post_text: "Postgres connections keep exhausting on serverless",
+            max_chars: 280,
+            style: &style,
+            instruction: Instruction::Fresh,
+            current: None,
+            angle: None,
+            model_hint: None,
+            context: None,
+        };
+        let g = generate(&provider, &r).await.unwrap();
+        assert_eq!(g.variants.iter().map(|v| v.text.as_str()).collect::<Vec<_>>(), vec!["Use PgBouncer, transaction mode.", "Cap the pool."]);
+
+        let sent = provider.requests.lock().unwrap();
+        assert!(sent[0].system.contains("PgBouncer in transaction mode fixes spikes."));
+        assert!(sent[0].system.contains("Lead with the fix"));
+        assert!(sent[0].system.contains("at most 50 characters"));
     }
 }
