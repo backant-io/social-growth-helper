@@ -9,7 +9,10 @@ pub struct MockDriver {
     pub eval_result: Arc<Mutex<Value>>,
     running: Arc<Mutex<bool>>,
     pub fail_launch: bool,
+    eval_fn: Option<EvalFn>,
 }
+
+pub type EvalFn = Arc<dyn Fn(&str) -> Value + Send + Sync>;
 
 impl MockDriver {
     pub fn new() -> Self {
@@ -18,11 +21,18 @@ impl MockDriver {
             eval_result: Arc::new(Mutex::new(Value::Null)),
             running: Arc::default(),
             fail_launch: false,
+            eval_fn: None,
         }
     }
 
     pub fn with_eval_result(self, v: Value) -> Self {
         *self.eval_result.lock().unwrap() = v;
+        self
+    }
+
+    /// Computes each `eval_json` result from the script text, for flows that issue many different scripts.
+    pub fn with_eval_fn(mut self, f: impl Fn(&str) -> Value + Send + Sync + 'static) -> Self {
+        self.eval_fn = Some(Arc::new(f));
         self
     }
 
@@ -63,6 +73,9 @@ impl BrowserDriver for MockDriver {
     }
     async fn eval_json(&self, expression: &str) -> Result<Value, BrowserError> {
         self.record(format!("eval {expression}"));
+        if let Some(f) = &self.eval_fn {
+            return Ok(f(expression));
+        }
         Ok(self.eval_result.lock().unwrap().clone())
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, BrowserError> {
@@ -87,6 +100,10 @@ impl BrowserDriver for MockDriver {
     }
     async fn set_bounds(&self, b: WindowBounds) -> Result<(), BrowserError> {
         self.record(format!("bounds {}x{}", b.width, b.height));
+        Ok(())
+    }
+    async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        self.record("front");
         Ok(())
     }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {

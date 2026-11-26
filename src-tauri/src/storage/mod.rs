@@ -28,6 +28,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "phase2_llm_style",
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
+    Migration {
+        version: 4,
+        name: "phase3",
+        sql: include_str!("migrations/0004_phase3.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -54,6 +59,14 @@ pub fn apply_pragmas(conn: &Connection) -> AppResult<()> {
 
 pub fn user_version(conn: &Connection) -> AppResult<u32> {
     Ok(conn.pragma_query_value(None, "user_version", |r| r.get::<_, u32>(0))?)
+}
+
+#[cfg(test)]
+pub fn open_in_memory() -> AppResult<Connection> {
+    let mut conn = Connection::open_in_memory()?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    migrate(&mut conn, MIGRATIONS, None)?;
+    Ok(conn)
 }
 
 /// Opens (creating if needed) the app database, backs it up before any upgrade, and migrates it.
@@ -228,7 +241,8 @@ mod tests {
 
         let (conn, report) = open(&db, &bk).unwrap();
         assert_eq!(report.from_version, 1);
-        assert_eq!(report.applied, vec![2, 3]);
+        let expected: Vec<u32> = MIGRATIONS.iter().map(|m| m.version).filter(|v| *v > 1).collect();
+        assert_eq!(report.applied, expected);
         let backup = report.backup_path.expect("backup must exist before migrating an existing db");
         assert!(backup.exists());
 
@@ -258,6 +272,13 @@ mod tests {
         let err = migrate(&mut conn, &bad, None).unwrap_err();
         assert!(err.to_string().contains("migration 4"));
         assert_eq!(user_version(&conn).unwrap(), latest_version());
+    },
+    Migration {
+        let top = MIGRATIONS.last().unwrap().version;
+        let bad = [Migration { version: top + 1, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" }];
+        let err = migrate(&mut conn, &bad, None).unwrap_err();
+        assert!(err.to_string().contains(&format!("migration {}", top + 1)));
+        assert_eq!(user_version(&conn).unwrap(), top);
         assert_eq!(table_count(&conn), before, "partial DDL must roll back");
     }
 
