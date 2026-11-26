@@ -41,6 +41,21 @@ impl SessionParams {
     }
 }
 
+const LAST_PARAMS_KEY: &str = "scout_last_params";
+
+/// Remembers the budget of the most recent session so the Scout page can prefill it (SCT-24).
+pub fn save_last_params(conn: &Connection, params: &SessionParams) -> AppResult<()> {
+    let json = serde_json::to_string(params).map_err(|e| AppError::Other(format!("encode scout params: {e}")))?;
+    set_setting(conn, LAST_PARAMS_KEY, &json)
+}
+
+/// The remembered budget, or `None` when nothing is stored or it no longer validates.
+pub fn last_params(conn: &Connection) -> AppResult<Option<SessionParams>> {
+    Ok(get_setting(conn, LAST_PARAMS_KEY)?
+        .and_then(|v| serde_json::from_str::<SessionParams>(&v).ok())
+        .filter(|p| p.validate().is_ok()))
+}
+
 pub fn get_threshold(conn: &Connection) -> AppResult<f64> {
     Ok(get_setting(conn, "scout_threshold")?.and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_THRESHOLD))
 }
@@ -93,6 +108,21 @@ pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<Option<(i
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?)
+}
+
+/// Active rubric, storing the built-in default as version 1 when the profile has no rubric yet (SCT-09).
+pub fn ensure_default_rubric(conn: &Connection, profile_id: &str) -> AppResult<(i64, String)> {
+    if let Some(active) = active_rubric(conn, profile_id)? {
+        return Ok(active);
+    }
+    let any: i64 = conn.query_row("SELECT count(*) FROM learning_rubrics WHERE profile_id = ?1", [profile_id], |r| r.get(0))?;
+    if any == 0 {
+        conn.execute(
+            "INSERT INTO learning_rubrics (profile_id, scout_criteria_text, weights_json, is_active, created_at) VALUES (?1, ?2, '{}', 1, ?3)",
+            rusqlite::params![profile_id, super::score::DEFAULT_RUBRIC, crate::util::now_rfc3339()],
+        )?;
+    }
+    Ok(active_rubric(conn, profile_id)?.unwrap_or((0, super::score::DEFAULT_RUBRIC.to_string())))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -256,6 +286,38 @@ mod tests {
         set_threshold(&conn, 60.0).unwrap();
         assert_eq!(get_threshold(&conn).unwrap(), 60.0);
         assert!(set_threshold(&conn, -1.0).is_err());
+    }
+
+    #[test]
+    fn last_used_budget_is_remembered() {
+        let (conn, _) = db();
+        assert!(last_params(&conn).unwrap().is_none());
+        let p = SessionParams { feed_source: "both".into(), max_duration_sec: 900, max_posts: 200, stop_after_queued: Some(5), threshold: 65.0 };
+        save_last_params(&conn, &p).unwrap();
+        let got = last_params(&conn).unwrap().expect("stored");
+        assert_eq!((got.feed_source.as_str(), got.max_duration_sec, got.max_posts, got.stop_after_queued), ("both", 900, 200, Some(5)));
+        set_setting(&conn, "scout_last_params", "{not json").unwrap();
+        assert!(last_params(&conn).unwrap().is_none(), "a corrupt value falls back to the defaults");
+    }
+
+    #[test]
+    fn default_rubric_is_stored_once_as_version_one() {
+        let (conn, profile) = db();
+        let (v, text) = ensure_default_rubric(&conn, &profile).unwrap();
+        assert_eq!(text, crate::scout::score::DEFAULT_RUBRIC);
+        let (v2, _) = ensure_default_rubric(&conn, &profile).unwrap();
+        assert_eq!(v, v2);
+        let n: i64 = conn.query_row("SELECT count(*) FROM learning_rubrics", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        // Learning builds on the stored v1: the first change creates v2 and keeps v1 restorable.
+        let patch = crate::learning::patch::Patch {
+            target: crate::learning::patch::PatchTarget::Rubric,
+            ops: vec![crate::learning::patch::PatchOp::AddCriterion { text: "Prefer fresh posts".into() }],
+        };
+        let ch = crate::learning::patch::apply(&conn, &profile, &patch, None).unwrap();
+        assert_eq!((ch.from_version, ch.to_version), (Some(v), Some(v + 1)));
+        let n: i64 = conn.query_row("SELECT count(*) FROM learning_rubrics", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2, "no second copy of the default is inserted");
     }
 
     #[test]

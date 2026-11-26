@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { InlineModelGuard } from "../components/InlineModelGuard";
 import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
@@ -8,6 +9,7 @@ import { btn, btnPrimary, chip, input, muted, Notice, panel } from "./ui";
 
 interface Props {
   onOpenDraft: (draftId: string) => void;
+  onGoToSettings?: () => void;
 }
 
 const TONE = { high: "bg-emerald-600", mid: "bg-amber-500", low: "bg-zinc-400" } as const;
@@ -40,7 +42,7 @@ function SessionRow({ s }: { s: SessionView }) {
   );
 }
 
-export function ScoutPage({ onOpenDraft }: Props) {
+export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
   const [params, setParams] = useState<SessionParams>({ feed_source: "for_you", max_duration_sec: 600, max_posts: 100, stop_after_queued: null, threshold: 72 });
   const [running, setRunning] = useState(false);
   const [paused, setPaused] = useState<null | "manual" | "user_activity">(null);
@@ -52,12 +54,15 @@ export function ScoutPage({ onOpenDraft }: Props) {
   const [dismissing, setDismissing] = useState<string | null>(null);
   const [completion, setCompletion] = useState<CompletionStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const budgetLoaded = useRef(false);
 
   const reload = useCallback(async () => {
     const [status, q] = await Promise.all([p3.scoutStatus(), p3.scoutQueue()]);
     setRunning(status.running);
     setRecent(status.recent);
-    setParams((p) => ({ ...p, threshold: status.threshold }));
+    const remembered = budgetLoaded.current ? null : status.last_params;
+    budgetLoaded.current = true;
+    setParams((p) => ({ ...p, ...(remembered ?? {}), threshold: status.threshold }));
     setQueue(q);
     setSelected((i) => Math.min(i, Math.max(0, q.length - 1)));
   }, []);
@@ -153,7 +158,12 @@ export function ScoutPage({ onOpenDraft }: Props) {
       </header>
 
       {completion && !completion.scoring && (
-        <Notice tone="info">No model is set for scoring yet, so posts get a quick local score from engagement and your topics. Pick a model in Settings for better picks.</Notice>
+        <InlineModelGuard
+          taskType="post_scoring"
+          onAssigned={() => p3.completionStatus().then(setCompletion)}
+          onGoToSettings={onGoToSettings}
+          hint="Until a model is chosen, posts get a quick local score from engagement and your topics."
+        />
       )}
       {error && <Notice tone="error">{error}</Notice>}
       {paused === "user_activity" && <Notice tone="warn">Paused while you use the X window. Scouting resumes a few seconds after you stop.</Notice>}

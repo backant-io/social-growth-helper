@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { UnsetRouteGuard } from "../components/UnsetRouteGuard";
 import { api } from "../lib/api";
+import { DiffView } from "../learning/DiffView";
 import { parseLlmError } from "../lib/errors";
+import { previousVersion, styleVersionDiff } from "../lib/styleDiff";
 import type {
   BenchModelRun,
   EmojiPolicy,
@@ -188,6 +190,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   const [hashtagPolicy, setHashtagPolicy] = useState<HashtagPolicy>("none");
   const [versionNote, setVersionNote] = useState("");
   const [savingGuide, setSavingGuide] = useState(false);
+  const [diffOpen, setDiffOpen] = useState<number | null>(null);
 
   // Examples state
   const [examples, setExamples] = useState<StyleExample[]>([]);
@@ -613,10 +616,28 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                         Max {v.max_reply_chars} chars · {v.banned_patterns.length} banned pattern(s) · {v.created_at}
                       </div>
                     </div>
-                    {!v.is_active && (
-                      <button type="button" className={btn} onClick={() => void handleActivateVersion(v.version)}>
-                        Activate v{v.version}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className={btn}
+                        aria-expanded={diffOpen === v.version}
+                        onClick={() => setDiffOpen(diffOpen === v.version ? null : v.version)}
+                      >
+                        {diffOpen === v.version ? "Hide changes" : "Show changes"}
                       </button>
+                      {!v.is_active && (
+                        <button type="button" className={btn} onClick={() => void handleActivateVersion(v.version)}>
+                          Activate v{v.version}
+                        </button>
+                      )}
+                    </div>
+                    {diffOpen === v.version && (
+                      <div className="w-full">
+                        <p className="mb-1 text-zinc-500">
+                          {previousVersion(versions, v.version) ? `Changes from v${previousVersion(versions, v.version)!.version} to v${v.version}` : `Everything in v${v.version} (first saved version)`}
+                        </p>
+                        <DiffView diff={styleVersionDiff(previousVersion(versions, v.version), v)} label={`Style guide v${v.version} changes`} />
+                      </div>
                     )}
                   </li>
                 ))}

@@ -72,6 +72,7 @@ export interface ScoutStatus {
   running: boolean;
   session_id: string | null;
   threshold: number;
+  last_params: SessionParams | null;
   recent: SessionView[];
 }
 

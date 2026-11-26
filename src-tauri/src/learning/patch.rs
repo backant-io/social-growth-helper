@@ -14,26 +14,11 @@ const MAX_OPS: usize = 10;
 const MAX_LINE: usize = 280;
 const MAX_BANNED: usize = 80;
 
-const DEFAULT_RUBRIC_BASE: &str = "A post is high potential when:\n\
-- it is gaining momentum early (fresh, with engagement growing fast)\n\
-- it invites a reply (a question, a claim, an open loop)\n\
-- there is room for a sharp or funny take that adds something\n\
-- the audience overlaps with the people you want to reach";
-
-/// Rubric used as the base of the first learned version when Scout has not seeded one yet.
-pub fn default_rubric_text(prefs: &repo::Preferences) -> String {
-    let mut t = DEFAULT_RUBRIC_BASE.to_string();
-    if !prefs.niche_topics.is_empty() {
-        t.push_str(&format!("\nNiche topics: {}", prefs.niche_topics.join(", ")));
-    }
-    if !prefs.prefer_accounts.is_empty() {
-        t.push_str(&format!("\nPrefer authors: {}", prefs.prefer_accounts.iter().map(|h| format!("@{h}")).collect::<Vec<_>>().join(", ")));
-    }
-    if !prefs.avoid_accounts.is_empty() {
-        t.push_str(&format!("\nAvoid authors: {}", prefs.avoid_accounts.iter().map(|h| format!("@{h}")).collect::<Vec<_>>().join(", ")));
-    }
-    t.push_str(&format!("\nLanguages: {}", prefs.languages.join(", ")));
-    t
+/// Rubric used as the base of the first learned version when nothing is stored yet. Scout owns the text
+/// (`scout::score::DEFAULT_RUBRIC`) and persists it as v1 on first open; this only covers a profile that has
+/// not been opened yet.
+pub fn default_rubric_text() -> String {
+    crate::scout::score::DEFAULT_RUBRIC.to_string()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,8 +176,7 @@ pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<RubricSta
             weights: serde_json::from_str(&w).map_err(|e| AppError::Other(format!("corrupt rubric weights: {e}")))?,
         },
         None => {
-            let prefs = repo::get_preferences(conn, profile_id)?.unwrap_or_default();
-            RubricState { version: None, text: default_rubric_text(&prefs), weights: BTreeMap::new() }
+            RubricState { version: None, text: default_rubric_text(), weights: BTreeMap::new() }
         }
     })
 }
@@ -521,7 +505,7 @@ pub(crate) mod tests {
         let cur = active_rubric(&c, &pid).unwrap();
         assert_eq!(cur.version, Some(2));
         assert!(cur.text.contains(LEARNED_HEADING));
-        assert!(cur.text.starts_with("A post is high potential"));
+        assert!(cur.text.starts_with(crate::scout::score::DEFAULT_RUBRIC), "learning builds on the one built-in rubric");
 
         let ch2 = apply(&c, &pid, &Patch { target: PatchTarget::Rubric, ops: vec![PatchOp::AddCriterion { text: "Skip engagement bait".into() }] }, None).unwrap();
         assert_eq!((ch2.from_version, ch2.to_version), (Some(2), Some(3)));
@@ -536,16 +520,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn default_rubric_carries_onboarding_answers() {
+    fn learning_and_scout_share_one_default_rubric() {
         let (_d, c, pid) = db();
-        repo::save_preferences(&c, &pid, repo::Preferences {
-            niche_topics: vec!["rust".into()],
-            prefer_accounts: vec!["naval".into()],
-            avoid_accounts: vec!["spam1".into()],
-            languages: vec!["en".into(), "de".into()],
-        }).unwrap();
-        let t = active_rubric(&c, &pid).unwrap().text;
-        assert!(t.contains("Niche topics: rust") && t.contains("@naval") && t.contains("@spam1") && t.contains("en, de"));
+        assert_eq!(active_rubric(&c, &pid).unwrap().text, crate::scout::score::DEFAULT_RUBRIC);
+        let (v, stored) = crate::scout::repo::ensure_default_rubric(&c, &pid).unwrap();
+        let cur = active_rubric(&c, &pid).unwrap();
+        assert_eq!((cur.version, cur.text), (Some(v), stored));
     }
 
     #[test]

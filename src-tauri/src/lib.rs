@@ -58,6 +58,7 @@ pub fn run() {
             let kill_engaged = {
                 let db = state.db.lock().unwrap();
                 let _ = scout::repo::close_orphans(&db);
+                let _ = scout::repo::ensure_default_rubric(&db, &state.profile_id);
                 let _ = publish::repo::recover_interrupted(&db);
                 phase3::load_kill_state(&db)
             };
