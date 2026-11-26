@@ -151,9 +151,9 @@ export default function App() {
         ) : locked && ["scout", "reply", "activity"].includes(section) ? (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         ) : section === "scout" ? (
-          <ScoutPage onOpenDraft={openDraft} />
+          <ScoutPage onOpenDraft={openDraft} onGoToSettings={() => setSection("settings")} />
         ) : section === "reply" ? (
-          <ReplyStudio draftId={draftId} onOpenDraft={openDraft} onGoScout={() => setSection("scout")} />
+          <ReplyStudio draftId={draftId} onOpenDraft={openDraft} onGoScout={() => setSection("scout")} onGoToSettings={() => setSection("settings")} />
         ) : section === "activity" ? (
           <ActivityPage />
         ) : section === "creator" && !locked ? (

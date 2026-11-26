@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { InlineModelGuard } from "../components/InlineModelGuard";
 import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
@@ -10,6 +11,7 @@ interface Props {
   draftId: string | null;
   onOpenDraft: (draftId: string | null) => void;
   onGoScout: () => void;
+  onGoToSettings?: () => void;
 }
 
 const TRANSFORMS: Array<{ id: string; label: string }> = [
@@ -35,7 +37,7 @@ function liveOn(action: ActionName, s: PostActionState | null): boolean {
   return action === "reply" ? k.replied : action === "quote" ? k.quoted : k[action as "like" | "bookmark" | "repost" | "follow"];
 }
 
-export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
+export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }: Props) {
   const [draft, setDraft] = useState<DraftView | null>(null);
   const [text, setText] = useState("");
   const [problems, setProblems] = useState<string[]>([]);
@@ -53,10 +55,14 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
     setText(d.edited_text);
   }, []);
 
-  useEffect(() => {
-    void p3.completionStatus().then(setCompletion);
-    void p3.draftModelOptions().then(setModelOptions);
+  const refreshCompletion = useCallback(async () => {
+    setCompletion(await p3.completionStatus());
+    setModelOptions(await p3.draftModelOptions());
   }, []);
+
+  useEffect(() => {
+    void refreshCompletion();
+  }, [refreshCompletion]);
 
   useEffect(() => {
     setError(null);
@@ -243,7 +249,20 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout }: Props) {
       <div className="space-y-4">
         {error && <Notice tone="error">{error}</Notice>}
         {completion && !completion.drafting && (
-          <Notice tone="info">No model is set for drafting yet. Write your own text below, or pick a model in Settings to get variants.</Notice>
+          <InlineModelGuard
+            taskType="reply_drafting"
+            onAssigned={refreshCompletion}
+            onGoToSettings={onGoToSettings}
+            hint="You can also write your own text below without a model."
+          />
+        )}
+        {completion && !completion.browser_navigation && draft.status !== "published" && (
+          <InlineModelGuard
+            taskType="browser_navigation"
+            onAssigned={refreshCompletion}
+            onGoToSettings={onGoToSettings}
+            hint="Publish clicks through X with selectors first. This model is only used as a fallback when a selector breaks; without it, a broken selector fails the step."
+          />
         )}
         {draft.status === "published" && (
           <Notice tone="ok">

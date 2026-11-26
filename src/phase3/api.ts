@@ -115,7 +115,7 @@ function put(d: DraftView): DraftView {
 export const p3 = {
   async scoutStatus(): Promise<ScoutStatus> {
     if (inTauri()) return call("scout_status");
-    return { running: mem.running, session_id: mem.running ? "s-live" : null, threshold: mem.threshold, recent: [] };
+    return { running: mem.running, session_id: mem.running ? "s-live" : null, threshold: mem.threshold, last_params: null, recent: [] };
   },
   async scoutStart(params: SessionParams): Promise<string> {
     if (inTauri()) return call("scout_start", { params });

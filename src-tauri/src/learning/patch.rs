@@ -505,7 +505,7 @@ pub(crate) mod tests {
         let cur = active_rubric(&c, &pid).unwrap();
         assert_eq!(cur.version, Some(2));
         assert!(cur.text.contains(LEARNED_HEADING));
-        assert!(cur.text.starts_with("A post is high potential"));
+        assert!(cur.text.starts_with(crate::scout::score::DEFAULT_RUBRIC), "learning builds on the one built-in rubric");
 
         let ch2 = apply(&c, &pid, &Patch { target: PatchTarget::Rubric, ops: vec![PatchOp::AddCriterion { text: "Skip engagement bait".into() }] }, None).unwrap();
         assert_eq!((ch2.from_version, ch2.to_version), (Some(2), Some(3)));
@@ -520,16 +520,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn default_rubric_carries_onboarding_answers() {
+    fn learning_and_scout_share_one_default_rubric() {
         let (_d, c, pid) = db();
-        repo::save_preferences(&c, &pid, repo::Preferences {
-            niche_topics: vec!["rust".into()],
-            prefer_accounts: vec!["naval".into()],
-            avoid_accounts: vec!["spam1".into()],
-            languages: vec!["en".into(), "de".into()],
-        }).unwrap();
-        let t = active_rubric(&c, &pid).unwrap().text;
-        assert!(t.contains("Niche topics: rust") && t.contains("@naval") && t.contains("@spam1") && t.contains("en, de"));
+        assert_eq!(active_rubric(&c, &pid).unwrap().text, crate::scout::score::DEFAULT_RUBRIC);
+        let (v, stored) = crate::scout::repo::ensure_default_rubric(&c, &pid).unwrap();
+        let cur = active_rubric(&c, &pid).unwrap();
+        assert_eq!((cur.version, cur.text), (Some(v), stored));
     }
 
     #[test]

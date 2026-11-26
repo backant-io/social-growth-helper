@@ -22,6 +22,7 @@ import type {
 } from "../lib/types";
 import { TASK_METAS } from "../lib/types";
 import { DataPanel } from "../learning/DataPanel";
+import { PreferencesPanel } from "../onboarding/PreferencesStep";
 
 interface Props {
   rules: RulesStatus | null;
@@ -1143,6 +1144,7 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onData
               </p>
             )}
           </section>
+          <PreferencesPanel />
           <SecurityPanel />
           <BrowserPanel rulesAcknowledged={rules?.acknowledged ?? false} />
           <LayoutPanel />

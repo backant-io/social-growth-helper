@@ -14,6 +14,7 @@ pub struct ScoutStatus {
     pub running: bool,
     pub session_id: Option<String>,
     pub threshold: f64,
+    pub last_params: Option<SessionParams>,
     pub recent: Vec<SessionView>,
 }
 
@@ -25,7 +26,7 @@ fn now_unix() -> i64 {
 pub fn scout_status(state: State<'_, AppState>, p3: State<'_, Phase3>) -> AppResult<ScoutStatus> {
     let db = state.db.lock().unwrap();
     let running = p3.scout.lock().unwrap().as_ref().map(|s| s.session_id.clone());
-    Ok(ScoutStatus { running: running.is_some(), session_id: running, threshold: repo::get_threshold(&db)?, recent: repo::recent_sessions(&db, &state.profile_id, 5)? })
+    Ok(ScoutStatus { running: running.is_some(), session_id: running, threshold: repo::get_threshold(&db)?, last_params: repo::last_params(&db)?, recent: repo::recent_sessions(&db, &state.profile_id, 5)? })
 }
 
 #[tauri::command]
@@ -55,6 +56,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         }
         let db = state.db.lock().unwrap();
         let id = repo::create_session(&db, &state.profile_id, &params)?;
+        let _ = repo::save_last_params(&db, &params);
         *slot = Some(RunningScout { session_id: id.clone(), stop: stop.clone(), pause: pause.clone() });
         id
     };
