@@ -11,6 +11,7 @@ pub struct MockDriver {
     pub fail_launch: bool,
     eval_fn: Option<EvalFn>,
     screenshot: Arc<Mutex<Vec<u8>>>,
+    pub bounds: Arc<Mutex<WindowBounds>>,
 }
 
 pub type EvalFn = Arc<dyn Fn(&str) -> Value + Send + Sync>;
@@ -24,6 +25,7 @@ impl MockDriver {
             fail_launch: false,
             eval_fn: None,
             screenshot: Arc::new(Mutex::new(vec![0x89, 0x50])),
+            bounds: Arc::new(Mutex::new(WindowBounds { left: 0, top: 0, width: 560, height: 900 })),
         }
     }
 
@@ -106,12 +108,16 @@ impl BrowserDriver for MockDriver {
         Ok(())
     }
     async fn set_bounds(&self, b: WindowBounds) -> Result<(), BrowserError> {
-        self.record(format!("bounds {}x{}", b.width, b.height));
+        self.record(format!("bounds {},{} {}x{}", b.left, b.top, b.width, b.height));
+        *self.bounds.lock().unwrap() = b;
         Ok(())
     }
     async fn bring_to_front(&self) -> Result<(), BrowserError> {
         self.record("front");
         Ok(())
+    }
+    async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {
+        Ok(self.bounds.lock().unwrap().clone())
     }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError> {
         self.record("close");

@@ -5,7 +5,9 @@
 
 pub mod cdp;
 pub mod chrome_driver;
+pub mod compat;
 pub mod discovery;
+pub mod display;
 pub mod http;
 pub mod launcher;
 pub mod mock;
@@ -98,6 +100,7 @@ pub trait BrowserDriver: Send + Sync {
     async fn wheel_scroll(&self, x: f64, y: f64, delta_y: f64) -> Result<(), BrowserError>;
     async fn insert_text(&self, text: &str) -> Result<(), BrowserError>;
     async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError>;
+    async fn get_bounds(&self) -> Result<WindowBounds, BrowserError>;
     /// Graceful `Browser.close` so Chrome flushes cookies and storage before exiting (BRW-16).
     /// Raises the X window (tray "Focus X window", challenge takeover). No-op for drivers without windows.
     async fn bring_to_front(&self) -> Result<(), BrowserError> {

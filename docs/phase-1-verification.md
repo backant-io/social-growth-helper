@@ -26,3 +26,12 @@ Notes:
 - Linux: the Secret Service detector is unit-tested with an injected platform, and the setup guide is documented, but nothing was run on a Linux machine. The Linux CI job and the AppImage, deb and rpm bundles are stubs that have never run.
 - Window layout of the X window next to the control plane (SHL-28 quit guard UI is wired but only exercised in unit tests; no real jobs exist yet).
 - Tour and preference UI were built and type-checked but not exercised in an automated browser test.
+
+## Phase 1 gap rows (BRW-14, BRW-15, SHL-14, SHL-23)
+
+Implemented with unit tests only; run on a Linux cloud VM without a display, so none of it was exercised against a real window or Chrome UI.
+
+- BRW-15: `browser/compat.rs` reads `<browser> --version` and warns below `MIN_TESTED_CHROME_MAJOR` (140; Phase 0/1 runs used 157/158). Shown in Settings.
+- BRW-14: `browser/display.rs` detects Wayland/X11/macOS. On Wayland (and undetectable sessions) window placement is skipped and a hint is shown; nothing errors.
+- SHL-23: `layout.rs` plans a side-by-side layout, saves/restores it in `app_settings`, and falls back to the default if the saved rectangles are off-screen. Needs a live check on macOS and X11 (CDP `Browser.setWindowBounds` vs Tauri logical coordinates, multi-monitor, HiDPI).
+- SHL-14: `logging.rs` writes rotating logs (1 MiB x 5) under `<data dir>/logs` with redaction; Settings has "Copy diagnostics".

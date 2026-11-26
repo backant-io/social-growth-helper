@@ -1,7 +1,7 @@
 //! Application-facing wrapper over a [`BrowserDriver`]: serialises access, makes launch idempotent,
 //! and guarantees the X window is closed when the app quits (BRW-16).
 
-use super::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, ChromeLaunchConfig};
+use super::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, ChromeLaunchConfig, WindowBounds};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -87,6 +87,22 @@ impl BrowserService {
         if let Err(e) = self.close().await {
             log::warn!("closing X browser on quit: {e}");
         }
+    }
+
+    pub async fn set_bounds(&self, bounds: WindowBounds) -> Result<(), BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.set_bounds(bounds).await
+    }
+
+    pub async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.get_bounds().await
     }
 
     pub async fn current_url(&self) -> Result<String, BrowserError> {
