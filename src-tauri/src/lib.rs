@@ -76,6 +76,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 browser::launcher::reclaim_stale_chrome(&profile_dir).await;
             });
+            browser::health::spawn_crash_watcher(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,6 +92,10 @@ pub fn run() {
             commands::set_browser_path,
             commands::browser_launch_x,
             commands::browser_close,
+            commands::browser_status,
+            commands::browser_focus_x,
+            commands::browser_resume,
+            commands::browser_abort,
             commands::browser_current_url,
             commands::window_layout_status,
             commands::save_window_layout,

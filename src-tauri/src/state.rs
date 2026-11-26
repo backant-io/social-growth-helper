@@ -1,4 +1,5 @@
 use crate::browser::chrome_driver::ChromeCdpDriver;
+use crate::browser::health::BrowserHealth;
 use crate::browser::service::BrowserService;
 use crate::formats::llm::StructuredLlm;
 use crate::formats::router_llm::RouterLlm;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub profile_id: String,
     pub secrets: Arc<SecretsService>,
     pub browser: Arc<BrowserService>,
+    pub browser_health: BrowserHealth,
     pub llm_router: Arc<LlmRouter>,
     pub http: reqwest::Client,
     pub jobs: JobRegistry,
@@ -69,6 +71,7 @@ impl AppState {
             profile_id,
             secrets,
             browser,
+            browser_health: BrowserHealth::new(),
             llm_router,
             http: reqwest::Client::new(),
             jobs: JobRegistry::new(),

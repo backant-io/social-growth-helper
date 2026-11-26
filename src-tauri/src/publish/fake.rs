@@ -497,13 +497,15 @@ mod tests {
 
     #[tokio::test]
     async fn logged_out_and_challenge_pages_stop_before_any_click() {
-        for (page, needle) in [("logged_out", "logged out"), ("challenge", "challenge")] {
+        for (page, needle) in [("logged_out", "logged out"), ("challenge", "challenge"), ("suspended", "suspended"), ("locked", "locked")] {
             let r = rig(&["like"], |s| s.page = page.into());
             let res = r.publish().await;
             assert!(!res.ok);
             assert!(res.message.unwrap().contains(needle));
             assert!(r.fake.clicks().is_empty());
-            assert!(r.sink.0.lock().unwrap().iter().any(|(k, v)| k == "notify" && v["kind"] == "attention"));
+            let ev = r.sink.0.lock().unwrap();
+            assert!(ev.iter().any(|(k, v)| k == "notify" && v["kind"] == "attention"));
+            assert!(ev.iter().any(|(k, v)| k == "browser:halt" && v["state"] == page && v["source"] == "publish"));
         }
     }
 

@@ -47,6 +47,17 @@ pub const READ_VISIBLE_TWEETS_JS: &str = r#"(() => {
   return out;
 })()"#;
 
+/// Result of a read-only page-state check that never queues behind a running job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeOutcome {
+    Closed,
+    /// A job holds the browser right now.
+    Busy,
+    /// `ok`, `logged_out`, `challenge`, `suspended` or `locked`.
+    State(String),
+    Error(String),
+}
+
 pub struct BrowserService {
     driver: Mutex<Box<dyn BrowserDriver>>,
 }
@@ -58,6 +69,20 @@ impl BrowserService {
 
     pub async fn lock(&self) -> BrowserGuard<'_> {
         BrowserGuard(self.driver.lock().await)
+    }
+
+    pub async fn probe_page_state(&self) -> ProbeOutcome {
+        let Ok(d) = self.driver.try_lock() else { return ProbeOutcome::Busy };
+        if !d.is_running() {
+            return ProbeOutcome::Closed;
+        }
+        match d.eval_json(&crate::selectors::page_state_js()).await {
+            Ok(v) => match v.get("state").and_then(|s| s.as_str()) {
+                Some(s) => ProbeOutcome::State(s.to_string()),
+                None => ProbeOutcome::Error("unexpected page state payload".into()),
+            },
+            Err(e) => ProbeOutcome::Error(e.to_string()),
+        }
     }
 
     pub async fn bring_to_front(&self) -> Result<(), BrowserError> {

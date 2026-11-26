@@ -63,6 +63,8 @@ pub mod sel {
 }
 
 pub const LOGGED_OUT_PATHS: &[&str] = &["/i/jf/onboarding", "/i/flow/login", "/login"];
+pub const SUSPENDED_PATHS: &[&str] = &["/account/suspended"];
+pub const LOCKED_PATHS: &[&str] = &["/account/access"];
 
 pub fn registry() -> Vec<&'static Selector> {
     use sel::*;
@@ -112,6 +114,8 @@ const articleFor = (id) => [...document.querySelectorAll(TW[0])].find(a => a.que
 const visible = (el) => {{ const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }};
 const pageState = () => {{
   const p = location.pathname;
+  if ({susp}.some(x => p.startsWith(x))) return 'suspended';
+  if ({lock}.some(x => p.startsWith(x))) return 'locked';
   if ({out}.some(x => p.startsWith(x))) return 'logged_out';
   const ch = [{cf}, {ark}, {txt}];
   if (ch.some(l => l.some(s => document.querySelector(s)))) return 'challenge';
@@ -120,10 +124,17 @@ const pageState = () => {{
 "#,
         tweet = list(&sel::TWEET),
         out = json!(LOGGED_OUT_PATHS),
+        susp = json!(SUSPENDED_PATHS),
+        lock = json!(LOCKED_PATHS),
         cf = list(&sel::CHALLENGE_CLOUDFLARE),
         ark = list(&sel::CHALLENGE_ARKOSE),
         txt = list(&sel::CHALLENGE_TEXT_INPUT),
     )
+}
+
+/// Reads only the page state (`ok`, `logged_out`, `challenge`, `suspended`, `locked`). Never interacts with the page.
+pub fn page_state_js() -> String {
+    format!("(() => {{\n{}\nreturn {{ state: pageState(), url: location.href }};\n}})()", prelude())
 }
 
 /// Reads every tweet card currently rendered. Returns `{state, me, posts[]}`; never interacts with the page.
@@ -402,11 +413,20 @@ mod tests {
 
     #[test]
     fn read_scripts_never_mutate_or_click() {
-        for js in [extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js()] {
+        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js()] {
             for banned in [".click(", ".submit(", "dispatchEvent", "fetch(", "XMLHttpRequest", "innerHTML =", "textContent =", ".value ="] {
                 assert!(!js.contains(banned), "script contains {banned}");
             }
         }
+    }
+
+    #[test]
+    fn page_state_script_knows_suspended_and_locked_accounts() {
+        let js = page_state_js();
+        for needle in ["/account/suspended", "/account/access", "'suspended'", "'locked'", "'challenge'", "'logged_out'"] {
+            assert!(js.contains(needle), "page state script lacks {needle}");
+        }
+        assert!(js.find("'locked'").unwrap() < js.find("'challenge'").unwrap(), "a locked account page also embeds a challenge");
     }
 
     #[test]

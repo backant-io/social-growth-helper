@@ -8,6 +8,7 @@ pub mod chrome_driver;
 pub mod compat;
 pub mod discovery;
 pub mod display;
+pub mod health;
 pub mod http;
 pub mod launcher;
 pub mod mock;

@@ -6,6 +6,7 @@ use super::actions::{Outcome, Page, Timing};
 use super::gate::Approval;
 use super::pacing;
 use super::repo as prepo;
+use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::BrowserService;
 use crate::browser::{BrowserDriver, BrowserError};
 use crate::control::{EventSink, KillSwitch};
@@ -94,6 +95,7 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
     let d = env.browser.lock().await;
     if !d.is_running() {
         drop(d);
+        report_halt(env.sink, BrowserState::Crashed, "publish");
         return fail(env, a, "The X window is not open. Open it from the sidebar and try again.");
     }
     let url = drepo::post_url(a.handle(), a.platform_post_id());
@@ -129,17 +131,13 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
             drop(d);
             return fail(env, a, "The post could not be found on its page. It may have been deleted.");
         }
-        Some(p) if p.page == "logged_out" => {
-            drop(d);
-            env.sink.emit("notify", json!({ "kind": "attention", "title": "X needs you", "body": "You appear to be logged out of X." }));
-            return fail(env, a, "You are logged out of X. Log in in the X window, then retry.");
+        Some(p) => {
+            if let Some(halt) = BrowserState::from_page_state(&p.page) {
+                drop(d);
+                report_halt(env.sink, halt, "publish");
+                return fail(env, a, &format!("{} Then retry.", halt.message()));
+            }
         }
-        Some(p) if p.page == "challenge" => {
-            drop(d);
-            env.sink.emit("notify", json!({ "kind": "attention", "title": "X needs you", "body": "X is showing a challenge. Solve it in the X window." }));
-            return fail(env, a, "X is showing a challenge. Solve it in the X window, then retry.");
-        }
-        Some(_) => {}
     }
 
     let before = screenshot(env, &*d, "before", a.ref_id()).await;

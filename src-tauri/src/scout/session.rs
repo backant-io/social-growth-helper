@@ -4,6 +4,7 @@ use super::filter::{classify, FilterConfig, FilterCounts, DEFAULT_MAX_AGE_SECS};
 use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead};
 use super::repo::{self, SessionParams};
 use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
+use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::{BrowserService, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
 use crate::control::{EventSink, KillSwitch};
@@ -225,6 +226,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         let read: Result<FeedRead, String> = {
             let d = env.browser.lock().await;
             if !d.is_running() {
+                report_halt(env.sink, BrowserState::Crashed, "scout");
                 Err("the browser window is not open".into())
             } else {
                 match d.eval_json(&selectors::extract_feed_js()).await {
@@ -242,16 +244,13 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             }
         };
         match read.state.as_str() {
-            "logged_out" => {
-                record_activity(env, "challenge", "Scout stopped: X is logged out", Some("Log in in the X window, then start again."), Some(false));
-                break "logged_out".into();
+            other => {
+                if let Some(halt) = BrowserState::from_page_state(other) {
+                    record_activity(env, "challenge", &format!("Scout stopped: {}", halt.message()), Some("Fix it in the X window, then press Resume."), Some(false));
+                    report_halt(env.sink, halt, "scout");
+                    break halt.as_str().into();
+                }
             }
-            "challenge" => {
-                record_activity(env, "challenge", "Scout stopped: X asked for a check", Some("Complete the check in the X window yourself, then start again."), Some(false));
-                env.sink.emit("notify", json!({ "kind": "attention", "title": "X needs you", "body": "X asked for a check. Complete it in the X window." }));
-                break "challenge".into();
-            }
-            _ => {}
         }
 
         let cfg = FilterConfig {
@@ -368,7 +367,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         "scout",
         &format!("Scout finished ({reason})"),
         Some(&format!("{scanned} scanned, {scored} scored, {queued} queued")),
-        Some(!matches!(reason.as_str(), "browser_error" | "logged_out" | "challenge")),
+        Some(!matches!(reason.as_str(), "browser_error" | "logged_out" | "challenge" | "suspended" | "locked")),
     );
     summary
 }
@@ -639,5 +638,33 @@ mod tests {
         let l = crate::activity::list(&f.db.lock().unwrap(), &f.profile, 10).unwrap();
         assert!(l.iter().any(|e| e.kind == "challenge") && l.iter().any(|e| e.kind == "scout" && e.ok == Some(false)));
         assert!(f.sink.0.lock().unwrap().iter().any(|(e, p)| e == "notify" && p["kind"] == "attention"));
+    }
+
+    #[tokio::test]
+    async fn every_blocking_page_state_halts_scout_and_reports_the_halt() {
+        for page in ["logged_out", "challenge", "suspended", "locked"] {
+            let mock = MockDriver::new().with_eval_fn(move |_| json!({ "state": page, "me": null, "posts": [] }));
+            let b = browser(&mock).await;
+            let f = fixture();
+            let p = params(100, None);
+            let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+            let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+            assert_eq!(s.reason, page);
+            let ev = f.sink.0.lock().unwrap();
+            assert!(ev.iter().any(|(e, v)| e == "browser:halt" && v["state"] == page && v["source"] == "scout"), "{page}");
+            assert!(ev.iter().any(|(e, v)| e == "notify" && v["kind"] == "attention"), "{page}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_closed_window_reports_a_crash_halt() {
+        let mock = MockDriver::new();
+        let b = BrowserService::new(Box::new(mock));
+        let f = fixture();
+        let p = params(100, None);
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!(s.reason, "browser_error");
+        assert!(f.sink.0.lock().unwrap().iter().any(|(e, v)| e == "browser:halt" && v["state"] == "crashed"));
     }
 }

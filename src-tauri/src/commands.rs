@@ -1,4 +1,5 @@
 use crate::browser::compat::{self, VersionCheck};
+use crate::browser::health::BrowserStatus;
 use crate::browser::discovery::{self, BrowserInstall};
 use crate::browser::display::{self, DisplayServer};
 use crate::browser::service::{VisibleTweet, X_HOME_URL};
@@ -170,6 +171,7 @@ pub async fn browser_launch_x(app: AppHandle, state: State<'_, AppState>) -> App
         height: 900,
     };
     let launched = state.browser.launch(cfg).await?;
+    state.browser_health.set_expected_open(true);
     if launched {
         if let Err(e) = arrange_windows(&app, &state, true).await {
             log::warn!("restoring window layout: {e}");
@@ -333,7 +335,42 @@ pub async fn get_diagnostics(state: State<'_, AppState>) -> AppResult<String> {
 
 #[tauri::command]
 pub async fn browser_close(state: State<'_, AppState>) -> AppResult<()> {
+    state.browser_health.set_expected_open(false);
     Ok(state.browser.close().await?)
+}
+
+/// What the persistent banner shows: closed, crashed, logged out, challenge, suspended, locked or ready,
+/// plus the job (if any) that this stopped.
+#[tauri::command]
+pub async fn browser_status(state: State<'_, AppState>) -> AppResult<BrowserStatus> {
+    Ok(state.browser_health.status(&state.browser).await)
+}
+
+/// Raises the X window so the user can solve a check or log in (challenge takeover).
+#[tauri::command]
+pub async fn browser_focus_x(state: State<'_, AppState>) -> AppResult<()> {
+    Ok(state.browser.bring_to_front().await?)
+}
+
+/// The user fixed X by hand. Verifies the page and, if it is clear, releases the stopped job and starts a
+/// stopped Scout session again with its original settings.
+#[tauri::command]
+pub async fn browser_resume(app: AppHandle) -> AppResult<BrowserStatus> {
+    let state = app.state::<AppState>();
+    let outcome = state.browser_health.resume(&state.browser).await;
+    if let Some(params) = outcome.restart_scout {
+        crate::scout::commands::scout_start(app.clone(), params).await?;
+    }
+    Ok(outcome.status)
+}
+
+/// Gives up on the job a halt stopped. A running Scout session is stopped; X itself is left as it is.
+#[tauri::command]
+pub async fn browser_abort(app: AppHandle) -> AppResult<BrowserStatus> {
+    let state = app.state::<AppState>();
+    state.browser_health.abort();
+    crate::scout::commands::scout_stop(app.state::<crate::phase3::Phase3>());
+    Ok(state.browser_health.status(&state.browser).await)
 }
 
 #[tauri::command]

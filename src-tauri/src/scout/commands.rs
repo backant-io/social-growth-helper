@@ -57,6 +57,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         let db = state.db.lock().unwrap();
         let id = repo::create_session(&db, &state.profile_id, &params)?;
         let _ = repo::save_last_params(&db, &params);
+        state.browser_health.abort();
         *slot = Some(RunningScout { session_id: id.clone(), stop: stop.clone(), pause: pause.clone() });
         id
     };
@@ -81,6 +82,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
             pause_ms: (1800, 3600),
         };
         run_session(&env, &sid, &params).await;
+        state.browser_health.attach_scout_params(params.clone());
         *p3.scout.lock().unwrap() = None;
         crate::tray::refresh_all(&handle);
     });
