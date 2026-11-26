@@ -33,6 +33,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "phase3",
         sql: include_str!("migrations/0004_phase3.sql"),
     },
+    Migration {
+        version: 5,
+        name: "phase4_analytics_views",
+        sql: include_str!("migrations/0005_phase4_analytics_views.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -263,11 +268,18 @@ mod tests {
         let db = dir.path().join("app.db");
         let (mut conn, _) = open(&db, &dir.path().join("b")).unwrap();
         let before = table_count(&conn);
-        let top = MIGRATIONS.last().unwrap().version;
-        let bad = [Migration { version: top + 1, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" }];
+        let bad_version = latest_version() + 1;
+        let mut bad: Vec<Migration> = (1..=latest_version())
+            .map(|version| Migration { version, name: "noop", sql: "SELECT 1;" })
+            .collect();
+        bad.push(Migration {
+            version: bad_version,
+            name: "bad",
+            sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);",
+        });
         let err = migrate(&mut conn, &bad, None).unwrap_err();
-        assert!(err.to_string().contains(&format!("migration {}", top + 1)));
-        assert_eq!(user_version(&conn).unwrap(), top);
+        assert!(err.to_string().contains(&format!("migration {bad_version}")));
+        assert_eq!(user_version(&conn).unwrap(), latest_version());
         assert_eq!(table_count(&conn), before, "partial DDL must roll back");
     }
 

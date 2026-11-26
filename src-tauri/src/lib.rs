@@ -1,3 +1,4 @@
+pub mod analytics;
 pub mod browser;
 mod commands;
 pub mod activity;
@@ -110,6 +111,23 @@ pub fn run() {
             commands::style_parse_pasted_examples,
             commands::style_import_examples_from_browser,
             commands::style_run_bench,
+            // Phase 4: analytics & dynamic dashboard
+            analytics::commands::analytics_get_dashboard,
+            analytics::commands::analytics_sync_stats,
+            analytics::commands::analytics_list_views,
+            analytics::commands::analytics_switch_layout,
+            analytics::commands::analytics_save_layout_version,
+            analytics::commands::analytics_rename_layout,
+            analytics::commands::analytics_duplicate_layout,
+            analytics::commands::analytics_delete_layout,
+            analytics::commands::analytics_reset_starter_layout,
+            analytics::commands::analytics_add_widget,
+            analytics::commands::analytics_update_widget,
+            analytics::commands::analytics_remove_widget,
+            analytics::commands::analytics_update_widget_positions,
+            analytics::commands::analytics_preview_widget_spec,
+            analytics::commands::analytics_reprompt_widget,
+            analytics::commands::analytics_export_widget_csv,
             phase3::get_kill_switch,
             phase3::set_kill_switch,
             phase3::get_notifications,

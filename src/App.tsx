@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { AnalyticsPage } from "./analytics/AnalyticsPage";
 import { EmptyState } from "./components/EmptyState";
 import { OfflineBanner } from "./components/OfflineBanner";
 import { QuitGuardModal } from "./components/QuitGuardModal";
@@ -124,6 +125,8 @@ export default function App() {
             onReviewRules={() => setOverlay("rules")}
             onOpenSettings={() => setSection("settings")}
           />
+        ) : section === "analytics" && !locked ? (
+          <AnalyticsPage />
         ) : locked && ["scout", "reply", "activity"].includes(section) ? (
           <EmptyState section={active} locked={locked} onReviewRules={() => setOverlay("rules")} />
         ) : section === "scout" ? (
