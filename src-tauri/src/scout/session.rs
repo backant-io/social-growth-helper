@@ -5,7 +5,7 @@ use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead};
 use super::repo::{self, SessionParams};
 use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
 use crate::browser::health::{report_halt, BrowserState};
-use crate::browser::service::{BrowserService, X_HOME_URL};
+use crate::browser::service::{BrowserService, X_FOLLOWING_URL, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
 use crate::control::{EventSink, KillSwitch};
 use crate::selectors;
@@ -128,16 +128,45 @@ async fn wait_until_clear(env: &ScoutEnv<'_>, session_id: &str, paused_total: &m
     }
 }
 
-/// Feed pages to visit, in order: the For You timeline and/or each watchlist profile (SCT-16).
+/// Feed pages to visit, in order: the For You timeline, the Following timeline and/or each watchlist profile
+/// (SCT-03, SCT-16). `both` stays For You + watchlist; `all` is every source.
 pub fn targets(feed_source: &str, watchlist: &[String]) -> Vec<String> {
     let mut t = vec![];
-    if feed_source != "watchlist" {
+    if matches!(feed_source, "for_you" | "both" | "all") {
         t.push(X_HOME_URL.to_string());
     }
-    if feed_source != "for_you" {
+    if matches!(feed_source, "following" | "all") {
+        t.push(X_FOLLOWING_URL.to_string());
+    }
+    if matches!(feed_source, "watchlist" | "both" | "all") {
         t.extend(watchlist.iter().map(|h| format!("https://x.com/{h}")));
     }
     t
+}
+
+/// Whether the session reads the Following timeline, so the home page's tab must be set explicitly.
+fn uses_following(feed_source: &str) -> bool {
+    matches!(feed_source, "following" | "all")
+}
+
+/// Opens a feed target. The home page remembers the last selected tab, so For You and Following are chosen
+/// by clicking the tab (best effort; a missing tab leaves whatever X shows).
+async fn visit(d: &dyn crate::browser::BrowserDriver, url: &str, following_in_play: bool) -> Result<(), crate::browser::BrowserError> {
+    d.navigate(url).await?;
+    let tab = if url == X_FOLLOWING_URL {
+        "following"
+    } else if url == X_HOME_URL && following_in_play {
+        "for you"
+    } else {
+        return Ok(());
+    };
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    if let Ok(v) = d.eval_json(&selectors::rect_js(None, &selectors::sel::FEED_TAB, Some(tab))).await {
+        if let (Some(x), Some(y)) = (v["x"].as_f64(), v["y"].as_f64()) {
+            let _ = d.click_point(x, y).await;
+        }
+    }
+    Ok(())
 }
 
 /// Fetches a small thumbnail for up to a few image posts per session and keeps a copy on disk (SCT-19).
@@ -191,6 +220,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
 
     let watchlist = get_watchlist(&env.db.lock().unwrap());
     let targets = targets(&params.feed_source, &watchlist);
+    let following_in_play = uses_following(&params.feed_source);
     let per_target = ((params.max_posts as usize).div_ceil(targets.len().max(1))).max(5);
     let (mut target_idx, mut target_new) = (0usize, 0usize);
     let mut paused_total = Duration::ZERO;
@@ -198,7 +228,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     {
         let d = env.browser.lock().await;
         if d.is_running() {
-            let _ = d.navigate(targets.first().map(String::as_str).unwrap_or(X_HOME_URL)).await;
+            let _ = visit(&*d, targets.first().map(String::as_str).unwrap_or(X_HOME_URL), following_in_play).await;
         }
     }
     if env.pause_ms.1 > 0 {
@@ -331,7 +361,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             target_idx += 1;
             (target_new, empty_scrolls) = (0, 0);
             let d = env.browser.lock().await;
-            if d.navigate(&targets[target_idx]).await.is_err() {
+            if visit(&*d, &targets[target_idx], following_in_play).await.is_err() {
                 break 'main "browser_error".into();
             }
             drop(d);
@@ -578,6 +608,42 @@ mod tests {
         assert_eq!(targets("for_you", &w), vec![X_HOME_URL.to_string()]);
         assert_eq!(targets("watchlist", &w), vec!["https://x.com/naval".to_string(), "https://x.com/paulg".to_string()]);
         assert_eq!(targets("both", &w).len(), 3);
+    }
+
+    #[test]
+    fn following_is_its_own_feed_target() {
+        let w = vec!["naval".to_string()];
+        assert_eq!(targets("following", &w), vec![X_FOLLOWING_URL.to_string()]);
+        assert_eq!(targets("all", &w), vec![X_HOME_URL.to_string(), X_FOLLOWING_URL.to_string(), "https://x.com/naval".to_string()]);
+        assert_eq!(targets("both", &w), vec![X_HOME_URL.to_string(), "https://x.com/naval".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn following_session_selects_the_following_tab_and_labels_the_source() {
+        let mock = MockDriver::new().with_eval_fn(|js| if js.contains("[role=\\\"tab\\\"]") || js.contains("role=\\\"tab") { json!({ "x": 120.0, "y": 48.0 }) } else { feed(12, 0) });
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = SessionParams { feed_source: "following".into(), ..params(100, None) };
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        let calls = mock.calls();
+        assert!(calls.iter().any(|c| *c == format!("navigate {X_FOLLOWING_URL}")));
+        assert!(!calls.iter().any(|c| *c == format!("navigate {X_HOME_URL}")), "following-only sessions skip the For You target");
+        assert!(calls.iter().any(|c| c == "click 120,48"), "the Following tab is clicked");
+        let src: String = f.db.lock().unwrap().query_row("SELECT feed_source FROM observed_posts LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(src, "following");
+    }
+
+    #[tokio::test]
+    async fn missing_following_tab_does_not_abort_the_session() {
+        let mock = MockDriver::new().with_eval_fn(|js| if js.contains("role=\\\"tab") { json!(null) } else { feed(12, 0) });
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = SessionParams { feed_source: "following".into(), ..params(100, None) };
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert!(!mock.calls().iter().any(|c| c.starts_with("click ")));
+        assert_ne!(s.reason, "browser_error");
     }
 
     #[tokio::test]

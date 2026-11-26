@@ -212,8 +212,10 @@ export function ScoutPage({ onOpenDraft, onGoToSettings }: Props) {
               <span className={muted}>Source</span>
               <select value={params.feed_source} onChange={(e) => setParams({ ...params, feed_source: e.target.value as SessionParams["feed_source"] })} className={input}>
                 <option value="for_you">For You feed</option>
+                <option value="following">Following feed</option>
                 <option value="watchlist">Watchlist accounts</option>
-                <option value="both">Both</option>
+                <option value="both">For You + Watchlist</option>
+                <option value="all">All sources</option>
               </select>
             </label>
             <label className="flex items-center gap-2 text-sm">

@@ -10,8 +10,9 @@ use crate::state::AppState;
 use crate::storage::repo::{get_setting, set_setting};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -29,6 +30,25 @@ pub struct Phase3 {
     completion: RwLock<Arc<dyn CompletionProvider>>,
     pub scout: Mutex<Option<RunningScout>>,
     pub publish: PublishQueue,
+    notify_targets: Mutex<NotifyTargets>,
+    next_notify_id: AtomicI32,
+}
+
+/// Which app section each shown OS notification points at, so a click can open the relevant one.
+#[derive(Default)]
+struct NotifyTargets {
+    by_id: HashMap<i32, &'static str>,
+    last: Option<&'static str>,
+}
+
+const MAX_TRACKED_NOTIFICATIONS: usize = 64;
+
+/// Section to open when a notification of this kind is clicked (SHL-09).
+pub fn notification_section(kind: &str) -> &'static str {
+    match kind {
+        "scout_done" => "scout",
+        _ => "activity",
+    }
 }
 
 impl Phase3 {
@@ -38,7 +58,29 @@ impl Phase3 {
             completion: RwLock::new(Arc::new(UnconfiguredProvider)),
             scout: Mutex::new(None),
             publish: PublishQueue::new(),
+            notify_targets: Mutex::new(NotifyTargets::default()),
+            next_notify_id: AtomicI32::new(1),
         }
+    }
+
+    /// Reserves an id for a notification about to be shown and remembers where a click on it should go.
+    pub fn track_notification(&self, kind: &str) -> i32 {
+        let id = self.next_notify_id.fetch_add(1, Ordering::SeqCst);
+        let section = notification_section(kind);
+        let mut t = self.notify_targets.lock().unwrap();
+        if t.by_id.len() >= MAX_TRACKED_NOTIFICATIONS {
+            t.by_id.clear();
+        }
+        t.by_id.insert(id, section);
+        t.last = Some(section);
+        id
+    }
+
+    /// The section for a clicked notification. Some platforms do not report which notification was
+    /// clicked, so the most recent one is used then.
+    pub fn clicked_section(&self, id: Option<i32>) -> &'static str {
+        let t = self.notify_targets.lock().unwrap();
+        id.and_then(|i| t.by_id.get(&i).copied()).or(t.last).unwrap_or("scout")
     }
 
     pub fn completion(&self) -> Arc<dyn CompletionProvider> {
@@ -104,7 +146,8 @@ impl EventSink for TauriSink {
                 use tauri_plugin_notification::NotificationExt;
                 let title = payload.get("title").and_then(|t| t.as_str()).unwrap_or("Social Growth Helper");
                 let body = payload.get("body").and_then(|t| t.as_str()).unwrap_or("");
-                let _ = self.0.notification().builder().title(title).body(body).show();
+                let id = self.0.state::<Phase3>().track_notification(kind);
+                let _ = self.0.notification().builder().id(id).title(title).body(body).show();
             }
         }
         if event == "browser:halt" {
@@ -124,6 +167,27 @@ impl EventSink for TauriSink {
         if event.starts_with("scout:") || event == "publish:update" {
             crate::tray::refresh_all(&self.0);
         }
+    }
+}
+
+/// Brings the main window to the front and opens the section a clicked notification refers to.
+pub fn focus_for_notification(app: &AppHandle, notification_id: Option<i32>) {
+    let section = app.state::<Phase3>().clicked_section(notification_id);
+    crate::tray::show_main(app);
+    let _ = app.emit("nav:go", section);
+}
+
+/// Registers the click-to-focus handler on OS notifications (SHL-09).
+pub fn install_notification_click_handler(app: &AppHandle) {
+    use tauri_plugin_notification::NotificationExt;
+    let handle = app.clone();
+    let res = app.notification().on_action(move |performed| {
+        if performed.action_id() == "tap" {
+            focus_for_notification(&handle, performed.notification().map(|n| n.id()));
+        }
+    });
+    if let Err(e) = res {
+        log::warn!("notification click handler unavailable: {e}");
     }
 }
 
@@ -264,6 +328,23 @@ pub fn purge_old_files(dir: &Path, days: u64) -> usize {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn notification_clicks_open_the_relevant_section() {
+        assert_eq!(notification_section("scout_done"), "scout");
+        assert_eq!(notification_section("publish_failed"), "activity");
+        assert_eq!(notification_section("publish_done"), "activity");
+        assert_eq!(notification_section("attention"), "activity");
+        let p3 = Phase3::new(false);
+        assert_eq!(p3.clicked_section(None), "scout", "no notification shown yet");
+        let a = p3.track_notification("scout_done");
+        let b = p3.track_notification("publish_failed");
+        assert_ne!(a, b);
+        assert_eq!(p3.clicked_section(Some(a)), "scout");
+        assert_eq!(p3.clicked_section(Some(b)), "activity");
+        assert_eq!(p3.clicked_section(Some(9999)), "activity", "unknown ids fall back to the latest notification");
+        assert_eq!(p3.clicked_section(None), "activity");
+    }
 
     #[test]
     fn notification_toggles_apply_per_kind() {

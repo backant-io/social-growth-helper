@@ -77,7 +77,7 @@ export interface ScoutStatus {
 }
 
 export interface SessionParams {
-  feed_source: "for_you" | "watchlist" | "both";
+  feed_source: "for_you" | "following" | "watchlist" | "both" | "all";
   max_duration_sec: number;
   max_posts: number;
   stop_after_queued: number | null;
