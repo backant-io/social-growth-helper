@@ -113,7 +113,7 @@ function SecurityPanel() {
   );
 }
 
-function BrowserPanel({ rulesAcknowledged }: { rulesAcknowledged: boolean }) {
+export function BrowserPanel({ rulesAcknowledged }: { rulesAcknowledged: boolean }) {
   const [info, setInfo] = useState<BrowserInfo | null>(null);
   const [path, setPath] = useState("");
   const [message, setMessage] = useState<string | null>(null);
@@ -329,7 +329,7 @@ function DiagnosticsPanel() {
   );
 }
 
-function ProvidersPanel({
+export function ProvidersPanel({
   providers,
   offline,
   onChanged,
@@ -659,7 +659,7 @@ function ProvidersPanel({
   );
 }
 
-function RoutingPanel({
+export function RoutingPanel({
   providers,
   routes,
   onChanged,

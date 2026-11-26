@@ -4,6 +4,7 @@ import type { RulesStatus } from "../lib/types";
 import { PreferencesStep } from "./PreferencesStep";
 import { RulesStep } from "./RulesStep";
 import { SampleCard } from "./SampleCard";
+import { SetupStep } from "./SetupSteps";
 import { TOUR_STEPS, wizardOrder } from "./tourSteps";
 
 export type OnboardingMode = "full" | "tour" | "rules";
@@ -74,6 +75,9 @@ export function Onboarding({ mode, rulesAcknowledged, onFinished, onDismiss }: P
                 <PreferencesStep onBack={back} onSaved={next} />
               </div>
             </div>
+          )}
+          {(step.kind === "browser" || step.kind === "providers" || step.kind === "style" || step.kind === "routing") && (
+            <SetupStep kind={step.kind} rulesAcknowledged={rulesAcknowledged} onBack={back} onNext={next} />
           )}
           {step.kind === "rules" && (
             <RulesStep

@@ -44,7 +44,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
     if !state.browser.is_running().await {
         return Err(AppError::Validation("Open the X window first (sidebar, then Open X).".into()));
     }
-    if params.feed_source != "for_you" && crate::phase3::get_watchlist(&state.db.lock().unwrap()).is_empty() {
+    if matches!(params.feed_source.as_str(), "watchlist" | "both") && crate::phase3::get_watchlist(&state.db.lock().unwrap()).is_empty() {
         return Err(AppError::Validation("Add accounts to your watchlist in Settings first.".into()));
     }
     let stop = Arc::new(AtomicBool::new(false));

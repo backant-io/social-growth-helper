@@ -71,6 +71,7 @@ pub fn run() {
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray unavailable: {e}");
             }
+            phase3::install_notification_click_handler(app.handle());
             commands::restore_app_window_layout(app.handle());
             // A Chrome left running by a crashed or force-killed previous session is closed before anything else.
             tauri::async_runtime::spawn(async move {

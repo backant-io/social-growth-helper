@@ -39,6 +39,7 @@ pub mod sel {
     sel!(QUOTE_CARD, "[data-testid=\"quoteTweet\"]", []);
     sel!(SHOW_MORE, "[data-testid=\"tweet-text-show-more-link\"]", []);
     sel!(IMAGE, "[data-testid=\"tweetPhoto\"] img", []);
+    sel!(FEED_TAB, "[role=\"tab\"]", []);
     sel!(ACCOUNT_SWITCHER, "[data-testid=\"SideNav_AccountSwitcher_Button\"]", []);
     sel!(LIKE, "[data-testid=\"like\"]", ["button[aria-label*=\"Like\"]"]);
     sel!(UNLIKE, "[data-testid=\"unlike\"]", ["button[aria-label*=\"Liked\"]"]);

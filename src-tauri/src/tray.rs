@@ -71,7 +71,7 @@ fn menu(app: &AppHandle, s: &Snapshot) -> tauri::Result<tauri::menu::Menu<tauri:
         .build()
 }
 
-fn show_main(app: &AppHandle) {
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();

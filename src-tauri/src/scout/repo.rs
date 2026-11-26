@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_THRESHOLD: f64 = 72.0;
 pub const QUEUE_TTL_SECS: i64 = 24 * 3600;
+pub const FEED_SOURCES: &[&str] = &["for_you", "following", "watchlist", "both", "all"];
 pub const DISMISS_REASONS: &[&str] = &["off_topic", "low_quality", "not_my_voice", "already_replied", "too_late", "other"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,8 +23,8 @@ pub struct SessionParams {
 impl SessionParams {
     /// Manual duration and post amount are required, with sane bounds (SCT-01, SCT-22).
     pub fn validate(&self) -> AppResult<()> {
-        if !["for_you", "watchlist", "both"].contains(&self.feed_source.as_str()) {
-            return Err(AppError::Validation("feed source must be For You, Watchlist or both".into()));
+        if !FEED_SOURCES.contains(&self.feed_source.as_str()) {
+            return Err(AppError::Validation("feed source must be For You, Following, Watchlist, both (For You + Watchlist) or all".into()));
         }
         if !(30..=4 * 3600).contains(&self.max_duration_sec) {
             return Err(AppError::Validation("duration must be between 30 seconds and 4 hours".into()));
@@ -276,7 +277,9 @@ mod tests {
         assert!(SessionParams { max_posts: 0, ..params_ok() }.validate().is_err());
         assert!(SessionParams { stop_after_queued: Some(0), ..params_ok() }.validate().is_err());
         assert!(SessionParams { threshold: 101.0, ..params_ok() }.validate().is_err());
-        assert!(SessionParams { feed_source: "following".into(), ..params_ok() }.validate().is_err());
+        assert!(SessionParams { feed_source: "timeline".into(), ..params_ok() }.validate().is_err());
+        assert!(SessionParams { feed_source: "following".into(), ..params_ok() }.validate().is_ok());
+        assert!(SessionParams { feed_source: "all".into(), ..params_ok() }.validate().is_ok());
     }
 
     #[test]

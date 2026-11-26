@@ -17,6 +17,8 @@ impl std::ops::Deref for BrowserGuard<'_> {
 }
 
 pub const X_HOME_URL: &str = "https://x.com/home";
+/// The Following timeline is a tab on the home page; the fragment only marks it as a separate Scout target.
+pub const X_FOLLOWING_URL: &str = "https://x.com/home#following";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VisibleTweet {
