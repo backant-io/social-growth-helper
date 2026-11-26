@@ -20,3 +20,21 @@ body {
   outline: 2px solid #71717a;
   outline-offset: 2px;
 }
+
+/* macOS only: the window is transparent with a native sidebar vibrancy effect behind the sidebar (SHL-03). */
+html[data-vibrancy="sidebar"],
+html[data-vibrancy="sidebar"] body,
+html[data-vibrancy="sidebar"] #root {
+  background: transparent;
+}
+
+html[data-vibrancy="sidebar"] [data-vibrancy-sidebar] {
+  background: transparent;
+  border-color: rgb(0 0 0 / 0.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  html[data-vibrancy="sidebar"] [data-vibrancy-sidebar] {
+    border-color: rgb(255 255 255 / 0.1);
+  }
+}

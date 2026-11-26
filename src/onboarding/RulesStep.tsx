@@ -7,6 +7,7 @@ interface Props {
   onBack?: () => void;
   alreadyAcknowledged?: boolean;
   onClose?: () => void;
+  closeLabel?: string;
 }
 
 function renderNotice(text: string) {
@@ -18,7 +19,7 @@ function renderNotice(text: string) {
   });
 }
 
-export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose }: Props) {
+export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose, closeLabel = "Close" }: Props) {
   const [notice, setNotice] = useState<RulesNotice | null>(null);
   const [checked, setChecked] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +51,7 @@ export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose
         <div className="mt-4 flex items-center justify-between border-t border-zinc-200 pt-4 dark:border-zinc-800">
           <span className="text-sm text-emerald-600 dark:text-emerald-400">You acknowledged this notice.</span>
           <button type="button" onClick={onClose} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
-            Close
+            {closeLabel}
           </button>
         </div>
       ) : (

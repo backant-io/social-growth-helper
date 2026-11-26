@@ -13,7 +13,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: "sources", label: "Sources and settings" },
 ];
 
-export function CreatorPage({ locked }: { locked: boolean }) {
+export function CreatorPage({ locked, onGoToSettings }: { locked: boolean; onGoToSettings?: () => void }) {
   const [tab, setTab] = useState<Tab>("write");
   const [xRunning, setXRunning] = useState(false);
   const paused = useKillSwitch();
@@ -34,7 +34,7 @@ export function CreatorPage({ locked }: { locked: boolean }) {
       <PageHeader title="Creator" description="Turn a rough thought into an original post, using formats that have worked for others. You approve every post before it goes to X." />
       <Tabs label="Creator sections" idPrefix="creator" tabs={TABS} active={tab} onChange={setTab} />
       <div role="tabpanel" id={`creator-panel-${tab}`} aria-labelledby={`creator-tab-${tab}`}>
-        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} paused={paused} />}
+        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} paused={paused} onGoToSettings={onGoToSettings} />}
         {tab === "formats" && <FormatsPanel />}
         {tab === "sources" && <SourcesPanel locked={locked} xRunning={xRunning} paused={paused} />}
       </div>

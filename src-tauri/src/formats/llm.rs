@@ -12,6 +12,8 @@ pub struct JsonRequest {
     pub task: &'static str,
     pub system: String,
     pub user: String,
+    /// When set, an active prompt override for the task replaces `system` and `user` (LLM-19).
+    pub slots: Option<crate::completion::PromptSlots>,
 }
 
 #[derive(Debug, thiserror::Error)]

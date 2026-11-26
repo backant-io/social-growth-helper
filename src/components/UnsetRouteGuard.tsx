@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { api } from "../lib/api";
 import type { ProviderAccountView, TaskModelRoute, TaskType } from "../lib/types";
 import { TASK_METAS } from "../lib/types";
 import { ModelPicker, type ModelSelection } from "./ModelPicker";
+import { saveRouteSelection } from "./modelRoute";
 
 interface Props {
   taskType: TaskType;
@@ -30,16 +30,7 @@ export function UnsetRouteGuard({ taskType, providers, route, onAssigned, onGoTo
     setSaving(true);
     setError(null);
     try {
-      await api.llmSaveTaskRoute({
-        task_type: taskType,
-        provider_account_id: selection.providerAccountId,
-        model_id: selection.modelId,
-        reasoning_effort: route?.reasoning_effort ?? null,
-        temperature: route?.temperature ?? null,
-        fallback_account_id: route?.fallback_account_id ?? null,
-        fallback_model_id: route?.fallback_model_id ?? null,
-        max_calls_per_hour: route?.max_calls_per_hour ?? null,
-      });
+      await saveRouteSelection(taskType, route, selection);
       await onAssigned();
     } catch (e) {
       setError((e as Error).message);

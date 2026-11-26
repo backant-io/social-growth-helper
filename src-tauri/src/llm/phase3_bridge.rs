@@ -2,11 +2,11 @@
 //! vision fallback all run through the user's task routes, rate guards and fallbacks (LLM-15, LLM-20).
 
 use super::catalog::merge_catalog;
-use super::prompts::get_active_prompt;
+use super::prompts::{get_active_prompt, resolve_prompt};
 use super::repo::{get_task_route, list_provider_accounts};
 use super::router::{LlmRouter, RouteOverride};
 use super::{LlmContentPart, LlmErrorKind, LlmMessage, LlmRequest, LlmRole, TaskType};
-use crate::completion::{Completion, CompletionError, CompletionProvider, CompletionRequest, TaskSlot};
+use crate::completion::{Completion, CompletionError, CompletionProvider, CompletionRequest, PromptSlots, TaskSlot};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
@@ -92,7 +92,16 @@ impl CompletionProvider for RouterCompletion {
 
     async fn complete(&self, req: CompletionRequest) -> Result<Completion, CompletionError> {
         let task = task_type(req.task);
-        let prompt_version = get_active_prompt(&self.db.lock().unwrap(), task).ok().map(|p| p.version);
+        let (system, user, prompt_version) = {
+            let conn = self.db.lock().unwrap();
+            match &req.slots {
+                Some(slots) => match resolve_prompt(&conn, task, &req.system, &req.user, slots) {
+                    Ok(p) => (p.system, p.user, Some(p.version)),
+                    Err(_) => (req.system.clone(), req.user.clone(), None),
+                },
+                None => (req.system.clone(), req.user.clone(), get_active_prompt(&conn, task).ok().filter(|p| !p.is_override).map(|p| p.version)),
+            }
+        };
         let override_route = match req.model_hint.as_deref().filter(|h| !h.trim().is_empty()) {
             Some(h) => {
                 let conn = self.db.lock().unwrap();
@@ -100,12 +109,12 @@ impl CompletionProvider for RouterCompletion {
             }
             None => None,
         };
-        let mut parts = vec![LlmContentPart::Text { text: req.user.clone() }];
+        let mut parts = vec![LlmContentPart::Text { text: user }];
         parts.extend(req.images.iter().map(|b| LlmContentPart::ImageBase64 { media_type: media_type(b).into(), data_base64: b.clone() }));
         let llm = LlmRequest {
             task_type: task,
             model_id: String::new(),
-            system_prompt: Some(req.system.clone()),
+            system_prompt: Some(system),
             messages: vec![LlmMessage { role: LlmRole::User, parts }],
             temperature: None,
             reasoning_effort: None,
@@ -212,24 +221,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_calls_carry_the_active_prompt_version() {
+    async fn production_calls_use_the_active_prompt_text_and_log_its_version() {
         let (_d, b, cli, _xai) = rig();
         route(&b, TaskType::ReplyDrafting, "cli", "sonnet");
-        cli.push_ok("{\"variants\":[]}");
-        cli.push_ok("{\"variants\":[]}");
-        let req = || CompletionRequest::new(TaskSlot::ReplyDrafting, "s".into(), "u".into(), true);
+        for _ in 0..3 {
+            cli.push_ok("{\"variants\":[]}");
+        }
+        let slots = || PromptSlots {
+            vars: vec![("post_text", "the post".into())],
+            required: vec!["post_text"],
+            guard: "GUARD".into(),
+            extra: "EXTRA".into(),
+        };
+        let req = || CompletionRequest::new(TaskSlot::ReplyDrafting, "built sys".into(), "built usr".into(), true).with_slots(slots());
         b.complete(req()).await.unwrap();
-        crate::llm::prompts::save_prompt_override(&b.db.lock().unwrap(), TaskType::ReplyDrafting, "sys v2", "usr v2").unwrap();
+        crate::llm::prompts::save_prompt_override(&b.db.lock().unwrap(), TaskType::ReplyDrafting, "sys v2", "usr v2 {{post_text}}").unwrap();
+        b.complete(req()).await.unwrap();
+        crate::llm::prompts::reset_prompt_to_default(&b.db.lock().unwrap(), TaskType::ReplyDrafting).unwrap();
         b.complete(req()).await.unwrap();
         let calls = cli.recorded_calls();
-        assert_eq!(calls[0].prompt_version, Some(1));
-        assert_eq!(calls[1].prompt_version, Some(2));
+        assert_eq!(calls[0].system_prompt.as_deref(), Some("built sys"), "no override keeps the built-in prompt");
+        assert_eq!(calls[1].system_prompt.as_deref(), Some("sys v2\n\nGUARD"));
+        let sent = calls[1].messages[0].parts.iter().find_map(|p| if let LlmContentPart::Text { text } = p { Some(text.clone()) } else { None }).unwrap();
+        assert_eq!(sent, "usr v2 the post\n\nEXTRA");
+        assert_eq!(calls[2].system_prompt.as_deref(), Some("built sys"), "reset returns to the built-in prompt");
+        assert_eq!(calls.iter().map(|c| c.prompt_version).collect::<Vec<_>>(), vec![Some(1), Some(2), Some(1)]);
         let logged: Vec<Option<u32>> = {
             let conn = b.db.lock().unwrap();
             let mut st = conn.prepare("SELECT prompt_version FROM llm_usage_logs WHERE task_type='reply_drafting' ORDER BY rowid").unwrap();
             st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
         };
-        assert_eq!(logged, vec![Some(1), Some(2)]);
+        assert_eq!(logged, vec![Some(1), Some(2), Some(1)]);
+    }
+
+    #[tokio::test]
+    async fn an_override_is_not_claimed_for_calls_that_cannot_use_it() {
+        let (_d, b, cli, _xai) = rig();
+        route(&b, TaskType::BrowserNavigation, "cli", "sonnet");
+        cli.push_ok("{}");
+        crate::llm::prompts::save_prompt_override(&b.db.lock().unwrap(), TaskType::BrowserNavigation, "sys v2", "usr v2").unwrap();
+        b.complete(CompletionRequest::new(TaskSlot::BrowserNavigation, "built".into(), "u".into(), true)).await.unwrap();
+        let call = &cli.recorded_calls()[0];
+        assert_eq!(call.system_prompt.as_deref(), Some("built"));
+        assert_eq!(call.prompt_version, None);
     }
 
     #[tokio::test]

@@ -95,7 +95,7 @@ async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], pref
     let mut by_id: Vec<Score> = vec![];
     if env.completion.is_configured(TaskSlot::PostScoring) {
         let (system, user) = build_scoring_prompt(rubric, batch);
-        let req = CompletionRequest::new(TaskSlot::PostScoring, system, user, true).with_images(super::score::batch_images(batch));
+        let req = CompletionRequest::new(TaskSlot::PostScoring, system, user, true).with_slots(super::score::scoring_slots(rubric, batch)).with_images(super::score::batch_images(batch));
         if let Ok(c) = env.completion.complete(req).await {
             by_id = parse_scores(&c.text, &ids);
             model = c.model;
