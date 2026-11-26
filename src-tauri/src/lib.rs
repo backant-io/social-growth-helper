@@ -2,11 +2,13 @@ pub mod browser;
 mod commands;
 pub mod error;
 pub mod lifecycle;
+pub mod llm;
 mod menu;
 pub mod onboarding;
 pub mod secrets;
 pub mod state;
 pub mod storage;
+pub mod style;
 pub mod util;
 
 use state::{AppPaths, AppState};
@@ -55,6 +57,34 @@ pub fn run() {
             commands::browser_read_visible_tweets,
             commands::active_jobs,
             commands::quit_app,
+            commands::llm_list_providers,
+            commands::llm_detect_claude_cli,
+            commands::llm_connect_claude_cli,
+            commands::llm_connect_grok_web,
+            commands::llm_save_api_key_provider,
+            commands::llm_xai_oauth_start,
+            commands::llm_xai_oauth_poll,
+            commands::llm_health_check_provider,
+            commands::llm_refresh_provider_models,
+            commands::llm_add_custom_model,
+            commands::llm_disconnect_provider,
+            commands::llm_list_task_routes,
+            commands::llm_save_task_route,
+            commands::llm_usage_dashboard,
+            commands::llm_list_prompts,
+            commands::llm_save_prompt_override,
+            commands::llm_reset_prompt,
+            commands::style_get_active_guide,
+            commands::style_list_guide_versions,
+            commands::style_save_guide_version,
+            commands::style_activate_guide_version,
+            commands::style_list_examples,
+            commands::style_search_examples,
+            commands::style_upsert_example,
+            commands::style_delete_example,
+            commands::style_parse_pasted_examples,
+            commands::style_import_examples_from_browser,
+            commands::style_run_bench,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Social Growth Helper");

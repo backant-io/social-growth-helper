@@ -1,12 +1,15 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// UTC timestamp as `YYYY-MM-DDTHH:MM:SSZ` (the format stored in every `*_at` column).
-pub fn now_rfc3339() -> String {
-    let secs = SystemTime::now()
+pub fn now_epoch_secs() -> i64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    format_unix(secs)
+        .unwrap_or(0)
+}
+
+pub fn now_rfc3339() -> String {
+    format_unix(now_epoch_secs())
 }
 
 pub fn format_unix(secs: i64) -> String {
