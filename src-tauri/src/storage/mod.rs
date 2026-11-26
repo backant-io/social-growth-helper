@@ -28,6 +28,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "phase2_llm_style",
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
+    Migration {
+        version: 4,
+        name: "phase4_analytics_views",
+        sql: include_str!("migrations/0004_phase4_analytics_views.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -228,7 +233,8 @@ mod tests {
 
         let (conn, report) = open(&db, &bk).unwrap();
         assert_eq!(report.from_version, 1);
-        assert_eq!(report.applied, vec![2, 3]);
+        let expected: Vec<u32> = MIGRATIONS.iter().map(|m| m.version).filter(|v| *v > 1).collect();
+        assert_eq!(report.applied, expected);
         let backup = report.backup_path.expect("backup must exist before migrating an existing db");
         assert!(backup.exists());
 
@@ -249,14 +255,17 @@ mod tests {
         let db = dir.path().join("app.db");
         let (mut conn, _) = open(&db, &dir.path().join("b")).unwrap();
         let before = table_count(&conn);
-        let bad = [
-            Migration { version: 1, name: "a", sql: "SELECT 1;" },
-            Migration { version: 2, name: "b", sql: "SELECT 1;" },
-            Migration { version: 3, name: "c", sql: "SELECT 1;" },
-            Migration { version: 4, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" },
-        ];
+        let bad_version = latest_version() + 1;
+        let mut bad: Vec<Migration> = (1..=latest_version())
+            .map(|version| Migration { version, name: "noop", sql: "SELECT 1;" })
+            .collect();
+        bad.push(Migration {
+            version: bad_version,
+            name: "bad",
+            sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);",
+        });
         let err = migrate(&mut conn, &bad, None).unwrap_err();
-        assert!(err.to_string().contains("migration 4"));
+        assert!(err.to_string().contains(&format!("migration {bad_version}")));
         assert_eq!(user_version(&conn).unwrap(), latest_version());
         assert_eq!(table_count(&conn), before, "partial DDL must roll back");
     }
