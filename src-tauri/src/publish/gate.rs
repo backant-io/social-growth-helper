@@ -10,7 +10,7 @@
 
 use crate::creator::drafts as ogc;
 use crate::drafts::bundle::{text_action, ActionKind};
-use crate::drafts::edit::{pre_publish_problems, DEFAULT_MAX_CHARS};
+use crate::drafts::edit::{pre_publish_problems, text_problems, DEFAULT_MAX_CHARS};
 use crate::drafts::repo;
 use crate::error::{AppError, AppResult};
 use crate::onboarding::require_acknowledged;
@@ -141,6 +141,13 @@ pub fn approve_bundle(conn: &Connection, profile_id: &str, draft_id: &str, confi
 pub fn approve_top_level(conn: &Connection, profile_id: &str, ogc_draft_id: &str, expected_text: &str, max_chars: usize, kill_engaged: bool) -> AppResult<Approval> {
     require_open(kill_engaged)?;
     require_acknowledged(conn)?;
+    let style = repo::load_style(conn, profile_id)?;
+    let mut recent = repo::recent_published_texts(conn, profile_id, 50)?;
+    recent.extend(ogc::recent_published_texts(conn, profile_id, 50)?);
+    let problems = text_problems(expected_text, max_chars, &style.banned, &recent);
+    if !problems.is_empty() {
+        return Err(AppError::Validation(problems.join(" ")));
+    }
     let claimed = ogc::claim(conn, profile_id, ogc_draft_id, expected_text, max_chars)?;
     Ok(Approval {
         ref_id: new_id(),
@@ -241,5 +248,52 @@ mod tests {
         assert_eq!((a.source(), a.kind(), a.draft_id(), a.text()), ("ogc_publish", "ogc", None, "hi there"));
         assert_eq!(a.top_level().map(|(id, text, media)| (id.to_string(), text.to_string(), media.len())), Some((d.id.clone(), "hi there".into(), 0)));
         assert!(approve_top_level(&conn, &profile, &d.id, "hi there", 280, false).is_err(), "a second click cannot claim it again");
+    }
+
+    fn variant(conn: &Connection, profile: &str, text: &str) -> String {
+        crate::creator::drafts::insert(
+            conn,
+            profile,
+            &crate::creator::drafts::NewDraft { format_id: None, batch_id: None, topic_seed: "t", text, model_used: "m", status: "variant", similarity: None },
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn top_level_post_runs_the_banned_phrase_check_without_claiming_the_draft() {
+        let (conn, profile) = db();
+        acknowledge(&conn);
+        conn.execute(
+            "INSERT INTO style_guides (id, profile_id, version, free_text_guide, banned_patterns_json, is_active, created_at) VALUES ('g',?1,1,'Plain.','[\"synergy\"]',1,'t')",
+            [&profile],
+        )
+        .unwrap();
+        let d = variant(&conn, &profile, "Pure Synergy wins");
+        let err = approve_top_level(&conn, &profile, &d, "Pure Synergy wins", 280, false).unwrap_err().to_string();
+        assert!(err.contains("banned phrase"), "{err}");
+        let status: String = conn.query_row("SELECT status FROM ogc_drafts WHERE id=?1", [&d], |r| r.get(0)).unwrap();
+        assert_eq!(status, "variant", "a refused approval changes nothing");
+    }
+
+    #[test]
+    fn top_level_post_refuses_a_repeat_of_a_recent_post_of_either_kind() {
+        let (conn, profile) = db();
+        acknowledge(&conn);
+        let first = variant(&conn, &profile, "Ship small, ship often");
+        crate::creator::drafts::mark_published(&conn, &profile, &first, None).unwrap();
+        let again = variant(&conn, &profile, "ship small,  ship often");
+        let err = approve_top_level(&conn, &profile, &again, "ship small,  ship often", 280, false).unwrap_err().to_string();
+        assert!(err.contains("already posted"), "{err}");
+
+        let o = post(&conn, &profile, "5", "a", "t");
+        let reply = repo::create(&conn, &profile, &o, None).unwrap();
+        repo::save_edit(&conn, &reply, "Reply text that went out").unwrap();
+        repo::set_status(&conn, &reply, "published", None).unwrap();
+        let copy = variant(&conn, &profile, "Reply text that went out");
+        assert!(approve_top_level(&conn, &profile, &copy, "Reply text that went out", 280, false).unwrap_err().to_string().contains("already posted"));
+
+        let fresh = variant(&conn, &profile, "Something new entirely");
+        assert!(approve_top_level(&conn, &profile, &fresh, "Something new entirely", 280, false).is_ok());
     }
 }

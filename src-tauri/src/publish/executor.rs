@@ -298,6 +298,11 @@ pub async fn execute_top_level(env: &PublishEnv<'_>, a: &Approval, t: ComposeTim
     };
     let outcome = if env.kill.is_engaged() {
         ComposeOutcome::Failed { message: "Stopped by the kill switch before anything ran.".into() }
+    } else if let Err(why) = {
+        let db = env.db.lock().unwrap();
+        pacing::check_original_post(&db, env.profile_id, now_unix()).unwrap_or(Ok(()))
+    } {
+        ComposeOutcome::Failed { message: why }
     } else {
         let d = env.browser.lock().await;
         let outcome = compose_and_post(&*d, env.kill, text, media, t).await.unwrap_or_else(|e| ComposeOutcome::Failed { message: e.to_string() });
@@ -602,6 +607,29 @@ mod top_level_tests {
         assert_eq!(calls[0], "navigate https://x.com/compose/post");
         assert!(calls.iter().any(|c| c == "insert Hello\nworld"));
         assert_eq!(clicks(&calls), 2, "one click into the composer, one on Post");
+    }
+
+    #[tokio::test]
+    async fn pacing_gap_blocks_an_original_post_before_the_browser_is_touched() {
+        let h = harness("Hello", &[]);
+        let a = approval(&h, "Hello");
+        {
+            let conn = h.db.lock().unwrap();
+            crate::publish::pacing::set(&conn, &crate::publish::pacing::PacingConfig { enabled: true, min_gap_sec: 600, ..Default::default() }).unwrap();
+            conn.execute(
+                "INSERT INTO action_events (id, profile_id, platform_post_id, action, source, ok, created_at) VALUES ('e', ?1, 'p', 'reply', 'publish', 1, ?2)",
+                rusqlite::params![h.pid, crate::util::now_rfc3339()],
+            )
+            .unwrap();
+        }
+        let d = healthy();
+        let out = run(&h, &d, &a, &KillSwitch::new(false)).await;
+        assert!(!out.ok);
+        assert!(out.message.unwrap().contains("600 seconds"));
+        assert!(d.calls().is_empty(), "nothing was opened or typed");
+        assert_eq!(status(&h), "failed", "safe to retry once the gap has passed");
+        let n: i64 = h.db.lock().unwrap().query_row("SELECT COUNT(*) FROM publish_audit_log WHERE target_kind='ogc' AND success=0", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
     }
 
     #[tokio::test]
