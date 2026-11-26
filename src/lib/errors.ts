@@ -39,6 +39,12 @@ export function navigatorOnLineSafe(): boolean {
   return navigator.onLine;
 }
 
+export const OFFLINE_ACTION_HINT = "You're offline. Publishing and sending need a network connection.";
+
+export function offlineActionHint(online: boolean): string | undefined {
+  return online ? undefined : OFFLINE_ACTION_HINT;
+}
+
 export function useOnlineStatus(): boolean {
   const [online, setOnline] = useState<boolean>(navigatorOnLineSafe);
 

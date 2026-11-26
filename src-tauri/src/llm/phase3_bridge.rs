@@ -2,6 +2,7 @@
 //! vision fallback all run through the user's task routes, rate guards and fallbacks (LLM-15, LLM-20).
 
 use super::catalog::merge_catalog;
+use super::prompts::get_active_prompt;
 use super::repo::{get_task_route, list_provider_accounts};
 use super::router::{LlmRouter, RouteOverride};
 use super::{LlmContentPart, LlmErrorKind, LlmMessage, LlmRequest, LlmRole, TaskType};
@@ -91,6 +92,7 @@ impl CompletionProvider for RouterCompletion {
 
     async fn complete(&self, req: CompletionRequest) -> Result<Completion, CompletionError> {
         let task = task_type(req.task);
+        let prompt_version = get_active_prompt(&self.db.lock().unwrap(), task).ok().map(|p| p.version);
         let override_route = match req.model_hint.as_deref().filter(|h| !h.trim().is_empty()) {
             Some(h) => {
                 let conn = self.db.lock().unwrap();
@@ -109,7 +111,7 @@ impl CompletionProvider for RouterCompletion {
             reasoning_effort: None,
             max_tokens: None,
             json_schema: None,
-            prompt_version: None,
+            prompt_version,
         };
         let resp = self.router.complete(&self.db, llm, override_route).await.map_err(|e| match e.kind {
             LlmErrorKind::UnsetRoute => CompletionError::NotConfigured(req.task),
@@ -207,6 +209,27 @@ mod tests {
         let sent = &cli.recorded_calls()[0];
         assert!(sent.has_images());
         assert_eq!(sent.system_prompt.as_deref(), Some("sys"));
+    }
+
+    #[tokio::test]
+    async fn production_calls_carry_the_active_prompt_version() {
+        let (_d, b, cli, _xai) = rig();
+        route(&b, TaskType::ReplyDrafting, "cli", "sonnet");
+        cli.push_ok("{\"variants\":[]}");
+        cli.push_ok("{\"variants\":[]}");
+        let req = || CompletionRequest::new(TaskSlot::ReplyDrafting, "s".into(), "u".into(), true);
+        b.complete(req()).await.unwrap();
+        crate::llm::prompts::save_prompt_override(&b.db.lock().unwrap(), TaskType::ReplyDrafting, "sys v2", "usr v2").unwrap();
+        b.complete(req()).await.unwrap();
+        let calls = cli.recorded_calls();
+        assert_eq!(calls[0].prompt_version, Some(1));
+        assert_eq!(calls[1].prompt_version, Some(2));
+        let logged: Vec<Option<u32>> = {
+            let conn = b.db.lock().unwrap();
+            let mut st = conn.prepare("SELECT prompt_version FROM llm_usage_logs WHERE task_type='reply_drafting' ORDER BY rowid").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        assert_eq!(logged, vec![Some(1), Some(2)]);
     }
 
     #[tokio::test]

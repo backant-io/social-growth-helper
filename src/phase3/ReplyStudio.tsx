@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { InlineModelGuard } from "../components/InlineModelGuard";
 import { listen } from "../lib/api";
+import { offlineActionHint, useOnlineStatus } from "../lib/errors";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
@@ -38,6 +39,7 @@ function liveOn(action: ActionName, s: PostActionState | null): boolean {
 }
 
 export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }: Props) {
+  const online = useOnlineStatus();
   const [draft, setDraft] = useState<DraftView | null>(null);
   const [text, setText] = useState("");
   const [problems, setProblems] = useState<string[]>([]);
@@ -129,7 +131,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   };
 
   const publish = async () => {
-    if (!draft) return;
+    if (!draft || !online) return;
     setConfirming(false);
     await run("publish", async () => {
       await p3.draftSetActions(draft.id, draft.actions);
@@ -193,6 +195,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const sum = stepSummary(draft.steps);
   const textAction = bundleText(draft.actions);
   const models = [...new Set(draft.variants.map((v) => v.model_used))];
+  const offlineHint = offlineActionHint(online);
   const canActNow = draft.status !== "publishing";
 
   return (
@@ -385,7 +388,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           </button>
           <div className="flex items-center gap-3">
             <span className={`text-xs ${muted}`}>Cmd/Ctrl+Enter</span>
-            <button type="button" className={btnPrimary} disabled={!editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} onClick={() => void openConfirm()}>
+            <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint} onClick={() => void openConfirm()}>
               {draft.status === "failed" ? "Retry publish" : "Publish..."}
             </button>
           </div>
@@ -413,7 +416,7 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
             <button type="button" className={btn} onClick={() => setConfirming(false)}>
               Back to editing
             </button>
-            <button type="button" className={btnPrimary} disabled={problems.length > 0} onClick={() => void publish()} autoFocus>
+            <button type="button" className={btnPrimary} disabled={!online || problems.length > 0} title={offlineHint} onClick={() => void publish()} autoFocus>
               Confirm and publish
             </button>
           </div>

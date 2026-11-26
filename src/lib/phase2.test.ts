@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { decodeModelChoice, encodeModelChoice, findSelectedModel } from "../components/ModelPicker";
 import { api, resetMockState } from "./api";
-import { parseLlmError } from "./errors";
+import { OFFLINE_ACTION_HINT, offlineActionHint, parseLlmError } from "./errors";
 
 describe("Phase 2 LLM error & model picker helpers", () => {
   it("parses structured [llm:code] errors cleanly", () => {
@@ -110,5 +110,12 @@ describe("Phase 2 browser-preview API round-trips", () => {
     expect(res.style_guide_version).toBe(1);
     expect(res.primary.variants.length).toBeGreaterThanOrEqual(2);
     expect(res.retrieved_examples).toHaveLength(1);
+  });
+});
+
+describe("Offline action gating (SHL-24)", () => {
+  it("explains why publish/send is disabled only while offline", () => {
+    expect(offlineActionHint(true)).toBeUndefined();
+    expect(offlineActionHint(false)).toBe(OFFLINE_ACTION_HINT);
   });
 });
