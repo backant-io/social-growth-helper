@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { canEdit, fileName, hasPlaceholders, parsePaths, postLength, similarityNote, statusLabel } from "../../lib/creator";
+import { offlineActionHint, useOnlineStatus } from "../../lib/errors";
 import { creatorApi } from "../../lib/creatorApi";
 import type { FormatRecord, OgcDraft } from "../../lib/types";
 import { Modal } from "./Modal";
@@ -23,6 +24,7 @@ const TONE = {
 
 export function DraftCard({ draft, format, threshold, maxChars, canPublish, onChanged, onRemoved }: Props) {
   const api = creatorApi();
+  const online = useOnlineStatus();
   const [text, setText] = useState(draft.edited_text);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
   }
 
   async function confirmPublish() {
+    if (!online) return;
     if (!confirming) return;
     const target = confirming;
     setConfirming(null);
@@ -159,7 +162,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
           </button>
           <div className="flex gap-2">
             <button type="button" className={btn} disabled={busy || !dirty} onClick={save}>Save edits</button>
-            <button type="button" className={primary} disabled={busy || !canPublish || !text.trim() || over} onClick={startPublish} title={canPublish ? undefined : "Open the X window first (Settings)"}>
+            <button type="button" className={primary} disabled={busy || !online || !canPublish || !text.trim() || over} onClick={startPublish} title={offlineActionHint(online) ?? (canPublish ? undefined : "Open the X window first (Settings)")}>
               Publish...
             </button>
           </div>
@@ -172,7 +175,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, onCh
           actions={
             <>
               <button type="button" className={btn} onClick={() => setConfirming(null)}>Not yet</button>
-              <button type="button" className={primary} onClick={confirmPublish}>Post to X now</button>
+              <button type="button" className={primary} disabled={!online} title={offlineActionHint(online)} onClick={confirmPublish}>Post to X now</button>
             </>
           }
         >
