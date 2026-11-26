@@ -28,6 +28,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "phase2_llm_style",
         sql: include_str!("migrations/0003_phase2_llm_style.sql"),
     },
+    Migration {
+        version: 5,
+        name: "learning",
+        sql: include_str!("migrations/0005_learning.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -109,7 +114,7 @@ pub fn migrate(
     })
 }
 
-fn backup_database(conn: &Connection, dir: &Path, version: u32) -> AppResult<PathBuf> {
+pub fn backup_database(conn: &Connection, dir: &Path, version: u32) -> AppResult<PathBuf> {
     std::fs::create_dir_all(dir)?;
     let stamp = crate::util::now_rfc3339().replace([':', '-'], "");
     let path = dir.join(format!("app-v{version}-{stamp}.db"));
@@ -170,7 +175,7 @@ mod tests {
             "observed_posts", "scout_evaluations", "viral_formats", "reply_drafts", "ogc_drafts",
             "publish_audit_log", "analytics_snapshots", "learning_rubrics", "learning_insights",
             "profile_preferences", "app_acknowledgements", "scout_sessions", "dashboard_layouts",
-            "dashboard_widgets", "app_settings",
+            "dashboard_widgets", "app_settings", "learning_runs", "learning_changelog",
         ] {
             let n: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))
@@ -228,7 +233,7 @@ mod tests {
 
         let (conn, report) = open(&db, &bk).unwrap();
         assert_eq!(report.from_version, 1);
-        assert_eq!(report.applied, vec![2, 3]);
+        assert_eq!(report.applied, vec![2, 3, 5]);
         let backup = report.backup_path.expect("backup must exist before migrating an existing db");
         assert!(backup.exists());
 
@@ -249,15 +254,11 @@ mod tests {
         let db = dir.path().join("app.db");
         let (mut conn, _) = open(&db, &dir.path().join("b")).unwrap();
         let before = table_count(&conn);
-        let bad = [
-            Migration { version: 1, name: "a", sql: "SELECT 1;" },
-            Migration { version: 2, name: "b", sql: "SELECT 1;" },
-            Migration { version: 3, name: "c", sql: "SELECT 1;" },
-            Migration { version: 4, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" },
-        ];
+        let latest = latest_version();
+        let bad = [Migration { version: latest + 1, name: "bad", sql: "CREATE TABLE ok_table (x INT); CREATE TABLE ok_table (x INT);" }];
         let err = migrate(&mut conn, &bad, None).unwrap_err();
-        assert!(err.to_string().contains("migration 4"));
-        assert_eq!(user_version(&conn).unwrap(), latest_version());
+        assert!(err.to_string().contains(&format!("migration {}", latest + 1)));
+        assert_eq!(user_version(&conn).unwrap(), latest);
         assert_eq!(table_count(&conn), before, "partial DDL must roll back");
     }
 

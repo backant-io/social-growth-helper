@@ -1,6 +1,7 @@
 pub mod browser;
 mod commands;
 pub mod error;
+pub mod learning;
 pub mod lifecycle;
 pub mod llm;
 mod menu;
@@ -85,6 +86,23 @@ pub fn run() {
             commands::style_parse_pasted_examples,
             commands::style_import_examples_from_browser,
             commands::style_run_bench,
+            learning::commands::learning_overview,
+            learning::commands::learning_proposed_count,
+            learning::commands::learning_reflect,
+            learning::commands::learning_reflect_if_due,
+            learning::commands::learning_accept,
+            learning::commands::learning_reject,
+            learning::commands::learning_versions,
+            learning::commands::learning_rollback,
+            learning::commands::learning_changelog,
+            learning::commands::learning_examples,
+            learning::commands::learning_remove_example,
+            learning::commands::learning_set_min_sample,
+            learning::commands::data_default_export_path,
+            learning::commands::data_export,
+            learning::commands::data_inspect_export,
+            learning::commands::data_import,
+            learning::commands::data_wipe,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Social Growth Helper");

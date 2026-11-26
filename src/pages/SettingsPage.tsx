@@ -19,12 +19,14 @@ import type {
   XaiDeviceChallenge,
 } from "../lib/types";
 import { TASK_METAS } from "../lib/types";
+import { DataPanel } from "../learning/DataPanel";
 
 interface Props {
   rules: RulesStatus | null;
   offline: boolean;
   onReplayTour: () => void;
   onReadRules: () => void;
+  onDataChanged: () => void;
 }
 
 type SettingsTab = "general" | "providers" | "routing" | "usage" | "prompts";
@@ -963,7 +965,7 @@ function PromptsPanel() {
   );
 }
 
-export function SettingsPage({ rules, offline, onReplayTour, onReadRules }: Props) {
+export function SettingsPage({ rules, offline, onReplayTour, onReadRules, onDataChanged }: Props) {
   const [tab, setTab] = useState<SettingsTab>("general");
   const [info, setInfo] = useState<AppInfo | null>(null);
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
@@ -1036,6 +1038,7 @@ export function SettingsPage({ rules, offline, onReplayTour, onReadRules }: Prop
           </section>
           <SecurityPanel />
           <BrowserPanel rulesAcknowledged={rules?.acknowledged ?? false} />
+          <DataPanel onDataChanged={onDataChanged} />
           {info && (
             <section className={panel} aria-labelledby="about-h">
               <h2 id="about-h" className="font-medium">
