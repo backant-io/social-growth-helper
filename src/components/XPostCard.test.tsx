@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { XPostCard } from "./XPostCard";
+import { RepostMenu, XPostCard } from "./XPostCard";
 
 const metrics = { replies: 1, reposts: 2, likes: 3, bookmarks: 4, views: 5 };
 
@@ -28,5 +28,36 @@ describe("XPostCard", () => {
     expect(html.indexOf("Engagement")).toBeLessThan(html.indexOf("view-on-x"));
     expect(html.match(/<a [^>]*data-testid="view-on-x"[^>]*>/)?.[0]).toContain("ml-auto");
     expect(renderToStaticMarkup(<XPostCard handle="a" text="x" metrics={metrics} />)).not.toContain("post-signal");
+  });
+
+  it("keeps the repost count a plain stat when no repost handler is given", () => {
+    const html = renderToStaticMarkup(<XPostCard handle="a" text="x" metrics={metrics} />);
+    expect(html).not.toContain("repost-trigger");
+  });
+
+  it("turns the repost icon into a menu trigger when a handler is given", () => {
+    const html = renderToStaticMarkup(<XPostCard handle="a" text="x" metrics={metrics} onRepostChoice={() => undefined} />);
+    expect(html).toContain('data-testid="repost-trigger"');
+    expect(html).toContain('aria-haspopup="menu"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).not.toContain('data-testid="repost-menu"');
+  });
+});
+
+describe("RepostMenu", () => {
+  it("opens with the two X-like choices: Repost and Quote", () => {
+    const html = renderToStaticMarkup(<RepostMenu count={2} onChoose={() => undefined} defaultOpen />);
+    expect(html).toContain('role="menu"');
+    const items = [...html.matchAll(/role="menuitem"[^>]*data-testid="repost-menu-(\w+)"/g)].map((m) => m[1]);
+    expect(items).toEqual(["repost", "quote"]);
+    expect(html).toContain("Repost");
+    expect(html).toContain("Quote");
+    expect(html).not.toContain("Reply");
+  });
+
+  it("offers Undo repost in place of Repost when already reposted", () => {
+    const html = renderToStaticMarkup(<RepostMenu count={2} reposted onChoose={() => undefined} defaultOpen />);
+    expect(html).toContain("Undo repost");
+    expect(html).toContain("Quote");
   });
 });

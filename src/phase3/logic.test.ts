@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, bundleForMode, modeOfBundle, repostMenuOptions, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -90,5 +90,33 @@ describe("scoreLine", () => {
     expect(factorLabel("3.4x-reach")).toBe("3.4x reach");
     expect(scoreLine(90.6, ["small_account", "breakout", "early_wave"])).toBe("Score 91 · Small account · Breakout");
     expect(scoreLine(72, [])).toBe("Score 72");
+  });
+});
+
+describe("quote vs reply", () => {
+  it("a quote bundle holds the quote action and never the reply action", () => {
+    expect(bundleForMode("quote")).toEqual(["quote"]);
+    expect(bundleForMode("quote")).not.toContain("reply");
+    expect(bundleForMode("reply")).toContain("reply");
+    expect(bundleForMode("reply")).not.toContain("quote");
+  });
+
+  it("maps bundles back to a compose mode", () => {
+    expect(modeOfBundle(["quote"])).toBe("quote");
+    expect(modeOfBundle(["like", "reply"])).toBe("reply");
+    expect(modeOfBundle(normalizeBundle(["reply", "quote"]))).toBe("reply");
+  });
+});
+
+describe("repost menu", () => {
+  it("offers exactly Repost and Quote, like X", () => {
+    expect(repostMenuOptions(false)).toEqual([
+      { id: "repost", label: "Repost" },
+      { id: "quote", label: "Quote" },
+    ]);
+  });
+
+  it("turns Repost into Undo repost once reposted", () => {
+    expect(repostMenuOptions(true).map((o) => o.label)).toEqual(["Undo repost", "Quote"]);
   });
 });

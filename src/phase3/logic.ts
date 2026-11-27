@@ -33,6 +33,30 @@ export function toggleInBundle(actions: ActionName[], a: ActionName): ActionName
   return normalizeBundle([...next, a]);
 }
 
+export type ComposeMode = "reply" | "quote";
+
+export const REPLY_BUNDLE: ActionName[] = ["like", "reply"];
+export const QUOTE_BUNDLE: ActionName[] = ["quote"];
+
+/** The action bundle a compose box publishes: a reply goes under the post, a quote is a new post that embeds it. */
+export function bundleForMode(mode: ComposeMode): ActionName[] {
+  return mode === "quote" ? QUOTE_BUNDLE : REPLY_BUNDLE;
+}
+
+export function modeOfBundle(actions: ActionName[]): ComposeMode {
+  return actions.includes("quote") ? "quote" : "reply";
+}
+
+export type RepostChoice = "repost" | "quote";
+
+/** The two entries X shows when the repost icon is pressed. */
+export function repostMenuOptions(reposted: boolean): Array<{ id: RepostChoice; label: string }> {
+  return [
+    { id: "repost", label: reposted ? "Undo repost" : "Repost" },
+    { id: "quote", label: "Quote" },
+  ];
+}
+
 export function bundleText(actions: ActionName[]): ActionName | null {
   return actions.find(isTextAction) ?? null;
 }

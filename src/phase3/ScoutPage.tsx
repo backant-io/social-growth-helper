@@ -5,7 +5,7 @@ import { XPostCard } from "../components/XPostCard";
 import { EmptyBlock, LoadingBlock, Modal, Page, PageHeader, Segmented } from "../components/ui";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
-import { scoreLine } from "./logic";
+import { scoreLine, type ComposeMode, type RepostChoice } from "./logic";
 import { ReplyBox } from "./ReplyBox";
 import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams } from "./types";
 import { ReplyVoicePanel } from "./ReplyVoicePanel";
@@ -45,6 +45,9 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [completion, setCompletion] = useState<CompletionStatus>({ scoring: true, drafting: true, browser_navigation: true });
+  const [modes, setModes] = useState<Record<string, ComposeMode>>({});
+  const [reposted, setReposted] = useState<Record<string, boolean>>({});
+  const [repostBusy, setRepostBusy] = useState<Record<string, boolean>>({});
   const remembered = useRef(false);
   const stoppingRef = useRef(false);
   const reloadSeq = useRef(0);
@@ -142,6 +145,28 @@ export function ScoutPage({ onGoToSettings }: Props) {
     await p3.scoutDismiss(item.evaluation_id, reason);
     setQueue((q) => q.filter((x) => x.evaluation_id !== item.evaluation_id));
   }, []);
+
+  const setMode = useCallback((id: string, mode: ComposeMode) => setModes((m) => (m[id] === mode ? m : { ...m, [id]: mode })), []);
+
+  const chooseRepost = async (item: QueueItem, choice: RepostChoice) => {
+    const id = item.evaluation_id;
+    if (choice === "quote") {
+      setMode(id, "quote");
+      return;
+    }
+    const undo = Boolean(reposted[id]);
+    setError(null);
+    setRepostBusy((b) => ({ ...b, [id]: true }));
+    try {
+      const r = await p3.engage(item.post.observed_id, "repost", undo);
+      if (!r.ok) throw new Error(r.message ?? "Could not repost. Try again.");
+      setReposted((m) => ({ ...m, [id]: !undo }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRepostBusy((b) => ({ ...b, [id]: false }));
+    }
+  };
 
   const focusCard = (i: number) => {
     setSelected(i);
@@ -252,8 +277,18 @@ export function ScoutPage({ onGoToSettings }: Props) {
                 signalTitle={[item.angle && `Angle: ${item.angle}`, item.reasoning].filter(Boolean).join("\n") || undefined}
                 selected={i === selected}
                 onSelect={() => setSelected(i)}
+                onRepostChoice={(choice) => void chooseRepost(item, choice)}
+                reposted={Boolean(reposted[item.evaluation_id])}
+                repostBusy={Boolean(repostBusy[item.evaluation_id])}
               >
-                <ReplyBox item={item} canDraft={completion.drafting} onDismiss={(reason) => void dismiss(item, reason)} onChanged={refreshQueue} />
+                <ReplyBox
+                  item={item}
+                  canDraft={completion.drafting}
+                  onDismiss={(reason) => void dismiss(item, reason)}
+                  onChanged={refreshQueue}
+                  mode={modes[item.evaluation_id] ?? "reply"}
+                  onModeChange={(m) => setMode(item.evaluation_id, m)}
+                />
               </XPostCard>
             </li>
           ))}

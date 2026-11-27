@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { compactCount, relativeTime } from "../phase3/logic";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { compactCount, relativeTime, repostMenuOptions, type RepostChoice } from "../phase3/logic";
 import type { MediaItem } from "../phase3/types";
 import { muted } from "./ui";
 
@@ -33,6 +33,10 @@ export interface XPostCardProps {
   compact?: boolean;
   selected?: boolean;
   onSelect?: () => void;
+  /** When set, the repost icon becomes the X-style menu: Repost (or Undo repost) and Quote. */
+  onRepostChoice?: (choice: RepostChoice) => void;
+  reposted?: boolean;
+  repostBusy?: boolean;
 }
 
 function Icon({ children }: { children: ReactNode }) {
@@ -150,6 +154,71 @@ export function PostMedia({ media, postUrl }: { media: MediaItem[]; postUrl?: st
   );
 }
 
+export function RepostMenu({ count, reposted = false, busy = false, onChoose, defaultOpen = false }: { count: number; reposted?: boolean; busy?: boolean; onChoose: (choice: RepostChoice) => void; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (root.current && !root.current.contains(e.target as Node)) setOpen(false);
+    };
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  return (
+    <div ref={root} className="relative">
+      <button
+        type="button"
+        data-testid="repost-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={reposted ? "Reposted. Repost options" : "Repost options"}
+        title="Repost or quote"
+        disabled={busy}
+        onClick={() => setOpen((v) => !v)}
+        className={`flex min-w-12 items-center gap-1.5 rounded-full px-2 py-0.5 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-50 dark:hover:bg-emerald-950/40 dark:hover:text-emerald-400 ${reposted ? "text-emerald-600 dark:text-emerald-400" : ""}`}
+      >
+        {ICONS.reposts}
+        <span className="tabular-nums">{compactCount(count)}</span>
+      </button>
+      {open && (
+        <ul role="menu" data-testid="repost-menu" aria-label="Repost options" className="absolute bottom-full left-0 z-20 mb-1 w-44 overflow-hidden rounded-xl border border-zinc-200 bg-white py-1 shadow-lg dark:border-zinc-800 dark:bg-zinc-950">
+          {repostMenuOptions(reposted).map((o) => (
+            <li key={o.id} role="none">
+              <button
+                type="button"
+                role="menuitem"
+                data-testid={`repost-menu-${o.id}`}
+                onClick={() => {
+                  setOpen(false);
+                  onChoose(o.id);
+                }}
+                className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[15px] font-bold text-zinc-950 hover:bg-zinc-100 dark:text-zinc-50 dark:hover:bg-zinc-900"
+              >
+                {o.id === "repost" ? (
+                  ICONS.reposts
+                ) : (
+                  <Icon>
+                    <path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" />
+                  </Icon>
+                )}
+                {o.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const VERIFIED_PATH = "M12 2.5 14.4 4l2.8-.2 1 2.6 2.4 1.5-.8 2.7.8 2.7-2.4 1.5-1 2.6-2.8-.2L12 21.5 9.6 20l-2.8.2-1-2.6-2.4-1.5.8-2.7-.8-2.7 2.4-1.5 1-2.6L9.6 4Zm-1.2 12.9 5-5-1.1-1.1-3.9 3.9-1.7-1.7-1.1 1.1Z";
 
 /**
@@ -157,7 +226,7 @@ const VERIFIED_PATH = "M12 2.5 14.4 4l2.8-.2 1 2.6 2.4 1.5-.8 2.7.8 2.7-2.4 1.5-
  * engagement row. Children (a reply box) continue the same column directly below the post, joined to the
  * avatar by a thread line, so the reply reads as part of the post. Rows are flat; the parent draws the dividers.
  */
-export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, signal, signalTitle, badge, children, compact, selected, onSelect }: XPostCardProps) {
+export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, signal, signalTitle, badge, children, compact, selected, onSelect, onRepostChoice, reposted, repostBusy }: XPostCardProps) {
   const when = relativeTime(postedAt ?? null);
   const stats = (["replies", "reposts", "likes", "views", "bookmarks"] as const).filter((k) => metrics[k] != null);
   const display = name || `@${handle}`;
@@ -202,13 +271,20 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
 
         <div className={`mt-3 -ml-2 flex items-center gap-3 text-[13px] ${muted}`}>
           <ul className="flex min-w-0 max-w-md flex-1 items-center justify-between" aria-label="Engagement">
-            {stats.map((k) => (
+            {stats.map((k) =>
+              k === "reposts" && onRepostChoice ? (
+                <li key={k} className="flex items-center" title="Repost or quote">
+                  <RepostMenu count={metrics.reposts} reposted={reposted} busy={repostBusy} onChoose={onRepostChoice} />
+                  <span className="sr-only">{LABELS[k]}</span>
+                </li>
+              ) : (
               <li key={k} className="flex min-w-12 items-center gap-1.5 px-2 py-0.5" title={LABELS[k]}>
                 {ICONS[k]}
                 <span className="tabular-nums">{compactCount(metrics[k] ?? 0)}</span>
                 <span className="sr-only">{LABELS[k]}</span>
               </li>
-            ))}
+              ),
+            )}
           </ul>
           {url && (
             <a

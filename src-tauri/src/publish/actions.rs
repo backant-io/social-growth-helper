@@ -362,13 +362,14 @@ impl Page<'_> {
                 }
             }
             if toast_ok {
-                return Ok(Outcome::Done { detail: Some("X confirmed the reply; it was not visible under the post yet".into()), post_id: None });
+                return Ok(Outcome::Done { detail: Some("Posted. It may take a moment to show up.".into()), post_id: None });
             }
         }
+        let noun = if kind == ActionKind::Quote { "quote" } else { "reply" };
         Ok(Outcome::Uncertain(if error_toast {
-            "X showed an error and your reply was not found under the post; check X before retrying".into()
+            format!("X showed an error, so your {noun} is not confirmed. Check X before trying again.")
         } else {
-            "your reply was not found under the post, even after reloading it; check X before retrying".into()
+            format!("Still checking: could not confirm your {noun} yet. Check X before trying again.")
         }))
     }
 
