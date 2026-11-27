@@ -13,6 +13,7 @@ import {
   Tabs,
 } from "../components/ui";
 import { api } from "../lib/api";
+import { ReplyVoicePanel } from "../phase3/ReplyVoicePanel";
 import { DiffView } from "../learning/DiffView";
 import { parseLlmError } from "../lib/errors";
 import { previousVersion, styleVersionDiff } from "../lib/styleDiff";
@@ -36,7 +37,7 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-type StyleTab = "guide" | "examples" | "bench";
+type StyleTab = "guide" | "reply" | "examples" | "bench";
 
 function TagChips({
   items,
@@ -433,6 +434,7 @@ export function StylePage({
         onChange={setTab}
         tabs={[
           { id: "guide", label: "Voice and rules" },
+          { id: "reply", label: "Reply prompt" },
           { id: "examples", label: `Examples (${examples.length})` },
           { id: "bench", label: "Try it" },
         ]}
@@ -879,6 +881,8 @@ export function StylePage({
       )}
 
       {/* TAB 3: STYLE TEST BENCH */}
+      {tab === "reply" && <ReplyVoicePanel onGoToSettings={onOpenSettings} />}
+
       {tab === "bench" && (
         <div className="space-y-4">
           {!hasReplyRoute && (

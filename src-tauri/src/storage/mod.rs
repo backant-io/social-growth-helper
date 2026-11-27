@@ -63,6 +63,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "analytics_live_views",
         sql: include_str!("migrations/0010_analytics_live_views.sql"),
     },
+    Migration {
+        version: 11,
+        name: "reply_formats",
+        sql: include_str!("migrations/0011_reply_formats.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -214,7 +219,7 @@ mod tests {
             "publish_audit_log", "analytics_snapshots", "learning_rubrics", "learning_insights",
             "profile_preferences", "app_acknowledgements", "scout_sessions", "dashboard_layouts",
             "dashboard_widgets", "app_settings", "learning_runs", "learning_changelog",
-            "format_candidates", "creator_watchlist",
+            "format_candidates", "creator_watchlist", "reply_formats",
         ] {
             let n: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))

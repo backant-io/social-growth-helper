@@ -8,6 +8,7 @@ import { useShortcuts } from "./hooks";
 import { scoreLine } from "./logic";
 import { ReplyBox } from "./ReplyBox";
 import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams } from "./types";
+import { ReplyVoicePanel } from "./ReplyVoicePanel";
 import { btn, btnPrimary, input, muted, Notice } from "./ui";
 
 interface Props {
@@ -41,6 +42,7 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const [setup, setSetup] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
   const [completion, setCompletion] = useState<CompletionStatus>({ scoring: true, drafting: true, browser_navigation: true });
   const remembered = useRef(false);
 
@@ -123,15 +125,20 @@ export function ScoutPage({ onGoToSettings }: Props) {
       <PageHeader
         title="Scout"
         actions={
-          running ? (
-            <button type="button" className={btn} onClick={() => void p3.scoutStop()}>
-              Stop
+          <div className="flex items-center gap-2">
+            <button type="button" className={btn} onClick={() => setVoiceOpen(true)}>
+              Reply prompt
             </button>
-          ) : (
-            <button type="button" data-testid="scout-start" className={btnPrimary} onClick={() => { setStartError(null); setSetup(true); }}>
-              Start scouting
-            </button>
-          )
+            {running ? (
+              <button type="button" className={btn} onClick={() => void p3.scoutStop()}>
+                Stop
+              </button>
+            ) : (
+              <button type="button" data-testid="scout-start" className={btnPrimary} onClick={() => { setStartError(null); setSetup(true); }}>
+                Start scouting
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -213,6 +220,11 @@ export function ScoutPage({ onGoToSettings }: Props) {
             </li>
           ))}
         </ul>
+      )}
+      {voiceOpen && (
+        <Modal title="Reply prompt" wide onClose={() => setVoiceOpen(false)} actions={<button type="button" className={btn} onClick={() => setVoiceOpen(false)}>Done</button>}>
+          <ReplyVoicePanel onGoToSettings={onGoToSettings} />
+        </Modal>
       )}
     </Page>
   );
