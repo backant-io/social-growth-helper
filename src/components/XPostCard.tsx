@@ -196,7 +196,7 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
         <p className={`mt-0.5 text-[15px] leading-[1.35] whitespace-pre-wrap ${compact ? "line-clamp-5" : ""}`}>{text}</p>
         <PostMedia media={media} postUrl={url} />
 
-        <ul className={`mt-3 -ml-2 flex max-w-md items-center justify-between text-[13px] ${muted}`} aria-label="Engagement">
+        <ul className={`mt-3 -ml-2 flex max-w-lg items-center justify-between text-[13px] ${muted}`} aria-label="Engagement">
           {stats.map((k) => (
             <li key={k} className="flex min-w-12 items-center gap-1.5 px-2 py-0.5" title={LABELS[k]}>
               {ICONS[k]}
@@ -204,6 +204,26 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
               <span className="sr-only">{LABELS[k]}</span>
             </li>
           ))}
+          {url && (
+            <li className="ml-auto">
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                data-testid="view-on-x"
+                title={`Open this post on X: ${url}`}
+                className="flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-sky-600 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
+              >
+                View on X
+                <Icon>
+                  <path d="M14 4h6v6" />
+                  <path d="M20 4 10.5 13.5" />
+                  <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+                </Icon>
+              </a>
+            </li>
+          )}
         </ul>
 
         {children && (
