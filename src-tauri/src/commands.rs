@@ -114,14 +114,12 @@ pub fn x_post_permalink(raw: &str) -> AppResult<String> {
 }
 
 /// Shows a post inside the app's managed X window (the same Chrome profile and login Scout uses) instead of the
-/// system browser. Starts or attaches that window the way Scout does, holds a running Scout session so it does not
-/// read the post page as a feed, loads the permalink and raises the window.
+/// system browser. Starts or attaches that window the way Scout does, loads the permalink and raises the window.
+/// It does not touch a running Scout session.
 #[tauri::command]
-pub async fn open_post_in_x(app: AppHandle, state: State<'_, AppState>, p3: State<'_, crate::phase3::Phase3>, url: String) -> AppResult<()> {
+pub async fn open_post_in_x(app: AppHandle, state: State<'_, AppState>, url: String) -> AppResult<()> {
     let url = x_post_permalink(&url)?;
     ensure_x_browser_open(&app, &state).await?;
-    crate::scout::commands::set_scout_paused(&p3, true);
-    crate::tray::refresh_all(&app);
     state.browser.navigate(&url).await?;
     state.browser.bring_to_front().await?;
     Ok(())
