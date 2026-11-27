@@ -52,6 +52,16 @@ pub struct Probe {
     pub follow: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct SubmitResult {
+    #[serde(default)]
+    holds: bool,
+    #[serde(default)]
+    toast: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+}
+
 pub struct Page<'a> {
     pub d: &'a dyn BrowserDriver,
     pub post_id: &'a str,
@@ -297,14 +307,46 @@ impl Page<'_> {
             return Ok(Outcome::Failed("the post button could not be located".into()));
         };
         self.d.click_point(x, y).await.map_err(err)?;
-        if !self.wait_eval_bool(&selectors::composer_gone_js(), true).await? {
-            return Ok(Outcome::Uncertain("the composer is still open after pressing post; check X before retrying".into()));
+        self.confirm_submitted(&snippet).await
+    }
+
+    /// Decides whether a pressed Post button worked. An open composer alone proves nothing (X keeps an empty
+    /// inline composer on a post page), so any one of these counts as posted: your own card with the text is on
+    /// the page, a success toast with the composer emptied, or the text gone from every composer for two reads
+    /// in a row. Only text still sitting in the composer with no confirmation is uncertain.
+    async fn confirm_submitted(&self, snippet: &str) -> Result<Outcome, String> {
+        let js = selectors::submit_result_js(self.me.as_deref(), snippet);
+        let mut text_gone = 0u32;
+        let mut error_toast = false;
+        for _ in 0..self.t.polls.saturating_mul(2) {
+            if let Ok(v) = self.d.eval_json(&js).await {
+                if let Ok(r) = serde_json::from_value::<SubmitResult>(v) {
+                    if let Some(id) = r.id {
+                        return Ok(Outcome::Done { detail: None, post_id: Some(id) });
+                    }
+                    if r.holds {
+                        text_gone = 0;
+                        error_toast |= r.toast.as_deref() == Some("error");
+                    } else if r.toast.as_deref() == Some("ok") {
+                        return Ok(Outcome::Done { detail: Some("X confirmed the post".into()), post_id: None });
+                    } else {
+                        text_gone += 1;
+                        if text_gone >= 2 {
+                            return Ok(Outcome::Done { detail: Some("the composer emptied after posting".into()), post_id: None });
+                        }
+                    }
+                }
+            }
+            if self.kill.is_engaged() {
+                return Err("stopped by the kill switch".into());
+            }
+            self.nap(self.t.poll_ms).await;
         }
-        self.nap(self.t.settle_ms).await;
-        match self.find_published(&snippet).await {
-            Some(id) => Ok(Outcome::Done { detail: None, post_id: Some(id) }),
-            None => Ok(Outcome::Uncertain("the composer closed but your post was not found on the page; check X before retrying".into())),
-        }
+        Ok(Outcome::Uncertain(if error_toast {
+            "X showed an error and your text is still in the composer; check X before retrying".into()
+        } else {
+            "your text is still in the composer and no confirmation appeared; check X before retrying".into()
+        }))
     }
 
     async fn find_published(&self, snippet: &str) -> Option<String> {

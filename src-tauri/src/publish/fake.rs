@@ -29,7 +29,10 @@ pub struct FakeState {
     pub ignore_like_clicks: bool,
     pub hide_like: bool,
     pub mangle_insert: bool,
+    /// The reply posts but X leaves the composer open (the inline composer on a post page).
     pub submit_hangs: bool,
+    /// Pressing Post does nothing: the text stays in the composer and nothing is published.
+    pub submit_ignored: bool,
     pub engage_after_like: Option<Arc<KillSwitch>>,
     next_id: u64,
 }
@@ -185,6 +188,7 @@ impl FakeX {
                 s.composer_open = true;
                 s.repost_menu = false;
             }
+            "submit" if s.composer_open && s.submit_ignored => {}
             "submit" if s.composer_open => {
                 let text = std::mem::take(&mut s.composer_text);
                 s.next_id += 1;
@@ -217,7 +221,10 @@ impl BrowserDriver for FakeX {
     async fn eval_json(&self, js: &str) -> Result<Value, BrowserError> {
         let me = self.clone();
         let s = me.0.lock().unwrap();
-        let out = if js.contains("posts.push") {
+        let out = if js.contains("const holds") {
+            let id = s.published.iter().find(|(_, t)| js.contains(&json!(t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect::<String>()).to_string())).map(|(id, _)| id.clone());
+            json!({ "holds": s.composer_open && !s.composer_text.is_empty(), "dialog": s.composer_open, "toast": Value::Null, "id": id })
+        } else if js.contains("posts.push") {
             json!({ "state": s.page, "me": "me", "posts": [] })
         } else if js.contains("const pair =") {
             if !s.found {
@@ -401,21 +408,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_hanging_submit_is_uncertain_and_retry_does_not_post_twice() {
+    async fn a_reply_that_is_visibly_posted_is_done_even_if_the_composer_stays_open() {
         let r = rig(&["like", "reply"], |s| s.submit_hangs = true);
+        let res = r.publish().await;
+        assert!(res.ok, "{:?}", res.message);
+        assert_eq!(r.steps(), vec![("like".into(), "done".into()), ("reply".into(), "done".into())]);
+        assert_eq!(r.status(), "published");
+        assert_eq!(res.published_post_id.as_deref(), Some("9001"));
+    }
+
+    #[tokio::test]
+    async fn text_still_in_the_composer_with_no_confirmation_is_uncertain_and_retry_does_not_repeat_finished_steps() {
+        let r = rig(&["like", "reply"], |s| s.submit_ignored = true);
         let first = r.publish().await;
         assert!(!first.ok);
         assert_eq!(r.steps(), vec![("like".into(), "done".into()), ("reply".into(), "uncertain".into())]);
         assert_eq!(r.status(), "failed");
+        assert!(first.message.unwrap().contains("still in the composer"));
         let likes_before = r.fake.clicks().iter().filter(|c| *c == "like").count();
 
+        r.fake.0.lock().unwrap().submit_ignored = false;
         let second = r.publish().await;
         assert!(second.ok, "{:?}", second.message);
-        assert_eq!(r.fake.inserts(), 1, "the reply text must not be typed again");
         assert_eq!(r.fake.0.lock().unwrap().published.len(), 1);
         assert_eq!(r.fake.clicks().iter().filter(|c| *c == "like").count(), likes_before, "finished steps are skipped on retry");
         assert_eq!(r.status(), "published");
-        assert_eq!(second.published_post_id.as_deref(), Some("9001"));
     }
 
     #[tokio::test]

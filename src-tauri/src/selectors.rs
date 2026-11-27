@@ -380,7 +380,7 @@ return null;
 /// Text currently in the composer, for the read-back check before posting.
 pub fn composer_text_js() -> String {
     format!(
-        "(() => {{ {prelude} const c = $all({c}); return c ? c.innerText : null; }})()",
+        "(() => {{ {prelude} const c = $all({c}, document.querySelector('[role=\"dialog\"]')) || $all({c}); return c ? c.innerText : null; }})()",
         prelude = prelude(),
         c = list(&sel::COMPOSER)
     )
@@ -435,6 +435,46 @@ return m2 ? m2[1] : null; }})()"#,
     )
 }
 
+/// After pressing Post on a reply or quote: what the page shows now, as `{holds, dialog, toast, id}`.
+/// `holds` is true while any composer still contains `snippet` (the submitted text); X keeps an empty inline
+/// composer on a post page, so "a composer exists" says nothing. `toast` is `"ok"`, `"error"` or null, and
+/// `id` is the status id of your own matching card or of a link in the toast. Read-only.
+pub fn submit_result_js(me: Option<&str>, snippet: &str) -> String {
+    format!(
+        r#"(() => {{ {prelude}
+const want = {snip};
+const me = {me};
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+const composers = [...document.querySelectorAll({composer}.join(','))];
+const holds = composers.some(c => {{ const t = norm(c.innerText); return want ? t.includes(want) : t.length > 0; }});
+const dialog = composers.some(c => c.closest('[role="dialog"]') && visible(c));
+let id = null;
+if (me) {{
+  for (const a of document.querySelectorAll({tweet}[0])) {{
+    const link = a.querySelector('a[href*="/status/"] time')?.closest('a');
+    const m = (link?.getAttribute('href') || '').match(/^\/([^/]+)\/status\/(\d+)/);
+    const body = $all({ttext}, a);
+    if (m && m[1].toLowerCase() === me.toLowerCase() && body && norm(body.innerText).startsWith(want)) {{ id = m[2]; break; }}
+  }}
+}}
+const toastEl = $all({toast});
+const toastText = norm(toastEl ? toastEl.innerText : '');
+const toastLink = toastEl ? toastEl.querySelector('a[href*="/status/"]') : null;
+const toastId = toastLink ? ((toastLink.getAttribute('href') || '').match(/status\/(\d+)/) || [])[1] : null;
+if (!id && toastId) id = toastId;
+const bad = /wrong|error|couldn.?t|could not|failed|try again|unable|not sent/i.test(toastText);
+return {{ holds, dialog, toast: toastEl ? (bad ? 'error' : 'ok') : null, id: id || null }};
+}})()"#,
+        prelude = prelude(),
+        snip = json!(snippet),
+        me = me.map(|m| json!(m).to_string()).unwrap_or_else(|| "null".into()),
+        composer = list(&sel::COMPOSER),
+        tweet = list(&sel::TWEET),
+        ttext = list(&sel::TWEET_TEXT),
+        toast = list(&sel::TOAST),
+    )
+}
+
 /// Texts of the open menu items (used to read "Follow @x" / "Unfollow @x" from the caret menu).
 pub fn menu_texts_js() -> String {
     format!(
@@ -475,11 +515,20 @@ mod tests {
 
     #[test]
     fn read_scripts_never_mutate_or_click() {
-        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js()] {
+        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js(), submit_result_js(Some("me"), "hi")] {
             for banned in [".click(", ".submit(", "dispatchEvent", "fetch(", "XMLHttpRequest", "innerHTML =", "textContent =", ".value ="] {
                 assert!(!js.contains(banned), "script contains {banned}");
             }
         }
+    }
+
+    #[test]
+    fn submit_result_checks_text_in_any_composer_not_just_that_one_exists() {
+        let js = submit_result_js(Some("me"), "my reply");
+        for needle in ["const holds", "composers.some", "t.includes(want)", "toast", "closest('[role=\"dialog\"]')"] {
+            assert!(js.contains(needle), "submit result script lacks {needle}");
+        }
+        assert!(js.contains("\"my reply\""));
     }
 
     #[test]
