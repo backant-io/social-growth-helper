@@ -8,7 +8,10 @@ import "@fontsource-variable/jetbrains-mono/index.css";
 import "./index.css";
 
 routeExternalLinks();
-if (inTauri() && /Mac/i.test(navigator.userAgent)) document.documentElement.dataset.vibrancy = "sidebar";
+if (inTauri() && /Mac/i.test(navigator.userAgent)) {
+  document.documentElement.dataset.vibrancy = "sidebar";
+  document.documentElement.dataset.titlebar = "overlay";
+}
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Control-plane window capabilities. X is never loaded in this webview.",
   "windows": ["main"],
-  "permissions": ["core:default", "notification:default"]
+  "permissions": ["core:default", "core:window:allow-start-dragging", "notification:default"]
 }
