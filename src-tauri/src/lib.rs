@@ -99,6 +99,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
             commands::open_external,
+            commands::open_post_in_x,
             commands::get_onboarding_status,
             commands::get_rules_notice,
             commands::acknowledge_rules,

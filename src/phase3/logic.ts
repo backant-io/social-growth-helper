@@ -69,6 +69,18 @@ export function scoreTone(score: number): "high" | "mid" | "low" {
   return score >= 85 ? "high" : score >= 72 ? "mid" : "low";
 }
 
+/** "high_saves" / "3.4x-reach" -> "High saves" / "3.4x reach". */
+export function factorLabel(flag: string): string {
+  const t = flag.replace(/[_-]+/g, " ").trim();
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "";
+}
+
+/** The quiet line under a post: the score and, when known, the strongest signals behind it. */
+export function scoreLine(score: number, flags: string[], maxFactors = 2): string {
+  const factors = flags.map(factorLabel).filter(Boolean).slice(0, maxFactors);
+  return [`Score ${Math.round(score)}`, ...factors].join(" · ");
+}
+
 export function compactCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}K`;

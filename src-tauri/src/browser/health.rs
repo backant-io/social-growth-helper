@@ -118,6 +118,11 @@ impl BrowserHealth {
         g.crash_reported = false;
     }
 
+    /// Whether the X window is supposed to be open (it was opened and not closed by the user).
+    pub fn expects_open(&self) -> bool {
+        self.inner.lock().unwrap().expected_open
+    }
+
     pub fn record_halt(&self, state: BrowserState, source: &str) {
         self.inner.lock().unwrap().halt = Some(Halt { state, source: source.to_string(), scout_params: None });
     }

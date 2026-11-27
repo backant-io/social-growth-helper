@@ -33,6 +33,9 @@ pub struct FakeState {
     pub submit_hangs: bool,
     /// Pressing Post does nothing: the text stays in the composer and nothing is published.
     pub submit_ignored: bool,
+    /// The posted reply only shows up under the post after the page is reloaded.
+    pub reply_lag: bool,
+    pub reloaded: bool,
     pub engage_after_like: Option<Arc<KillSwitch>>,
     next_id: u64,
 }
@@ -194,6 +197,7 @@ impl FakeX {
                 s.next_id += 1;
                 let id = s.next_id.to_string();
                 s.published.push((id, text));
+                s.reloaded = false;
                 if !s.submit_hangs {
                     s.composer_open = false;
                 }
@@ -212,7 +216,9 @@ impl BrowserDriver for FakeX {
         true
     }
     async fn navigate(&self, url: &str) -> Result<(), BrowserError> {
-        self.0.lock().unwrap().calls.push(format!("navigate {url}"));
+        let mut s = self.0.lock().unwrap();
+        s.calls.push(format!("navigate {url}"));
+        s.reloaded = true;
         Ok(())
     }
     async fn current_url(&self) -> Result<String, BrowserError> {
@@ -222,7 +228,7 @@ impl BrowserDriver for FakeX {
         let me = self.clone();
         let s = me.0.lock().unwrap();
         let out = if js.contains("const holds") {
-            let id = s.published.iter().find(|(_, t)| js.contains(&json!(t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect::<String>()).to_string())).map(|(id, _)| id.clone());
+            let id = s.published.iter().find(|(_, t)| js.contains(&json!(crate::selectors::fingerprint(t)).to_string()) && (!s.reply_lag || s.reloaded)).map(|(id, _)| id.clone());
             json!({ "holds": s.composer_open && !s.composer_text.is_empty(), "dialog": s.composer_open, "toast": Value::Null, "id": id })
         } else if js.contains("posts.push") {
             json!({ "state": s.page, "me": "me", "posts": [] })
@@ -253,7 +259,7 @@ impl BrowserDriver for FakeX {
         } else if js.contains("aria-disabled") {
             json!({ "x": 17.0, "y": 5.0 })
         } else if js.contains("const m2") {
-            let snippet = s.published.iter().find(|(_, t)| js.contains(&json!(t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect::<String>()).to_string()));
+            let snippet = s.published.iter().find(|(_, t)| js.contains(&json!(crate::selectors::fingerprint(t)).to_string()) && (!s.reply_lag || s.reloaded));
             snippet.map(|(id, _)| json!(id)).unwrap_or(Value::Null)
         } else if js.contains("menuitem") && js.contains("map(e =>") {
             if s.menu_open {
@@ -418,13 +424,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_reply_that_only_appears_after_reloading_the_post_is_still_confirmed() {
+        let r = rig(&["like", "reply"], |s| {
+            s.submit_hangs = true;
+            s.reply_lag = true;
+        });
+        let res = r.publish().await;
+        assert!(res.ok, "{:?}", res.message);
+        assert_eq!(res.published_post_id.as_deref(), Some("9001"));
+        assert_eq!(r.status(), "published");
+        assert!(r.fake.0.lock().unwrap().calls.iter().filter(|c| c.starts_with("navigate")).count() >= 2, "the post is reloaded to look for the reply");
+    }
+
+    #[tokio::test]
     async fn text_still_in_the_composer_with_no_confirmation_is_uncertain_and_retry_does_not_repeat_finished_steps() {
         let r = rig(&["like", "reply"], |s| s.submit_ignored = true);
         let first = r.publish().await;
         assert!(!first.ok);
         assert_eq!(r.steps(), vec![("like".into(), "done".into()), ("reply".into(), "uncertain".into())]);
         assert_eq!(r.status(), "failed");
-        assert!(first.message.unwrap().contains("still in the composer"));
+        assert!(first.message.unwrap().contains("not found under the post"));
         let likes_before = r.fake.clicks().iter().filter(|c| *c == "like").count();
 
         r.fake.0.lock().unwrap().submit_ignored = false;

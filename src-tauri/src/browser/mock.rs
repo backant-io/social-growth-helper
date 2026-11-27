@@ -10,6 +10,8 @@ pub struct MockDriver {
     running: Arc<Mutex<bool>>,
     pub fail_launch: bool,
     eval_fn: Option<EvalFn>,
+    eval_fail: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
+    wheel_failures: Arc<Mutex<u32>>,
     screenshot: Arc<Mutex<Vec<u8>>>,
     pub bounds: Arc<Mutex<WindowBounds>>,
     pub cookies: Arc<Mutex<Vec<Value>>>,
@@ -25,6 +27,8 @@ impl MockDriver {
             running: Arc::default(),
             fail_launch: false,
             eval_fn: None,
+            eval_fail: None,
+            wheel_failures: Arc::default(),
             screenshot: Arc::new(Mutex::new(vec![0x89, 0x50])),
             bounds: Arc::new(Mutex::new(WindowBounds { left: 0, top: 0, width: 560, height: 900 })),
             cookies: Arc::default(),
@@ -40,6 +44,22 @@ impl MockDriver {
     pub fn with_eval_fn(mut self, f: impl Fn(&str) -> Value + Send + Sync + 'static) -> Self {
         self.eval_fn = Some(Arc::new(f));
         self
+    }
+
+    /// Makes `eval_json` fail with an evaluation error for every script the predicate accepts.
+    pub fn with_eval_failure(mut self, f: impl Fn(&str) -> bool + Send + Sync + 'static) -> Self {
+        self.eval_fail = Some(Arc::new(f));
+        self
+    }
+
+    /// The next `n` wheel scrolls fail.
+    pub fn fail_next_wheels(&self, n: u32) {
+        *self.wheel_failures.lock().unwrap() = n;
+    }
+
+    /// Simulates Chrome disappearing: the driver stops reporting itself as running.
+    pub fn crash(&self) {
+        *self.running.lock().unwrap() = false;
     }
 
     pub fn with_screenshot(self, bytes: Vec<u8>) -> Self {
@@ -84,6 +104,9 @@ impl BrowserDriver for MockDriver {
     }
     async fn eval_json(&self, expression: &str) -> Result<Value, BrowserError> {
         self.record(format!("eval {expression}"));
+        if self.eval_fail.as_ref().is_some_and(|f| f(expression)) {
+            return Err(BrowserError::Evaluation("mock evaluation failure".into()));
+        }
         if let Some(f) = &self.eval_fn {
             return Ok(f(expression));
         }
@@ -103,6 +126,11 @@ impl BrowserDriver for MockDriver {
     }
     async fn wheel_scroll(&self, _x: f64, _y: f64, delta_y: f64) -> Result<(), BrowserError> {
         self.record(format!("wheel {delta_y}"));
+        let mut left = self.wheel_failures.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err(BrowserError::Evaluation("mock wheel failure".into()));
+        }
         Ok(())
     }
     async fn insert_text(&self, text: &str) -> Result<(), BrowserError> {

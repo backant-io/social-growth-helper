@@ -21,7 +21,11 @@ export interface XPostCardProps {
   media?: MediaItem[];
   url?: string | null;
   metrics: CardMetrics;
-  /** Small tags shown right of the header, e.g. a score. */
+  /** A quiet secondary line under the engagement row, e.g. "Score 91 · High saves". */
+  signal?: string | null;
+  /** Hover text for the signal line (why it scored that way). */
+  signalTitle?: string;
+  /** Small tags shown right of the header. */
   badge?: ReactNode;
   /** Rendered inside the card, under the metrics row, separated by a rule. */
   children?: ReactNode;
@@ -100,11 +104,11 @@ export function PostMedia({ media, postUrl }: { media: MediaItem[]; postUrl?: st
   const frame = "overflow-hidden rounded-2xl border border-zinc-200 bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-900";
 
   return (
-    <div className="mt-3 space-y-2" onClick={(e) => e.stopPropagation()}>
+    <div className="mt-2.5 space-y-2" onClick={(e) => e.stopPropagation()}>
       {images.length > 0 && (
         <div className={`${frame} grid gap-0.5 ${images.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
           {images.slice(0, 4).map((img, idx) => (
-            <a key={`${img.url}-${idx}`} href={img.url ?? fallbackHref} target="_blank" rel="noreferrer" className="block">
+            <a key={`${img.url}-${idx}`} href={fallbackHref ?? img.url ?? undefined} target="_blank" rel="noreferrer" className="block">
               <img src={img.url!} alt={img.alt ?? "Post image"} loading="lazy" referrerPolicy="no-referrer" className={`w-full object-cover ${images.length === 1 ? "max-h-80" : "h-40"}`} />
             </a>
           ))}
@@ -146,60 +150,98 @@ export function PostMedia({ media, postUrl }: { media: MediaItem[]; postUrl?: st
   );
 }
 
-/** One post, laid out like an X feed card. Children (a reply box, actions) sit inside the same frame below it. */
-export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, badge, children, compact, selected, onSelect }: XPostCardProps) {
+const VERIFIED_PATH = "M12 2.5 14.4 4l2.8-.2 1 2.6 2.4 1.5-.8 2.7.8 2.7-2.4 1.5-1 2.6-2.8-.2L12 21.5 9.6 20l-2.8.2-1-2.6-2.4-1.5.8-2.7-.8-2.7 2.4-1.5 1-2.6L9.6 4Zm-1.2 12.9 5-5-1.1-1.1-3.9 3.9-1.7-1.7-1.1 1.1Z";
+
+/**
+ * One post as a row of an X timeline: avatar on the left, then name, handle and time, text, media and the
+ * engagement row. Children (a reply box) continue the same column directly below the post, joined to the
+ * avatar by a thread line, so the reply reads as part of the post. Rows are flat; the parent draws the dividers.
+ */
+export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, signal, signalTitle, badge, children, compact, selected, onSelect }: XPostCardProps) {
   const when = relativeTime(postedAt ?? null);
-  const stats = (["replies", "reposts", "likes", "bookmarks", "views"] as const).filter((k) => metrics[k] != null);
+  const stats = (["replies", "reposts", "likes", "views", "bookmarks"] as const).filter((k) => metrics[k] != null);
+  const display = name || `@${handle}`;
 
   return (
-    <article
-      aria-current={selected ? "true" : undefined}
-      onClick={onSelect}
-      className={`overflow-hidden rounded-2xl border bg-white transition-colors dark:bg-zinc-950 ${selected ? "border-zinc-400 dark:border-zinc-600" : "border-zinc-200 dark:border-zinc-800"}`}
-    >
-      <div className="flex gap-3 px-4 pt-3.5 pb-2.5">
+    <article aria-current={selected ? "true" : undefined} onClick={onSelect} className={`flex gap-3 px-4 pt-3 pb-3 transition-colors ${selected ? "bg-zinc-50 dark:bg-zinc-900/40" : ""}`}>
+      <div className="flex shrink-0 flex-col items-center">
         <Avatar src={avatarUrl} name={name} handle={handle} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-sm leading-tight">
-              <span className="truncate font-semibold">{name || `@${handle}`}</span>
-              {verified && (
-                <svg viewBox="0 0 24 24" width="14" height="14" className="self-center text-sky-500" fill="currentColor" aria-label="Verified">
-                  <path d="M12 2.5 14.4 4l2.8-.2 1 2.6 2.4 1.5-.8 2.7.8 2.7-2.4 1.5-1 2.6-2.8-.2L12 21.5 9.6 20l-2.8.2-1-2.6-2.4-1.5.8-2.7-.8-2.7 2.4-1.5 1-2.6L9.6 4Zm-1.2 12.9 5-5-1.1-1.1-3.9 3.9-1.7-1.7-1.1 1.1Z" />
-                </svg>
-              )}
-              {name && <span className={muted}>@{handle}</span>}
-              {when && <span className={muted}>· {when}</span>}
-            </div>
-            {badge && <div className="shrink-0">{badge}</div>}
+        {children && <span aria-hidden="true" className="mt-1 w-0.5 flex-1 rounded-full bg-zinc-200 dark:bg-zinc-800" />}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1 text-[15px] leading-5">
+            <span className="truncate font-bold">{display}</span>
+            {verified && (
+              <svg viewBox="0 0 24 24" width="16" height="16" className="shrink-0 text-sky-500" fill="currentColor" aria-label="Verified">
+                <path d={VERIFIED_PATH} />
+              </svg>
+            )}
+            {name && <span className={`truncate ${muted}`}>@{handle}</span>}
+            {when && (
+              <>
+                <span aria-hidden="true" className={muted}>
+                  ·
+                </span>
+                {url ? (
+                  <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Show in the X window" className={`shrink-0 hover:underline ${muted}`}>
+                    {when}
+                  </a>
+                ) : (
+                  <span className={`shrink-0 ${muted}`}>{when}</span>
+                )}
+              </>
+            )}
           </div>
+          {badge && <div className="shrink-0">{badge}</div>}
+        </div>
 
-          <p className={`mt-1 text-[15px] leading-relaxed whitespace-pre-wrap ${compact ? "line-clamp-5" : ""}`}>{text}</p>
-          <PostMedia media={media} postUrl={url} />
+        <p className={`mt-0.5 text-[15px] leading-[1.35] whitespace-pre-wrap ${compact ? "line-clamp-5" : ""}`}>{text}</p>
+        <PostMedia media={media} postUrl={url} />
 
-          <ul className={`mt-2.5 -ml-1.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs ${muted}`} aria-label="Engagement">
+        <div className={`mt-3 -ml-2 flex items-center gap-3 text-[13px] ${muted}`}>
+          <ul className="flex min-w-0 max-w-md flex-1 items-center justify-between" aria-label="Engagement">
             {stats.map((k) => (
-              <li key={k} className="flex items-center gap-1.5 py-0.5" title={LABELS[k]}>
+              <li key={k} className="flex min-w-12 items-center gap-1.5 px-2 py-0.5" title={LABELS[k]}>
                 {ICONS[k]}
-                <span className="font-mono tabular-nums">{compactCount(metrics[k] ?? 0)}</span>
+                <span className="tabular-nums">{compactCount(metrics[k] ?? 0)}</span>
                 <span className="sr-only">{LABELS[k]}</span>
               </li>
             ))}
-            {url && (
-              <li className="ml-auto">
-                <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="hover:text-zinc-950 hover:underline dark:hover:text-zinc-50">
-                  View on X
-                </a>
-              </li>
-            )}
           </ul>
+          {url && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              data-testid="view-on-x"
+              title={`Show this post in the X window: ${url}`}
+              className="ml-auto flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-sky-600 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
+            >
+              View on X
+              <Icon>
+                <path d="M14 4h6v6" />
+                <path d="M20 4 10.5 13.5" />
+                <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+              </Icon>
+            </a>
+          )}
         </div>
+
+        {signal && (
+          <p data-testid="post-signal" title={signalTitle} className={`mt-1 truncate text-xs tabular-nums ${muted}`}>
+            {signal}
+          </p>
+        )}
+
+        {children && (
+          <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+            {children}
+          </div>
+        )}
       </div>
-      {children && (
-        <div className="border-t border-zinc-200 bg-zinc-50/70 px-4 py-3 dark:border-zinc-800 dark:bg-zinc-900/40" onClick={(e) => e.stopPropagation()}>
-          {children}
-        </div>
-      )}
     </article>
   );
 }

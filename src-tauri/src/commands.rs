@@ -94,6 +94,37 @@ pub fn open_external(url: String) -> AppResult<()> {
     cmd.spawn().map(|_| ()).map_err(|e| AppError::Other(format!("could not open your browser: {e}")))
 }
 
+/// Reduces a post link to its canonical permalink, `https://x.com/{handle}/status/{id}` (`/i/status/{id}` when
+/// there is no handle). Anything that is not a post on X is refused, so the managed window can only be sent to posts.
+pub fn x_post_permalink(raw: &str) -> AppResult<String> {
+    let bad = || AppError::Validation("that is not a link to a post on X".into());
+    let rest = raw.trim().strip_prefix("https://").ok_or_else(bad)?;
+    let (host, path) = rest.split_once('/').ok_or_else(bad)?;
+    if !matches!(host.to_ascii_lowercase().as_str(), "x.com" | "www.x.com" | "twitter.com" | "www.twitter.com" | "mobile.twitter.com") {
+        return Err(bad());
+    }
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let mut parts = path.split('/');
+    let (who, status, id) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+    let who_ok = who == "i" || (!who.is_empty() && who.len() <= 15 && who.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+    if !who_ok || status != "status" || id.is_empty() || id.len() > 25 || !id.chars().all(|c| c.is_ascii_digit()) {
+        return Err(bad());
+    }
+    Ok(format!("https://x.com/{who}/status/{id}"))
+}
+
+/// Shows a post inside the app's managed X window (the same Chrome profile and login Scout uses) instead of the
+/// system browser. Starts or attaches that window the way Scout does, loads the permalink and raises the window.
+/// It does not touch a running Scout session.
+#[tauri::command]
+pub async fn open_post_in_x(app: AppHandle, state: State<'_, AppState>, url: String) -> AppResult<()> {
+    let url = x_post_permalink(&url)?;
+    ensure_x_browser_open(&app, &state).await?;
+    state.browser.navigate(&url).await?;
+    state.browser.bring_to_front().await?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_onboarding_status(state: State<'_, AppState>) -> AppResult<OnboardingStatus> {
     let db = state.db.lock().unwrap();
@@ -1186,6 +1217,21 @@ mod tests {
         assert_eq!(external_url(" https://x.com/naval/status/111?s=20 ").unwrap(), "https://x.com/naval/status/111?s=20");
         for bad in ["", "x.com/naval", "file:///etc/passwd", "javascript:alert(1)", "https://", "https:///x", "https://x.com/a b", "https://x.com/\"; rm -rf", "calc.exe"] {
             assert!(external_url(bad).is_err(), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn post_permalinks_are_canonical_and_nothing_else_passes() {
+        for (raw, want) in [
+            ("https://x.com/naval/status/111", "https://x.com/naval/status/111"),
+            (" https://twitter.com/Naval_1/status/111?s=20#r ", "https://x.com/Naval_1/status/111"),
+            ("https://x.com/i/status/42", "https://x.com/i/status/42"),
+            ("https://www.x.com/a/status/9/photo/1", "https://x.com/a/status/9"),
+        ] {
+            assert_eq!(x_post_permalink(raw).unwrap(), want);
+        }
+        for bad in ["", "http://x.com/a/status/1", "https://evil.com/a/status/1", "https://x.com.evil.com/a/status/1", "https://x.com/home", "https://x.com/a/status/", "https://x.com/a/status/12ab", "https://x.com/a b/status/1", "https://x.com//status/1", "https://x.com/a/likes/1", "javascript:alert(1)"] {
+            assert!(x_post_permalink(bad).is_err(), "{bad} must be refused");
         }
     }
 

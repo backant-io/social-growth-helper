@@ -269,7 +269,7 @@ impl Page<'_> {
     }
 
     async fn text_flow(&self, kind: ActionKind, text: &str) -> Result<Outcome, String> {
-        let snippet: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(40).collect();
+        let snippet = selectors::fingerprint(text);
         if let Some(existing) = self.find_published(&snippet).await {
             return Ok(Outcome::Done { detail: Some("found your earlier submission on the page".into()), post_id: Some(existing) });
         }
@@ -307,16 +307,18 @@ impl Page<'_> {
             return Ok(Outcome::Failed("the post button could not be located".into()));
         };
         self.d.click_point(x, y).await.map_err(err)?;
-        self.confirm_submitted(&snippet).await
+        self.confirm_submitted(kind, &snippet).await
     }
 
-    /// Decides whether a pressed Post button worked. An open composer alone proves nothing (X keeps an empty
-    /// inline composer on a post page), so any one of these counts as posted: your own card with the text is on
-    /// the page, a success toast with the composer emptied, or the text gone from every composer for two reads
-    /// in a row. Only text still sitting in the composer with no confirmation is uncertain.
-    async fn confirm_submitted(&self, snippet: &str) -> Result<Outcome, String> {
-        let js = selectors::submit_result_js(self.me.as_deref(), snippet);
+    /// Decides whether a pressed Post button worked by looking for what was posted: your reply's text on the
+    /// page. An open composer proves nothing either way (X keeps an inline composer on a post page), so it is
+    /// never used as a signal. If the reply is not visible yet, the post is reloaded and searched again before
+    /// giving up. A quote lands on your profile rather than under the post, so it also accepts X's own success
+    /// toast or the text leaving the composer.
+    async fn confirm_submitted(&self, kind: ActionKind, snippet: &str) -> Result<Outcome, String> {
+        let js = selectors::submit_result_js(self.post_id, self.me.as_deref(), snippet);
         let mut text_gone = 0u32;
+        let mut toast_ok = false;
         let mut error_toast = false;
         for _ in 0..self.t.polls.saturating_mul(2) {
             if let Ok(v) = self.d.eval_json(&js).await {
@@ -324,15 +326,18 @@ impl Page<'_> {
                     if let Some(id) = r.id {
                         return Ok(Outcome::Done { detail: None, post_id: Some(id) });
                     }
-                    if r.holds {
-                        text_gone = 0;
-                        error_toast |= r.toast.as_deref() == Some("error");
-                    } else if r.toast.as_deref() == Some("ok") {
-                        return Ok(Outcome::Done { detail: Some("X confirmed the post".into()), post_id: None });
-                    } else {
-                        text_gone += 1;
-                        if text_gone >= 2 {
-                            return Ok(Outcome::Done { detail: Some("the composer emptied after posting".into()), post_id: None });
+                    toast_ok |= r.toast.as_deref() == Some("ok");
+                    error_toast |= r.toast.as_deref() == Some("error");
+                    if kind == ActionKind::Quote {
+                        if r.holds {
+                            text_gone = 0;
+                        } else if toast_ok {
+                            return Ok(Outcome::Done { detail: Some("X confirmed the post".into()), post_id: None });
+                        } else {
+                            text_gone += 1;
+                            if text_gone >= 2 {
+                                return Ok(Outcome::Done { detail: Some("the composer emptied after posting".into()), post_id: None });
+                            }
                         }
                     }
                 }
@@ -342,10 +347,28 @@ impl Page<'_> {
             }
             self.nap(self.t.poll_ms).await;
         }
+        if kind == ActionKind::Reply {
+            let url = crate::drafts::repo::post_url(self.handle, self.post_id);
+            if self.d.navigate(&url).await.is_ok() {
+                self.nap(self.t.settle_ms.saturating_mul(4)).await;
+                for _ in 0..self.t.polls {
+                    if let Some(id) = self.find_published(snippet).await {
+                        return Ok(Outcome::Done { detail: Some("found your reply after reloading the post".into()), post_id: Some(id) });
+                    }
+                    if self.kill.is_engaged() {
+                        return Err("stopped by the kill switch".into());
+                    }
+                    self.nap(self.t.poll_ms).await;
+                }
+            }
+            if toast_ok {
+                return Ok(Outcome::Done { detail: Some("X confirmed the reply; it was not visible under the post yet".into()), post_id: None });
+            }
+        }
         Ok(Outcome::Uncertain(if error_toast {
-            "X showed an error and your text is still in the composer; check X before retrying".into()
+            "X showed an error and your reply was not found under the post; check X before retrying".into()
         } else {
-            "your text is still in the composer and no confirmation appeared; check X before retrying".into()
+            "your reply was not found under the post, even after reloading it; check X before retrying".into()
         }))
     }
 
@@ -353,7 +376,7 @@ impl Page<'_> {
         if snippet.is_empty() {
             return None;
         }
-        let v = self.d.eval_json(&selectors::find_published_js(self.me.as_deref(), snippet)).await.ok()?;
+        let v = self.d.eval_json(&selectors::find_published_js(self.post_id, self.me.as_deref(), snippet)).await.ok()?;
         v.as_str().map(str::to_string)
     }
 }

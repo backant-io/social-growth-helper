@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { enqueueGeneration } from "./genQueue";
-import { charInfo, REASONS } from "./logic";
+import { charInfo } from "./logic";
 import type { DraftView, QueueItem } from "./types";
-import { btnGhost, btnPrimary, chip, muted, Notice } from "./ui";
+import { muted, Notice } from "./ui";
 
 interface Props {
   item: QueueItem;
@@ -25,7 +25,6 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [reasons, setReasons] = useState(false);
   const [near, setNear] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const started = useRef(false);
@@ -147,74 +146,80 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
   const failure = status === "failed" ? (draft?.error_message ?? item.draft_error) : null;
   const url = draft?.published_url ?? item.draft_published_url;
 
-  return (
-    <div ref={root} className="space-y-2.5">
-      <div className="flex items-center justify-between gap-2 text-xs">
-        <span className={`font-medium ${muted}`}>Your reply</span>
-        {!sent && (
-          <button type="button" onClick={() => void regenerate()} disabled={generating || busy || !canDraft} aria-label="Write a new reply" title={canDraft ? "Write a new reply" : "Assign a reply model in Settings"} className={`${btnGhost} !px-2 !py-1 text-xs`}>
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={generating ? "animate-spin" : ""} aria-hidden="true">
-              <path d="M20 12a8 8 0 1 1-2.5-5.8" />
-              <path d="M20 4v5h-5" />
-            </svg>
-            {generating ? "Writing" : "New reply"}
-          </button>
-        )}
-      </div>
+  const near280 = info.count > 240;
 
+  return (
+    <div ref={root} className="space-y-2">
       <label htmlFor={`reply-${evalId}`} className="sr-only">
-        Reply text
+        Your reply
       </label>
-      <textarea
-        id={`reply-${evalId}`}
-        rows={3}
-        value={text}
-        disabled={busy || sent}
-        placeholder={generating ? "Writing a reply in your voice..." : canDraft ? "Write your reply..." : "Write your reply, or assign a reply model in Settings to draft one for you."}
-        onChange={(e) => {
-          dirty.current = true;
-          setText(e.target.value);
-        }}
-        onBlur={save}
-        className="w-full resize-y rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none placeholder:text-zinc-400 focus:border-zinc-900 disabled:opacity-70 dark:border-zinc-800 dark:bg-zinc-950 dark:focus:border-zinc-100"
-      />
+      <div className={`rounded-2xl border bg-white px-3.5 pt-2.5 pb-2 transition-colors focus-within:border-zinc-900 dark:bg-zinc-950 dark:focus-within:border-zinc-100 ${info.over ? "border-rose-500" : "border-zinc-200 dark:border-zinc-800"}`}>
+        <textarea
+          id={`reply-${evalId}`}
+          rows={2}
+          value={text}
+          disabled={busy || sent}
+          placeholder={generating ? "Writing a reply in your voice..." : canDraft ? "Post your reply" : "Post your reply, or assign a reply model in Settings to draft one."}
+          onChange={(e) => {
+            dirty.current = true;
+            setText(e.target.value);
+          }}
+          onBlur={save}
+          className="block w-full resize-none bg-transparent text-[15px] leading-[1.35] outline-none placeholder:text-zinc-500 disabled:opacity-70"
+          style={{ fieldSizing: "content", minHeight: "2.75rem" } as CSSProperties}
+        />
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1">
+            {!sent && (
+              <button
+                type="button"
+                onClick={() => void regenerate()}
+                disabled={generating || busy || !canDraft}
+                aria-label="Write a new reply"
+                title={canDraft ? "Write a new reply" : "Assign a reply model in Settings"}
+                className="rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-40 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={generating ? "animate-spin" : ""} aria-hidden="true">
+                  <path d="M20 12a8 8 0 1 1-2.5-5.8" />
+                  <path d="M20 4v5h-5" />
+                </svg>
+              </button>
+            )}
+            {!sent && (
+              <button
+                type="button"
+                onClick={() => onDismiss("other")}
+                aria-label="Skip this post"
+                title="Skip this post"
+                className="rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            {near280 && <span className={`text-xs tabular-nums ${info.over ? "text-rose-600 dark:text-rose-400" : muted}`}>{280 - info.count}</span>}
+            <button type="button" className="rounded-full bg-zinc-950 px-4 py-1.5 text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:bg-zinc-50 dark:text-zinc-950" disabled={busy || sent || generating || !text.trim() || info.over} onClick={() => void send()}>
+              {sent ? "Sent" : busy ? "Sending" : "Reply"}
+            </button>
+          </div>
+        </div>
+      </div>
 
       {warnings.length > 0 && <Notice tone="warn">{warnings.join(" ")}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {failure && <Notice tone="error">{failure}</Notice>}
       {sent && (
-        <Notice tone="ok">
-          Reply sent.{" "}
+        <p className={`text-sm ${muted}`}>
+          Reply posted.{" "}
           {url && (
             <a href={url} target="_blank" rel="noreferrer" className="underline">
               View on X
             </a>
           )}
-        </Notice>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className={`font-mono text-xs ${info.over ? "text-rose-600 dark:text-rose-400" : muted}`}>{info.count}/280</span>
-        <div className="flex items-center gap-1.5">
-          {!sent && (
-            <button type="button" className={btnGhost} aria-expanded={reasons} onClick={() => setReasons((v) => !v)}>
-              Skip
-            </button>
-          )}
-          <button type="button" className={btnPrimary} disabled={busy || sent || generating || !text.trim() || info.over} onClick={() => void send()}>
-            {sent ? "Sent" : busy ? "Sending..." : "Send reply"}
-          </button>
-        </div>
-      </div>
-
-      {reasons && !sent && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label="Why skip this post">
-          {REASONS.map((r) => (
-            <button key={r.id} type="button" className={chip(false)} onClick={() => onDismiss(r.id)}>
-              {r.label}
-            </button>
-          ))}
-        </div>
+        </p>
       )}
     </div>
   );

@@ -288,7 +288,7 @@ export function CreatorPage({ locked, onGoToSettings }: { locked: boolean; onGoT
           <h2 id="posts-h" className="font-display text-base font-semibold tracking-tight">
             Viral posts behind them
           </h2>
-          <ul className="space-y-4">
+          <ul className="divide-y divide-zinc-200 border-y border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
             {shown.map((c) => (
               <li key={c.id}>
                 <XPostCard
