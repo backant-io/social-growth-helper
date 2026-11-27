@@ -36,6 +36,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
+libc = "0.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }
