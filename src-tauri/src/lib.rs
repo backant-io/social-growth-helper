@@ -15,6 +15,7 @@ pub mod formats;
 pub mod lifecycle;
 pub mod llm;
 pub mod logging;
+#[cfg(target_os = "macos")]
 mod menu;
 pub mod onboarding;
 pub mod phase3;
@@ -48,11 +49,24 @@ pub fn run() {
         eprintln!("file logging unavailable: {e}");
     }
     log::info!("starting Social Growth Helper {}", env!("CARGO_PKG_VERSION"));
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_notification::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_notification::init());
+    // The in-window File/Edit/View/Window/Help bar only exists on Linux and Windows, where it is
+    // clutter. macOS keeps its system menu bar, which lives outside the window.
+    #[cfg(target_os = "macos")]
+    let builder = builder
         .menu(|handle| menu::build(handle))
-        .on_menu_event(|app, event| menu::handle_event(app, event.id().as_ref()))
+        .on_menu_event(|app, event| menu::handle_event(app, event.id().as_ref()));
+    let app = builder
         .setup(|app| {
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Tauri attaches a default menu on every platform; drop it so no bar shows in the window.
+                let _ = app.remove_menu();
+                for window in app.webview_windows().values() {
+                    let _ = window.remove_menu();
+                    let _ = window.hide_menu();
+                }
+            }
             let state = init_state()?;
             let profile_dir = state.paths.browser_profile_dir.clone();
             let kill_engaged = {

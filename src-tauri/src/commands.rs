@@ -456,7 +456,9 @@ fn to_account_view(state: &AppState, acct: ProviderAccount, remote_models: &[Str
         .and_then(|k| state.secrets.load(k).ok().flatten())
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
-    let models = catalog::merge_catalog(acct.provider_type, remote_models, &acct.config.custom_models);
+    let cached = state.remote_models.lock().unwrap().get(&acct.id).cloned().unwrap_or_default();
+    let remote = if remote_models.is_empty() { cached.as_slice() } else { remote_models };
+    let models = catalog::merge_catalog(acct.provider_type, remote, &acct.config.custom_models);
     let personal_use_notice = (acct.provider_type == ProviderType::ClaudeCli)
         .then(|| PERSONAL_USE_NOTICE.to_string());
     ProviderAccountView {
@@ -830,6 +832,9 @@ pub async fn llm_refresh_provider_models(
         }
         _ => Vec::new(),
     };
+    if !remote.is_empty() {
+        state.remote_models.lock().unwrap().insert(acct.id.clone(), remote.clone());
+    }
     Ok(catalog::merge_catalog(
         acct.provider_type,
         &remote,

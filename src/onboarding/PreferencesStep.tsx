@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
-import { btnPrimary, panel } from "../components/ui";
+import { btnGhost, btnPrimary, panel } from "../components/ui";
 import { joinList, parseList, stripHandle } from "../lib/lists";
 
 interface Props {
@@ -9,7 +9,7 @@ interface Props {
 }
 
 const input =
-  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
+  "w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900";
 
 function usePreferencesForm(onSaved?: () => void) {
   const [topics, setTopics] = useState("");
@@ -90,7 +90,7 @@ export function PreferencesStep({ onSaved, onBack }: Props) {
         {fields}
       </div>
       <div className="mt-4 flex justify-between border-t border-zinc-200 pt-4 dark:border-zinc-800">
-        <button type="button" onClick={onBack} className="rounded-lg px-4 py-2 text-sm text-zinc-600 dark:text-zinc-400">
+        <button type="button" onClick={onBack} className={btnGhost}>
           Back
         </button>
         <button type="button" onClick={save} disabled={busy} className={btnPrimary}>
@@ -107,12 +107,9 @@ export function PreferencesPanel() {
 
   return (
     <section className={panel} aria-labelledby="prefs-h">
-      <h2 id="prefs-h" className="text-base font-medium">
+      <h2 id="prefs-h" className="font-display text-lg font-semibold tracking-tight">
         Scout preferences
       </h2>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-        Niche, accounts and languages that steer Scout&apos;s ranking. Changes apply to the next Scout session. Nothing here contacts X.
-      </p>
       <div className="mt-3 space-y-4">{fields}</div>
       <div className="mt-4 flex items-center gap-3">
         <button type="button" onClick={save} disabled={busy} className={btnPrimary}>

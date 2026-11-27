@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { ModelPicker, type ModelSelection } from "../components/ModelPicker";
 import { UnsetRouteGuard } from "../components/UnsetRouteGuard";
-import { btn, btnPrimary as primaryBtn, input as inputCls, PageHeader, panel, Tabs } from "../components/ui";
+import {
+  btn,
+  btnGhost,
+  btnPrimary as primaryBtn,
+  Disclosure,
+  input as inputCls,
+  Notice,
+  Page,
+  PageHeader,
+  panel,
+  Tabs,
+} from "../components/ui";
 import { api } from "../lib/api";
 import { DiffView } from "../learning/DiffView";
 import { parseLlmError } from "../lib/errors";
@@ -27,7 +37,6 @@ interface Props {
 }
 
 type StyleTab = "guide" | "examples" | "bench";
-
 
 function TagChips({
   items,
@@ -115,7 +124,9 @@ function ModelRunColumn({ title, run }: { title: string; run: BenchModelRun }) {
       </div>
 
       {run.fallback_reason && (
-        <p className="text-xs text-amber-700 dark:text-amber-300">Fallback reason: {run.fallback_reason}</p>
+        <p className="text-xs text-amber-700 dark:text-amber-300">
+          Fallback reason: {run.fallback_reason}
+        </p>
       )}
 
       {run.variants.length === 0 ? (
@@ -125,7 +136,10 @@ function ModelRunColumn({ title, run }: { title: string; run: BenchModelRun }) {
       ) : (
         <div className="space-y-2">
           {run.variants.map((v, idx) => (
-            <div key={idx} className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800">
+            <div
+              key={idx}
+              className="rounded-lg border border-zinc-200 p-3 text-sm dark:border-zinc-800"
+            >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="rounded bg-zinc-100 px-1.5 py-0.5 font-medium dark:bg-zinc-800">
                   {v.tone_tag}
@@ -138,7 +152,9 @@ function ModelRunColumn({ title, run }: { title: string; run: BenchModelRun }) {
                   }
                 >
                   {v.check.char_count}/{v.check.max_reply_chars} chars
-                  {v.check.passed ? " · All rules passed" : ` · ${v.check.violations.join("; ")}`}
+                  {v.check.passed
+                    ? " · All rules passed"
+                    : ` · ${v.check.violations.join("; ")}`}
                 </span>
               </div>
               <p className="whitespace-pre-wrap">{v.text}</p>
@@ -150,11 +166,15 @@ function ModelRunColumn({ title, run }: { title: string; run: BenchModelRun }) {
       {run.rejected_variants.length > 0 && (
         <details className="rounded-lg border border-red-200 bg-red-50/50 p-2.5 text-xs dark:border-red-900 dark:bg-red-950/30">
           <summary className="cursor-pointer font-medium text-red-700 dark:text-red-300">
-            {run.rejected_variants.length} variant(s) blocked by banned-phrase post-filter
+            {run.rejected_variants.length} variant(s) blocked by banned-phrase
+            post-filter
           </summary>
           <div className="mt-2 space-y-2">
             {run.rejected_variants.map((rv, i) => (
-              <div key={i} className="rounded border border-red-200 p-2 dark:border-red-900">
+              <div
+                key={i}
+                className="rounded border border-red-200 p-2 dark:border-red-900"
+              >
                 <div className="font-medium text-red-700 dark:text-red-300">
                   Blocked: {rv.check.banned_hits.join(", ")}
                 </div>
@@ -168,13 +188,18 @@ function ModelRunColumn({ title, run }: { title: string; run: BenchModelRun }) {
   );
 }
 
-export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Props) {
+export function StylePage({
+  locked,
+  offline,
+  onReviewRules,
+  onOpenSettings,
+}: Props) {
   const [tab, setTab] = useState<StyleTab>("guide");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   // Guide state
-  const [guide, setGuide] = useState<StyleGuide | null>(null);
+  const [, setGuide] = useState<StyleGuide | null>(null);
   const [versions, setVersions] = useState<StyleGuide[]>([]);
   const [prose, setProse] = useState("");
   const [learnedRules, setLearnedRules] = useState<string[]>([]);
@@ -188,9 +213,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
 
   // Examples state
   const [examples, setExamples] = useState<StyleExample[]>([]);
-  const [kindFilter, setKindFilter] = useState<ExampleKind | "all">("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [exKind, setExKind] = useState<ExampleKind>("reply");
+  const exKind: ExampleKind = "reply";
   const [exContext, setExContext] = useState("");
   const [exText, setExText] = useState("");
   const [exWhy, setExWhy] = useState("");
@@ -211,13 +234,9 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   // Bench state
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [routes, setRoutes] = useState<TaskModelRoute[]>([]);
-  const [sampleAuthor, setSampleAuthor] = useState("@founder");
   const [samplePost, setSamplePost] = useState(
-    "We cut database query latency by 60% just by batching our dashboard metrics into one materialized view."
+    "We cut database query latency by 60% just by batching our dashboard metrics into one materialized view.",
   );
-  const [overrideSel, setOverrideSel] = useState<ModelSelection>({ providerAccountId: null, modelId: null });
-  const [enableCompare, setEnableCompare] = useState(false);
-  const [compareSel, setCompareSel] = useState<ModelSelection>({ providerAccountId: null, modelId: null });
   const [runningBench, setRunningBench] = useState(false);
   const [benchResult, setBenchResult] = useState<StyleBenchResult | null>(null);
 
@@ -245,14 +264,8 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   }, []);
 
   const loadExamples = useCallback(async () => {
-    const k = kindFilter === "all" ? null : kindFilter;
-    if (searchQuery.trim()) {
-      const hits = await api.styleSearchExamples(k, searchQuery, 50);
-      setExamples(hits.map((h) => h.example));
-    } else {
-      setExamples(await api.styleListExamples(k));
-    }
-  }, [kindFilter, searchQuery]);
+    setExamples(await api.styleListExamples(null));
+  }, []);
 
   useEffect(() => {
     void loadAll();
@@ -341,7 +354,10 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
     setImporting(true);
     setError(null);
     try {
-      const found = await api.styleImportExamplesFromBrowser(xHandle.trim() || null, importKind);
+      const found = await api.styleImportExamplesFromBrowser(
+        xHandle.trim() || null,
+        importKind,
+      );
       setCandidates(found);
       setSelectedIdx(new Set(found.map((_, i) => i)));
     } catch (e) {
@@ -386,26 +402,10 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
     setError(null);
     try {
       const res = await api.styleRunBench({
-        sample_author: sampleAuthor.trim() || null,
+        sample_author: null,
         sample_post_text: samplePost,
-        override_route:
-          overrideSel.providerAccountId && overrideSel.modelId
-            ? {
-                provider_account_id: overrideSel.providerAccountId,
-                model_id: overrideSel.modelId,
-                reasoning_effort: null,
-                temperature: null,
-              }
-            : null,
-        compare_route:
-          enableCompare && compareSel.providerAccountId && compareSel.modelId
-            ? {
-                provider_account_id: compareSel.providerAccountId,
-                model_id: compareSel.modelId,
-                reasoning_effort: null,
-                temperature: null,
-              }
-            : null,
+        override_route: null,
+        compare_route: null,
         example_limit: 5,
       });
       setBenchResult(res);
@@ -417,12 +417,16 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
   };
 
   const replyRoute = routes.find((r) => r.task_type === "reply_drafting");
-  const hasReplyRoute = Boolean(replyRoute?.provider_account_id && replyRoute?.model_id);
-  const hasOverride = Boolean(overrideSel.providerAccountId && overrideSel.modelId);
+  const hasReplyRoute = Boolean(
+    replyRoute?.provider_account_id && replyRoute?.model_id,
+  );
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <PageHeader title="Style" description="Teach the app your voice: a guide, a few examples of your own writing, and a bench to test drafts against it." />
+    <Page>
+      <PageHeader
+        title="Style"
+        description="Your voice, in a few rules and examples."
+      />
       <Tabs
         label="Style sections"
         active={tab}
@@ -430,61 +434,91 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
         tabs={[
           { id: "guide", label: "Voice and rules" },
           { id: "examples", label: `Examples (${examples.length})` },
-          { id: "bench", label: "Test bench" },
+          { id: "bench", label: "Try it" },
         ]}
       />
 
       {locked && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
-          <span>Acknowledge the rules of engagement before running live Style Test Bench or X imports.</span>
-          <button type="button" onClick={onReviewRules} className={primaryBtn}>
+        <Notice tone="info">
+          Acknowledge the rules to use live features.{" "}
+          <button type="button" onClick={onReviewRules} className="underline">
             Review rules
           </button>
-        </div>
+        </Notice>
       )}
-
-      {error && (
-        <div role="alert" className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-300">
-          {error}
-        </div>
-      )}
-      {notice && (
-        <div className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
-          {notice}
-        </div>
-      )}
+      {error && <Notice tone="error">{error}</Notice>}
+      {notice && <Notice tone="ok">{notice}</Notice>}
 
       {/* TAB 1: VOICE & RULES */}
       {tab === "guide" && (
-        <div className="space-y-4">
-          <section className={panel}>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <h2 className="font-medium">Style Guide</h2>
-                <span className="rounded bg-zinc-100 px-2 py-0.5 text-xs dark:bg-zinc-800">
-                  {guide && guide.version > 0 ? `v${guide.version} active` : "Unsaved starter"}
-                </span>
-              </div>
-              <button type="button" className={primaryBtn} disabled={savingGuide} onClick={() => void handleSaveGuide()}>
-                {savingGuide ? "Saving..." : "Save New Version"}
-              </button>
-            </div>
-
-            <label className="mt-3 block text-xs font-medium text-zinc-600 dark:text-zinc-400">
-              Voice prose
+        <div className="space-y-8">
+          <section className="space-y-5">
+            <label className="block">
+              <span className="eyebrow mb-1.5 block">Voice</span>
               <textarea
                 aria-label="Voice prose"
                 rows={5}
-                className={`${inputCls} mt-1 w-full`}
+                className={`${inputCls} w-full`}
                 value={prose}
                 onChange={(e) => setProse(e.target.value)}
-                placeholder="Describe your tone, perspective, pacing, and what good replies sound like."
+                placeholder="How you sound: tone, perspective, pacing."
               />
             </label>
 
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="">
+              <div className="eyebrow mb-1.5">Phrases to avoid</div>
+              <TagChips
+                items={bannedPatterns}
+                ariaLabel="Add banned phrase"
+                placeholder="e.g. game changer, delve, let's dive in"
+                onAdd={(v) =>
+                  setBannedPatterns((prev) =>
+                    prev.some((x) => x.toLowerCase() === v.toLowerCase())
+                      ? prev
+                      : [...prev, v],
+                  )
+                }
+                onRemove={(v) =>
+                  setBannedPatterns((prev) => prev.filter((x) => x !== v))
+                }
+              />
+            </div>
+
+            <div className="">
+              <div className="eyebrow mb-1.5">Rules</div>
+              <TagChips
+                items={learnedRules}
+                ariaLabel="Add style rule"
+                placeholder="e.g. Lead with one concrete number or trade-off"
+                onAdd={(v) =>
+                  setLearnedRules((prev) =>
+                    prev.some((x) => x.toLowerCase() === v.toLowerCase())
+                      ? prev
+                      : [...prev, v],
+                  )
+                }
+                onRemove={(v) =>
+                  setLearnedRules((prev) => prev.filter((x) => x !== v))
+                }
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className={primaryBtn}
+                disabled={savingGuide}
+                onClick={() => void handleSaveGuide()}
+              >
+                {savingGuide ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </section>
+
+          <Disclosure summary="Limits">
+            <div className="grid gap-3 sm:grid-cols-3">
               <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Max reply length (chars)
+                Max length
                 <input
                   type="number"
                   min={40}
@@ -501,7 +535,9 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                   aria-label="Emoji policy"
                   className={`${inputCls} mt-1 w-full`}
                   value={emojiPolicy}
-                  onChange={(e) => setEmojiPolicy(e.target.value as EmojiPolicy)}
+                  onChange={(e) =>
+                    setEmojiPolicy(e.target.value as EmojiPolicy)
+                  }
                 >
                   <option value="none">None (0 emojis)</option>
                   <option value="minimal">Minimal (max 1)</option>
@@ -514,7 +550,9 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                   aria-label="Hashtag policy"
                   className={`${inputCls} mt-1 w-full`}
                   value={hashtagPolicy}
-                  onChange={(e) => setHashtagPolicy(e.target.value as HashtagPolicy)}
+                  onChange={(e) =>
+                    setHashtagPolicy(e.target.value as HashtagPolicy)
+                  }
                 >
                   <option value="none">None (0 hashtags)</option>
                   <option value="max_1">Max 1 hashtag</option>
@@ -522,129 +560,111 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                 </select>
               </label>
             </div>
+          </Disclosure>
 
-            <div className="mt-4">
-              <div className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                Banned phrases &amp; anti-cliché patterns (enforced in prompts &amp; post-filter)
-              </div>
-              <TagChips
-                items={bannedPatterns}
-                ariaLabel="Add banned phrase"
-                placeholder="e.g. game changer, delve, let's dive in"
-                onAdd={(v) =>
-                  setBannedPatterns((prev) =>
-                    prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]
-                  )
-                }
-                onRemove={(v) => setBannedPatterns((prev) => prev.filter((x) => x !== v))}
-              />
-            </div>
-
-            <div className="mt-4">
-              <div className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">Explicit style rules</div>
-              <TagChips
-                items={learnedRules}
-                ariaLabel="Add style rule"
-                placeholder="e.g. Lead with one concrete number or trade-off"
-                onAdd={(v) =>
-                  setLearnedRules((prev) =>
-                    prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]
-                  )
-                }
-                onRemove={(v) => setLearnedRules((prev) => prev.filter((x) => x !== v))}
-              />
-            </div>
-
-            <div className="mt-4">
-              <input
-                aria-label="Version note"
-                className={`${inputCls} w-full`}
-                placeholder="Optional note for this version (e.g. 'Tightened max length to 200')"
-                value={versionNote}
-                onChange={(e) => setVersionNote(e.target.value)}
-              />
-            </div>
-          </section>
-
-          <section className={panel}>
-            <h3 className="font-medium">Version History</h3>
-            {versions.length === 0 ? (
-              <p className="mt-2 text-xs text-zinc-500">No saved versions yet. Save once to create v1.</p>
-            ) : (
-              <ul className="mt-2 space-y-2">
-                {versions.map((v) => (
-                  <li
-                    key={v.id}
-                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800"
-                  >
-                    <div>
-                      <span className="font-semibold">v{v.version}</span>{" "}
-                      {v.is_active && (
-                        <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-                          Active
-                        </span>
-                      )}
-                      {v.note && <span className="ml-2 text-zinc-600 dark:text-zinc-400">— {v.note}</span>}
-                      <div className="mt-0.5 text-zinc-500">
-                        Max {v.max_reply_chars} chars · {v.banned_patterns.length} banned pattern(s) · {v.created_at}
+          <Disclosure summary="Version history">
+            <input
+              aria-label="Version note"
+              className={`${inputCls} w-full`}
+              placeholder="Optional note for this version (e.g. 'Tightened max length to 200')"
+              value={versionNote}
+              onChange={(e) => setVersionNote(e.target.value)}
+            />
+            <section>
+              {versions.length === 0 ? (
+                <p className="mt-2 text-xs text-zinc-500">
+                  No saved versions yet. Save once to create v1.
+                </p>
+              ) : (
+                <ul className="mt-2 space-y-2">
+                  {versions.map((v) => (
+                    <li
+                      key={v.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800"
+                    >
+                      <div>
+                        <span className="font-semibold">v{v.version}</span>{" "}
+                        {v.is_active && (
+                          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                            Active
+                          </span>
+                        )}
+                        {v.note && (
+                          <span className="ml-2 text-zinc-600 dark:text-zinc-400">
+                            — {v.note}
+                          </span>
+                        )}
+                        <div className="mt-0.5 text-zinc-500">
+                          Max {v.max_reply_chars} chars ·{" "}
+                          {v.banned_patterns.length} banned pattern(s) ·{" "}
+                          {v.created_at}
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className={btn}
-                        aria-expanded={diffOpen === v.version}
-                        onClick={() => setDiffOpen(diffOpen === v.version ? null : v.version)}
-                      >
-                        {diffOpen === v.version ? "Hide changes" : "Show changes"}
-                      </button>
-                      {!v.is_active && (
-                        <button type="button" className={btn} onClick={() => void handleActivateVersion(v.version)}>
-                          Activate v{v.version}
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className={btn}
+                          aria-expanded={diffOpen === v.version}
+                          onClick={() =>
+                            setDiffOpen(
+                              diffOpen === v.version ? null : v.version,
+                            )
+                          }
+                        >
+                          {diffOpen === v.version
+                            ? "Hide changes"
+                            : "Show changes"}
                         </button>
-                      )}
-                    </div>
-                    {diffOpen === v.version && (
-                      <div className="w-full">
-                        <p className="mb-1 text-zinc-500">
-                          {previousVersion(versions, v.version) ? `Changes from v${previousVersion(versions, v.version)!.version} to v${v.version}` : `Everything in v${v.version} (first saved version)`}
-                        </p>
-                        <DiffView diff={styleVersionDiff(previousVersion(versions, v.version), v)} label={`Style guide v${v.version} changes`} />
+                        {!v.is_active && (
+                          <button
+                            type="button"
+                            className={btn}
+                            onClick={() =>
+                              void handleActivateVersion(v.version)
+                            }
+                          >
+                            Activate v{v.version}
+                          </button>
+                        )}
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+                      {diffOpen === v.version && (
+                        <div className="w-full">
+                          <p className="mb-1 text-zinc-500">
+                            {previousVersion(versions, v.version)
+                              ? `Changes from v${previousVersion(versions, v.version)!.version} to v${v.version}`
+                              : `Everything in v${v.version} (first saved version)`}
+                          </p>
+                          <DiffView
+                            diff={styleVersionDiff(
+                              previousVersion(versions, v.version),
+                              v,
+                            )}
+                            label={`Style guide v${v.version} changes`}
+                          />
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          </Disclosure>
         </div>
       )}
 
       {/* TAB 2: FEW-SHOT EXAMPLES */}
       {tab === "examples" && (
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                aria-label="Filter example kind"
-                className={inputCls}
-                value={kindFilter}
-                onChange={(e) => setKindFilter(e.target.value as ExampleKind | "all")}
-              >
-                <option value="all">All kinds</option>
-                <option value="reply">Replies</option>
-                <option value="ogc">Original posts (OGC)</option>
-              </select>
-              <input
-                aria-label="Search examples"
-                className={`${inputCls} w-64`}
-                placeholder="Search examples (FTS5)..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-            <button type="button" className={btn} onClick={() => setShowImport((v) => !v)}>
-              {showImport ? "Close Import" : "Import Examples"}
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+              Replies and posts that sound like you.
+            </p>
+            <button
+              type="button"
+              className={btnGhost}
+              onClick={() => setShowImport((v) => !v)}
+            >
+              {showImport ? "Close import" : "Import from X"}
             </button>
           </div>
 
@@ -687,7 +707,11 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                     value={pasteRaw}
                     onChange={(e) => setPasteRaw(e.target.value)}
                   />
-                  <button type="button" className={btn} onClick={() => void handleParsePaste()}>
+                  <button
+                    type="button"
+                    className={btn}
+                    onClick={() => void handleParsePaste()}
+                  >
                     Extract Candidates
                   </button>
                 </div>
@@ -713,7 +737,9 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
               {candidates.length > 0 && (
                 <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between text-xs">
-                    <span>{selectedIdx.size} of {candidates.length} selected</span>
+                    <span>
+                      {selectedIdx.size} of {candidates.length} selected
+                    </span>
                     <button
                       type="button"
                       className={primaryBtn}
@@ -725,7 +751,10 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                   </div>
                   <ul className="max-h-56 space-y-1.5 overflow-y-auto">
                     {candidates.map((c, idx) => (
-                      <li key={idx} className="flex items-start gap-2 rounded-lg border border-zinc-200 p-2 text-xs dark:border-zinc-800">
+                      <li
+                        key={idx}
+                        className="flex items-start gap-2 rounded-lg border border-zinc-200 p-2 text-xs dark:border-zinc-800"
+                      >
                         <input
                           type="checkbox"
                           checked={selectedIdx.has(idx)}
@@ -737,7 +766,11 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                           }}
                         />
                         <div className="min-w-0 flex-1">
-                          {c.author_handle && <span className="font-medium">@{c.author_handle}: </span>}
+                          {c.author_handle && (
+                            <span className="font-medium">
+                              @{c.author_handle}:{" "}
+                            </span>
+                          )}
                           <span>{c.example_text}</span>
                         </div>
                       </li>
@@ -748,65 +781,30 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
             </section>
           )}
 
-          <section className={panel}>
-            <h2 className="font-medium">Add Few-Shot Example</h2>
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-              <select
-                aria-label="New example kind"
-                className={inputCls}
-                value={exKind}
-                onChange={(e) => setExKind(e.target.value as ExampleKind)}
-              >
-                <option value="reply">Reply example</option>
-                <option value="ogc">Original post (OGC) example</option>
-              </select>
-              <input
-                className={inputCls}
-                placeholder="Tags (comma-separated, e.g. postgres, latency)"
-                value={exTags}
-                onChange={(e) => setExTags(e.target.value)}
-              />
-            </div>
-            {exKind === "reply" && (
-              <input
-                className={`${inputCls} mt-2 w-full`}
-                placeholder="Optional: target post you were replying to"
-                value={exContext}
-                onChange={(e) => setExContext(e.target.value)}
-              />
-            )}
+          <section className="space-y-3" aria-label="Add example">
             <textarea
               rows={3}
-              className={`${inputCls} mt-2 w-full`}
-              placeholder="Your reply or post text..."
+              aria-label="Example text"
+              className={`${inputCls} w-full`}
+              placeholder="Paste a reply or post you are proud of"
               value={exText}
               onChange={(e) => setExText(e.target.value)}
             />
-            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <input
-                className={`${inputCls} flex-1`}
-                placeholder="Optional: why this works (helps FTS5 & prompt)"
-                value={exWhy}
-                onChange={(e) => setExWhy(e.target.value)}
-              />
-              <label className="flex items-center gap-1.5 text-xs">
-                <input type="checkbox" checked={exPinned} onChange={(e) => setExPinned(e.target.checked)} />
-                Pin in every prompt
-              </label>
+            <div className="flex items-center justify-end gap-2">
               <button
                 type="button"
                 className={primaryBtn}
                 disabled={savingExample || !exText.trim()}
                 onClick={() => void handleSaveExample()}
               >
-                Save Example
+                Save example
               </button>
             </div>
           </section>
 
           <section className="space-y-2">
             {examples.length === 0 ? (
-              <p className="text-sm text-zinc-500">No saved examples match your filter yet.</p>
+              <p className="text-sm text-zinc-500">No examples yet.</p>
             ) : (
               examples.map((ex) => (
                 <div key={ex.id} className={panel}>
@@ -821,7 +819,10 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                         </span>
                       )}
                       {ex.tags.map((t) => (
-                        <span key={t} className="rounded border border-zinc-200 px-1.5 py-0.5 dark:border-zinc-700">
+                        <span
+                          key={t}
+                          className="rounded border border-zinc-200 px-1.5 py-0.5 dark:border-zinc-700"
+                        >
                           {t}
                         </span>
                       ))}
@@ -860,10 +861,16 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
                     </div>
                   </div>
                   {ex.source_context_text && (
-                    <p className="mt-2 text-xs text-zinc-500">Context: {ex.source_context_text}</p>
+                    <p className="mt-2 text-xs text-zinc-500">
+                      Context: {ex.source_context_text}
+                    </p>
                   )}
                   <p className="mt-1 text-sm">{ex.example_text}</p>
-                  {ex.why_it_works && <p className="mt-1 text-xs text-zinc-500">Why: {ex.why_it_works}</p>}
+                  {ex.why_it_works && (
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Why: {ex.why_it_works}
+                    </p>
+                  )}
                 </div>
               ))
             )}
@@ -874,7 +881,7 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
       {/* TAB 3: STYLE TEST BENCH */}
       {tab === "bench" && (
         <div className="space-y-4">
-          {!hasReplyRoute && !hasOverride && (
+          {!hasReplyRoute && (
             <UnsetRouteGuard
               taskType="reply_drafting"
               providers={providers}
@@ -884,106 +891,86 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
             />
           )}
 
-          <section className={panel}>
-            <h2 className="font-medium">Test Input</h2>
-            <div className="mt-3 space-y-3">
-              <div className="flex flex-wrap gap-2">
-                <input
-                  aria-label="Sample author handle"
-                  className={`${inputCls} w-44`}
-                  placeholder="@author"
-                  value={sampleAuthor}
-                  onChange={(e) => setSampleAuthor(e.target.value)}
-                />
-                <input
-                  aria-label="Sample post text"
-                  className={`${inputCls} flex-1`}
-                  placeholder="Paste a sample X post to test reply voice..."
-                  value={samplePost}
-                  onChange={(e) => setSamplePost(e.target.value)}
-                />
-              </div>
-
-              <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-                <div>
-                  <div className="mb-1 text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                    Model override for this run (default: {replyRoute?.model_id ?? "Unset"})
-                  </div>
-                  <ModelPicker
-                    providers={providers}
-                    value={overrideSel}
-                    onChange={setOverrideSel}
-                    compact
-                    unsetLabel={replyRoute?.model_id ? `Default (${replyRoute.model_id})` : "Use default route"}
-                    ariaLabel="Test bench model override"
-                    onProvidersUpdated={loadAll}
-                  />
-                </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-400">
-                    <input
-                      type="checkbox"
-                      checked={enableCompare}
-                      onChange={(e) => setEnableCompare(e.target.checked)}
-                    />
-                    Compare side-by-side with 2nd model
-                  </label>
-                  {enableCompare && (
-                    <ModelPicker
-                      providers={providers}
-                      value={compareSel}
-                      onChange={setCompareSel}
-                      compact
-                      unsetLabel="Select 2nd model..."
-                      ariaLabel="Comparison model"
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  className={primaryBtn}
-                  disabled={runningBench || offline || locked || (!hasReplyRoute && !hasOverride)}
-                  onClick={() => void handleRunBench()}
-                >
-                  {runningBench ? "Generating..." : "Run Style Test Bench"}
-                </button>
-                {offline && <span className="text-xs text-amber-600 dark:text-amber-400">Disabled while offline</span>}
-              </div>
+          <section className="space-y-3" aria-label="Try your voice">
+            <textarea
+              aria-label="Sample post text"
+              rows={3}
+              className={`${inputCls} w-full`}
+              placeholder="Paste a post to see how you would reply"
+              value={samplePost}
+              onChange={(e) => setSamplePost(e.target.value)}
+            />
+            <div className="flex items-center justify-end gap-3">
+              {offline && (
+                <span className="text-xs text-zinc-500">Offline</span>
+              )}
+              <button
+                type="button"
+                className={primaryBtn}
+                disabled={
+                  runningBench ||
+                  offline ||
+                  locked ||
+                  !hasReplyRoute ||
+                  !samplePost.trim()
+                }
+                onClick={() => void handleRunBench()}
+              >
+                {runningBench ? "Writing..." : "Try it"}
+              </button>
             </div>
           </section>
 
           {benchResult && (
             <div className="space-y-4">
-              <div className={benchResult.comparison ? "grid gap-4 md:grid-cols-2" : "space-y-4"}>
+              <div
+                className={
+                  benchResult.comparison
+                    ? "grid gap-4 md:grid-cols-2"
+                    : "space-y-4"
+                }
+              >
                 <ModelRunColumn title="Primary" run={benchResult.primary} />
-                {benchResult.comparison && <ModelRunColumn title="Comparison" run={benchResult.comparison} />}
+                {benchResult.comparison && (
+                  <ModelRunColumn
+                    title="Comparison"
+                    run={benchResult.comparison}
+                  />
+                )}
               </div>
 
               <details className={panel}>
                 <summary className="cursor-pointer text-sm font-medium">
-                  Prompt &amp; Retrieval Inspector (Style v{benchResult.style_guide_version} · Prompt v
-                  {benchResult.prompt_version} · {benchResult.retrieved_examples.length} examples injected)
+                  Prompt &amp; Retrieval Inspector (Style v
+                  {benchResult.style_guide_version} · Prompt v
+                  {benchResult.prompt_version} ·{" "}
+                  {benchResult.retrieved_examples.length} examples injected)
                 </summary>
                 <div className="mt-3 space-y-3 text-xs">
                   <div>
-                    <div className="font-medium text-zinc-500">Retrieved Few-Shot Examples</div>
+                    <div className="font-medium text-zinc-500">
+                      Retrieved Few-Shot Examples
+                    </div>
                     {benchResult.retrieved_examples.length === 0 ? (
                       <p className="text-zinc-500">None saved yet.</p>
                     ) : (
                       <ul className="mt-1 space-y-1">
                         {benchResult.retrieved_examples.map((item) => (
-                          <li key={item.example.id} className="rounded border border-zinc-200 p-2 dark:border-zinc-800">
-                            <span className="font-medium">{item.reason}:</span> {item.example.example_text}
+                          <li
+                            key={item.example.id}
+                            className="rounded border border-zinc-200 p-2 dark:border-zinc-800"
+                          >
+                            <span className="font-medium">{item.reason}:</span>{" "}
+                            {item.example.example_text}
                           </li>
                         ))}
                       </ul>
                     )}
                   </div>
                   <div>
-                    <div className="font-medium text-zinc-500">Rendered User Prompt</div>
+                    <div className="font-medium text-zinc-500">
+                      Rendered User Prompt
+                    </div>
                     <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-zinc-100 p-3 font-mono text-[11px] dark:bg-zinc-900">
                       {benchResult.rendered_user_prompt}
                     </pre>
@@ -994,6 +981,6 @@ export function StylePage({ locked, offline, onReviewRules, onOpenSettings }: Pr
           )}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

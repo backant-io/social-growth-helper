@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { btn, btnGhost, btnPrimary } from "../components/ui";
 import { api } from "../lib/api";
 import { useOnlineStatus } from "../lib/errors";
 import type { BrowserInfo, ProviderAccountView, StyleGuide, TaskModelRoute } from "../lib/types";
-import { BrowserPanel, ProvidersPanel, RoutingPanel } from "../pages/SettingsPage";
-import { browserHint, providerHint, routingHint, SETUP_STEP_COPY, type SetupHint } from "./tourSteps";
+import { BrowserPanel } from "../pages/SettingsPage";
+import { ModelsPanel } from "../pages/ModelsPanel";
+import { browserHint, providerHint, SETUP_STEP_COPY, type SetupHint } from "./tourSteps";
 
 type SetupKind = keyof typeof SETUP_STEP_COPY;
 
@@ -30,10 +32,10 @@ function Frame({ kind, hint, onBack, onNext, finish, children }: { kind: SetupKi
         {children}
       </div>
       <div className="mt-4 flex justify-between border-t border-zinc-200 pt-4 dark:border-zinc-800">
-        <button type="button" onClick={onBack} className="rounded-lg px-4 py-2 text-sm text-zinc-600 dark:text-zinc-400">
+        <button type="button" onClick={onBack} className={btnGhost}>
           Back
         </button>
-        <button type="button" onClick={onNext} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
+        <button type="button" onClick={onNext} className={btnPrimary}>
           {finish ? "Finish setup" : hint?.done ? "Next" : "Skip for now"}
         </button>
       </div>
@@ -84,7 +86,7 @@ function StyleGuideForm({ onSaved }: { onSaved: (g: StyleGuide) => void }) {
         <textarea
           aria-label="Style guide"
           rows={6}
-          className="mt-1 w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className="mt-1 w-full rounded-lg border border-zinc-300 bg-transparent px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           value={prose}
           onChange={(e) => setProse(e.target.value)}
         />
@@ -94,7 +96,7 @@ function StyleGuideForm({ onSaved }: { onSaved: (g: StyleGuide) => void }) {
         type="button"
         onClick={save}
         disabled={busy || !guide || !prose.trim()}
-        className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
+        className={btn}
       >
         Save style guide
       </button>
@@ -116,7 +118,7 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
   }, []);
 
   useEffect(() => {
-    if (kind === "providers" || kind === "routing") void loadLlm();
+    if (kind === "providers") void loadLlm();
     if (kind !== "browser") return;
     const poll = () => void api.browserInfo().then(setInfo);
     poll();
@@ -134,7 +136,7 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
   if (kind === "providers") {
     return (
       <Frame kind={kind} hint={providerHint(providers)} onBack={onBack} onNext={onNext} finish={finish}>
-        <ProvidersPanel providers={providers} offline={offline} onChanged={loadLlm} />
+        <ModelsPanel compact providers={providers} routes={routes} offline={offline} onChanged={loadLlm} />
       </Frame>
     );
   }
@@ -146,9 +148,5 @@ export function SetupStep({ kind, rulesAcknowledged, onBack, onNext, finish }: P
       </Frame>
     );
   }
-  return (
-    <Frame kind={kind} hint={routingHint(routes)} onBack={onBack} onNext={onNext} finish={finish}>
-      <RoutingPanel providers={providers} routes={routes} onChanged={loadLlm} />
-    </Frame>
-  );
+  return null;
 }

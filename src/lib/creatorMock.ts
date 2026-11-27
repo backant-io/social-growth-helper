@@ -114,13 +114,13 @@ export function createMockCreator(): CreatorApi {
       candidates = candidates.map((c) => (c.id === cid ? { ...c, status: "dismissed" } : c));
     },
     extract: async () => {
-      throw new Error('No model is chosen for "format_extraction". Pick one in Settings > Model routing once the model router is connected; until then you can still build and edit formats by hand.');
+      throw new Error('No model is chosen for "format_extraction". Pick one in Settings > AI models once the model router is connected; until then you can still build and edit formats by hand.');
     },
     extractPending: async () => ({
       created: 0,
       merged: 0,
       failed: 0,
-      stopped_reason: 'No model is chosen for "format_extraction". Pick one in Settings > Model routing once the model router is connected; until then you can still build and edit formats by hand.',
+      stopped_reason: 'No model is chosen for "format_extraction". Pick one in Settings > AI models once the model router is connected; until then you can still build and edit formats by hand.',
     }),
     addPost: async (post) => {
       const m = post.url.match(/(?:x|twitter)\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/);

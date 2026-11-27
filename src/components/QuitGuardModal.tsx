@@ -7,7 +7,7 @@ interface Props {
 export function QuitGuardModal({ jobs, onCancel, onQuit }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6" role="alertdialog" aria-modal="true" aria-label="Quit while work is running">
-      <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-6 shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
+      <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-[var(--bg)] p-6 shadow-xl dark:border-zinc-800">
         <h2 className="mb-2 text-lg font-semibold">Work is still running</h2>
         <p className="mb-3 text-sm text-zinc-600 dark:text-zinc-400">
           Quitting stops these jobs at the next safe point and closes the X window.

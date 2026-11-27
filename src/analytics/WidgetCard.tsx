@@ -142,12 +142,12 @@ export function WidgetCard({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} flex flex-col rounded-xl border bg-white dark:bg-zinc-900/80 p-4 shadow-sm transition-all ${
+      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} group flex flex-col rounded-lg border bg-transparent p-5 transition-all ${
         isDropTarget
           ? "border-sky-500 ring-2 ring-sky-500/50"
           : customizeMode
             ? "border-zinc-200 dark:border-zinc-800 ring-1 ring-sky-500/35 cursor-grab active:cursor-grabbing"
-            : "border-zinc-200 dark:border-zinc-800"
+            : "border-transparent border-t-zinc-200 dark:border-t-zinc-800 rounded-none px-0"
       } ${isDragging ? "opacity-45" : ""}`}
     >
       <header className="mb-3 flex items-start justify-between gap-2">
@@ -162,7 +162,7 @@ export function WidgetCard({
             </span>
           )}
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+            <h3 className="eyebrow leading-snug">
               {widget.title}
             </h3>
             {!isKpi && widget.spec.options.subtitle && (
@@ -226,7 +226,7 @@ export function WidgetCard({
               </button>
             </>
           ) : (
-            <>
+            <div className="flex items-center gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
               <button
                 type="button"
                 onClick={onReprompt}
@@ -243,7 +243,7 @@ export function WidgetCard({
               >
                 CSV
               </button>
-            </>
+            </div>
           )}
         </div>
       </header>
@@ -258,18 +258,6 @@ export function WidgetCard({
           <WidgetChartRenderer spec={widget.spec} data={data} />
         ) : null}
       </div>
-
-      {!isKpi && data && (
-        <footer className="mt-3 flex items-center justify-between border-t border-zinc-100 dark:border-zinc-800/70 pt-2 text-[10px] text-zinc-400">
-          <span>
-            {widget.spec.chart_type} · {widget.spec.view.replace("v_analytics_", "")}
-          </span>
-          <span>
-            {data.row_count} {data.row_count === 1 ? "row" : "rows"}
-            {data.truncated ? " (capped)" : ""}
-          </span>
-        </footer>
-      )}
 
       {customizeMode && (
         <button

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PageHeader, Tabs, useKillSwitch } from "../../components/ui";
+import { Page, PageHeader, Tabs } from "../../components/ui";
 import { api } from "../../lib/api";
 import { FormatsPanel } from "./FormatsPanel";
 import { SourcesPanel } from "./SourcesPanel";
@@ -10,13 +10,12 @@ type Tab = "write" | "formats" | "sources";
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: "write", label: "Write" },
   { id: "formats", label: "Formats" },
-  { id: "sources", label: "Sources and settings" },
+  { id: "sources", label: "Sources" },
 ];
 
 export function CreatorPage({ locked, onGoToSettings }: { locked: boolean; onGoToSettings?: () => void }) {
   const [tab, setTab] = useState<Tab>("write");
   const [xRunning, setXRunning] = useState(false);
-  const paused = useKillSwitch();
 
   useEffect(() => {
     let alive = true;
@@ -30,14 +29,14 @@ export function CreatorPage({ locked, onGoToSettings }: { locked: boolean; onGoT
   }, []);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader title="Creator" description="Turn a rough thought into an original post, using formats that have worked for others. You approve every post before it goes to X." />
+    <Page>
+      <PageHeader title="Creator" description="Turn a thought into a post." />
       <Tabs label="Creator sections" idPrefix="creator" tabs={TABS} active={tab} onChange={setTab} />
       <div role="tabpanel" id={`creator-panel-${tab}`} aria-labelledby={`creator-tab-${tab}`}>
-        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} paused={paused} onGoToSettings={onGoToSettings} />}
+        {tab === "write" && <WritePanel locked={locked} xRunning={xRunning} onGoToSettings={onGoToSettings} />}
         {tab === "formats" && <FormatsPanel />}
-        {tab === "sources" && <SourcesPanel locked={locked} xRunning={xRunning} paused={paused} />}
+        {tab === "sources" && <SourcesPanel locked={locked} xRunning={xRunning} />}
       </div>
-    </div>
+    </Page>
   );
 }

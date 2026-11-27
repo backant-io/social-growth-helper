@@ -1,4 +1,12 @@
 import { useState } from "react";
+import {
+  btn,
+  btnGhost,
+  btnPrimary,
+  input,
+  PageHeader,
+  Segmented,
+} from "../components/ui";
 import type { DashboardLayout } from "./types";
 
 interface LayoutControlsProps {
@@ -45,46 +53,56 @@ export function LayoutControls({
   }
 
   function promptDuplicate() {
-    const next = window.prompt("Name for duplicated layout:", `${activeLayout.name} Copy`);
+    const next = window.prompt(
+      "Name for duplicated layout:",
+      `${activeLayout.name} Copy`,
+    );
     if (next && next.trim()) onDuplicateLayout(next.trim());
     setMenuOpen(false);
   }
 
+  const item =
+    "block w-full px-3 py-1.5 text-left hover:bg-zinc-100 dark:hover:bg-zinc-900";
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Analytics</h1>
-        <p className="mt-1 max-w-2xl text-sm text-zinc-600 dark:text-zinc-400">
-          How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {/* Time window selector */}
-        <div className="inline-flex rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 p-0.5 text-xs">
-          {[7, 30, 90].map((d) => (
+    <div className="space-y-4">
+      <PageHeader
+        title="Analytics"
+        description="How your posts and replies are doing."
+        actions={
+          <>
+            <Segmented
+              label="Time window"
+              value={windowDays}
+              options={[7, 30].map((d) => ({ value: d, label: `${d}d` }))}
+              onChange={onWindowChange}
+            />
             <button
-              key={d}
               type="button"
-              onClick={() => onWindowChange(d)}
-              className={`rounded-md px-2.5 py-1 font-medium transition-colors ${
-                windowDays === d
-                  ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-xs"
-                  : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-              }`}
+              onClick={onToggleCustomize}
+              aria-pressed={customizeMode}
+              className={customizeMode ? btn : btnGhost}
             >
-              {d}d
+              {customizeMode ? "Done" : "Customize"}
             </button>
-          ))}
-        </div>
+            <button
+              type="button"
+              disabled={syncing}
+              onClick={() => onSyncStats(undefined)}
+              className={btnPrimary}
+            >
+              {syncing ? "Syncing..." : "Sync stats"}
+            </button>
+          </>
+        }
+      />
 
-        {/* Layout & version switcher */}
-        <div className="relative flex items-center gap-1">
+      {customizeMode && (
+        <div className="flex flex-wrap items-center gap-2 border-y border-zinc-200 py-2 dark:border-zinc-800">
           <select
             aria-label="Dashboard layout version"
             value={activeLayout.id}
             onChange={(e) => onSwitchLayout(e.target.value)}
-            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-800 dark:text-zinc-200"
+            className={`${input} py-1 text-xs`}
           >
             {layouts.map((l) => (
               <option key={l.id} value={l.id}>
@@ -92,106 +110,79 @@ export function LayoutControls({
               </option>
             ))}
           </select>
-
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-          >
-            Layouts ▾
+          <button type="button" onClick={onOpenBuilder} className={btnGhost}>
+            Add widget
           </button>
-
-          {menuOpen && (
-            <div className="absolute right-0 top-9 z-30 w-48 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 py-1 text-xs shadow-lg">
-              <button
-                type="button"
-                onClick={() => {
-                  onSaveVersion();
-                  setMenuOpen(false);
-                }}
-                className="block w-full px-3 py-1.5 text-left text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Save New Version (v{activeLayout.version + 1})
-              </button>
-              <button
-                type="button"
-                onClick={promptRename}
-                className="block w-full px-3 py-1.5 text-left text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Rename Layout…
-              </button>
-              <button
-                type="button"
-                onClick={promptDuplicate}
-                className="block w-full px-3 py-1.5 text-left text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Duplicate Layout…
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  onResetStarter();
-                  setMenuOpen(false);
-                }}
-                className="block w-full px-3 py-1.5 text-left text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                Reset to Starter Layout
-              </button>
-              {layouts.length > 1 && (
+          <div className="relative ml-auto">
+            <button
+              type="button"
+              aria-expanded={menuOpen}
+              onClick={() => setMenuOpen((v) => !v)}
+              className={btnGhost}
+            >
+              More
+            </button>
+            {menuOpen && (
+              <div className="absolute right-0 top-9 z-30 w-52 overflow-hidden rounded-lg border border-zinc-200 bg-[var(--bg)] py-1 text-xs shadow-xl dark:border-zinc-800">
                 <button
                   type="button"
+                  className={item}
                   onClick={() => {
-                    onDeleteLayout();
+                    onSaveVersion();
                     setMenuOpen(false);
                   }}
-                  className="block w-full border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5 text-left text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950"
                 >
-                  Delete This Layout
+                  Save new version (v{activeLayout.version + 1})
                 </button>
-              )}
-            </div>
-          )}
+                <button type="button" className={item} onClick={promptRename}>
+                  Rename layout
+                </button>
+                <button
+                  type="button"
+                  className={item}
+                  onClick={promptDuplicate}
+                >
+                  Duplicate layout
+                </button>
+                <button
+                  type="button"
+                  className={item}
+                  onClick={() => {
+                    onResetStarter();
+                    setMenuOpen(false);
+                  }}
+                >
+                  Reset to starter layout
+                </button>
+                <button
+                  type="button"
+                  disabled={syncing}
+                  className={item}
+                  title="Backfill the last 30 days of profile posts (flags external posts)"
+                  onClick={() => {
+                    onSyncStats(30);
+                    setMenuOpen(false);
+                  }}
+                >
+                  Backfill 30 days
+                </button>
+                {layouts.length > 1 && (
+                  <button
+                    type="button"
+                    className={`${item} border-t border-zinc-200 text-red-600 dark:border-zinc-800 dark:text-red-400`}
+                    onClick={() => {
+                      onDeleteLayout();
+                      setMenuOpen(false);
+                    }}
+                  >
+                    Delete this layout
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
-
-        <button
-          type="button"
-          onClick={onToggleCustomize}
-          className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-            customizeMode
-              ? "border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300"
-              : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-          }`}
-        >
-          {customizeMode ? "Done Editing" : "Customize"}
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenBuilder}
-          className="rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/60 px-3 py-1.5 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-100 dark:hover:bg-sky-950"
-        >
-          + Reprompt Widget
-        </button>
-
-        <button
-          type="button"
-          disabled={syncing}
-          onClick={() => onSyncStats(undefined)}
-          className="rounded-lg bg-zinc-900 dark:bg-zinc-100 px-3.5 py-1.5 text-xs font-medium text-white dark:text-zinc-900 hover:opacity-90 disabled:opacity-50"
-        >
-          {syncing ? "Syncing…" : "Sync Stats"}
-        </button>
-
-        <button
-          type="button"
-          disabled={syncing}
-          onClick={() => onSyncStats(30)}
-          title="Backfill last 30 days of profile posts (flags external posts)"
-          className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-2.5 py-1.5 text-xs text-zinc-600 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800 disabled:opacity-50"
-        >
-          Backfill 30d
-        </button>
-      </div>
+      )}
     </div>
   );
 }

@@ -1,8 +1,10 @@
 import { useState } from "react";
+import { recommendedModel } from "../lib/modelDefaults";
 import type { ProviderAccountView, TaskModelRoute, TaskType } from "../lib/types";
 import { TASK_METAS } from "../lib/types";
 import { ModelPicker, type ModelSelection } from "./ModelPicker";
 import { saveRouteSelection } from "./modelRoute";
+import { btn, btnPrimary, muted } from "./ui";
 
 interface Props {
   taskType: TaskType;
@@ -12,25 +14,21 @@ interface Props {
   onGoToSettings?: () => void;
 }
 
-/**
- * Explicit unset-route guard (LLM-21). Never silently substitutes a model; instead asks
- * the user to pick a provider + model inline or in Settings.
- */
+/** Shown while a task has no model. One click applies the recommended model; never substitutes silently. */
 export function UnsetRouteGuard({ taskType, providers, route, onAssigned, onGoToSettings }: Props) {
   const meta = TASK_METAS.find((t) => t.id === taskType)!;
-  const [selection, setSelection] = useState<ModelSelection>({
-    providerAccountId: route?.provider_account_id ?? null,
-    modelId: route?.model_id ?? null,
-  });
+  const [picking, setPicking] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rec = recommendedModel(taskType, providers);
+  const connected = providers.filter((p) => p.status === "connected");
 
-  const saveDefault = async () => {
-    if (!selection.providerAccountId || !selection.modelId) return;
+  const assign = async (sel: ModelSelection) => {
+    if (!sel.providerAccountId || !sel.modelId) return;
     setSaving(true);
     setError(null);
     try {
-      await saveRouteSelection(taskType, route, selection);
+      await saveRouteSelection(taskType, route, sel);
       await onAssigned();
     } catch (e) {
       setError((e as Error).message);
@@ -40,54 +38,33 @@ export function UnsetRouteGuard({ taskType, providers, route, onAssigned, onGoTo
   };
 
   return (
-    <div
-      role="region"
-      aria-label={`Model required for ${meta.label}`}
-      className="rounded-xl border border-amber-300 bg-amber-50/70 p-4 text-sm dark:border-amber-800 dark:bg-amber-950/30"
-    >
-      <div className="font-medium text-amber-900 dark:text-amber-200">
-        No model is assigned for {meta.label}
+    <div role="region" aria-label={`Model required for ${meta.label}`} className="border-l-2 border-zinc-950 py-1 pl-4 text-sm dark:border-zinc-100">
+      <div className="font-medium">{meta.label} needs an AI model</div>
+      <p className={`mt-0.5 text-xs ${muted}`}>{meta.description}</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {connected.length === 0 ? (
+          onGoToSettings && (
+            <button type="button" className={btnPrimary} onClick={onGoToSettings}>
+              Connect an AI
+            </button>
+          )
+        ) : (
+          <>
+            {rec && (
+              <button type="button" className={btnPrimary} disabled={saving} onClick={() => void assign({ providerAccountId: rec.account.id, modelId: rec.model.id })}>
+                {saving ? "Saving..." : `Use ${rec.model.display_name}`}
+              </button>
+            )}
+            <button type="button" className={btn} onClick={() => setPicking(!picking)}>
+              {picking ? "Cancel" : "Choose another"}
+            </button>
+          </>
+        )}
+        {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
       </div>
-      <p className="mt-1 text-xs text-amber-800 dark:text-amber-300">
-        {meta.description} No silent fallback is used—choose a model below to enable this feature.
-      </p>
-
-      {providers.length === 0 ? (
-        <div className="mt-3 flex items-center gap-3">
-          <span className="text-xs text-zinc-600 dark:text-zinc-400">
-            Connect at least one AI provider in Settings first.
-          </span>
-          {onGoToSettings && (
-            <button
-              type="button"
-              onClick={onGoToSettings}
-              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white dark:bg-zinc-100 dark:text-zinc-900"
-            >
-              Open Settings
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="mt-3 space-y-2">
-          <ModelPicker
-            providers={providers}
-            value={selection}
-            onChange={setSelection}
-            requireVision={meta.requiresVision}
-            ariaLabel={`Choose model for ${meta.label}`}
-            onProvidersUpdated={onAssigned}
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              disabled={saving || !selection.providerAccountId || !selection.modelId}
-              onClick={() => void saveDefault()}
-              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
-            >
-              {saving ? "Saving..." : `Use for ${meta.label}`}
-            </button>
-            {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-          </div>
+      {picking && connected.length > 0 && (
+        <div className="mt-3">
+          <ModelPicker providers={connected} value={{ providerAccountId: null, modelId: null }} requireVision={meta.requiresVision} compact ariaLabel={`Choose model for ${meta.label}`} onProvidersUpdated={onAssigned} onChange={(sel) => void assign(sel)} />
         </div>
       )}
     </div>

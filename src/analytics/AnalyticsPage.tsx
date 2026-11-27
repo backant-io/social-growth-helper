@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Notice, PageHeader } from "../components/ui";
+import { btn, btnPrimary, EmptyBlock, Notice, Page, PageHeader } from "../components/ui";
 import { analyticsApi } from "./api";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
@@ -8,17 +8,14 @@ import { SyncHealthBanner } from "./SyncHealthBanner";
 import type { DashboardSnapshot, DashboardWidget, WidgetPositionUpdate, WidgetSpec } from "./types";
 import { WidgetCard } from "./WidgetCard";
 
-const AUTO_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 
 export function AnalyticsPage() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [windowDays, setWindowDays] = useState<number>(30);
   const [customizeMode, setCustomizeMode] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [autoCheckEnabled, setAutoCheckEnabled] = useState(false);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dragOverWidgetId, setDragOverWidgetId] = useState<string | null>(null);
-  const [lastSyncNote, setLastSyncNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [builderTarget, setBuilderTarget] = useState<{ open: boolean; widget: DashboardWidget | null }>({
     open: false,
@@ -43,14 +40,8 @@ export function AnalyticsPage() {
     async (backfillDays?: number) => {
       setSyncing(true);
       setError(null);
-      setLastSyncNote(null);
       try {
-        const report = await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
-        setLastSyncNote(
-          `Synced in ${report.duration_ms}ms${report.used_dedicated_tab ? " (dedicated tab)" : ""}${
-            report.health.backfill_posts_added > 0 ? ` · +${report.health.backfill_posts_added} backfilled` : ""
-          }`,
-        );
+        await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
         await loadDashboard(windowDays);
       } catch (e) {
         setError((e as Error).message);
@@ -61,16 +52,6 @@ export function AnalyticsPage() {
     [loadDashboard, windowDays],
   );
 
-  // Foreground-only opt-in checkpoint polling (ANL-05); strictly off by default and cleared on unmount (SEC-04).
-  useEffect(() => {
-    if (!autoCheckEnabled) return;
-    const id = window.setInterval(() => {
-      if (!syncing && snapshot && (snapshot.schedule.posts_due_now > 0 || snapshot.schedule.missed_windows > 0)) {
-        void handleSync(undefined);
-      }
-    }, AUTO_CHECK_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [autoCheckEnabled, syncing, snapshot, handleSync]);
 
   async function handleAcceptWidget(spec: WidgetSpec, sourcePrompt: string) {
     if (!snapshot) return;
@@ -169,12 +150,12 @@ export function AnalyticsPage() {
 
   if (!snapshot) {
     return (
-      <div className="mx-auto max-w-7xl space-y-6">
-        <PageHeader title="Analytics" description="How your posts and replies are doing. Numbers are read from your X window when you sync, and stay on this computer." />
+      <Page wide>
+        <PageHeader title="Analytics" />
         {error ? (
           <Notice tone="error">{error}</Notice>
         ) : (
-          <div className="grid grid-cols-12 gap-4">
+          <div className="grid grid-cols-12 gap-5">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div
                 key={i}
@@ -183,12 +164,12 @@ export function AnalyticsPage() {
             ))}
           </div>
         )}
-      </div>
+      </Page>
     );
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <Page wide>
       <LayoutControls
         activeLayout={snapshot.active_layout}
         layouts={snapshot.layouts}
@@ -218,45 +199,34 @@ export function AnalyticsPage() {
       <SyncHealthBanner
         health={snapshot.last_health}
         schedule={snapshot.schedule}
-        lastSyncNote={lastSyncNote}
         syncing={syncing}
-        autoCheckEnabled={autoCheckEnabled}
-        onToggleAutoCheck={setAutoCheckEnabled}
         onSyncDue={() => void handleSync(undefined)}
       />
 
       {customizeMode && (
-        <Notice tone="info">
-          Customize mode: drag cards to reorder, drag the bottom-right corner (or pick width and height) to resize, or remove widgets. Changes save immediately.
-        </Notice>
+        <Notice tone="info">Drag cards to reorder or resize. Changes save as you go.</Notice>
       )}
 
       {error && <Notice tone="error">{error}</Notice>}
 
       {snapshot.widgets.length === 0 ? (
-        <div className="space-y-3 rounded-xl border border-dashed border-zinc-300 p-6 text-center dark:border-zinc-700">
-          <div className="text-sm font-medium text-zinc-700 dark:text-zinc-200">
-            This layout has no widgets yet.
-          </div>
-          <div className="flex justify-center gap-2">
-            <button
-              type="button"
-              onClick={() => setBuilderTarget({ open: true, widget: null })}
-              className="rounded-lg bg-sky-600 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-sky-700"
-            >
-              + Reprompt Widget
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
-              className="rounded-lg border border-zinc-300 dark:border-zinc-700 px-3.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-200"
-            >
-              Restore Starter Layout
-            </button>
-          </div>
-        </div>
+        <EmptyBlock
+          title="No widgets yet"
+          action={
+            <>
+              <button type="button" onClick={() => setBuilderTarget({ open: true, widget: null })} className={btnPrimary}>
+                Add a widget
+              </button>
+              <button type="button" onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())} className={btn}>
+                Restore starter layout
+              </button>
+            </>
+          }
+        >
+          Add a widget to see your numbers here.
+        </EmptyBlock>
       ) : (
-        <div className="grid grid-cols-12 gap-4">
+        <div className="grid grid-cols-12 gap-5">
           {snapshot.widgets.map((item, idx) => (
             <WidgetCard
               key={item.widget.id}
@@ -292,6 +262,6 @@ export function AnalyticsPage() {
           onClose={() => setBuilderTarget({ open: false, widget: null })}
         />
       )}
-    </div>
+    </Page>
   );
 }

@@ -10,7 +10,8 @@ interface Props {
 export function EmptyState({ section, locked, onReviewRules }: Props) {
   return (
     <div className="mx-auto flex h-full max-w-md flex-col items-center justify-center text-center">
-      <h1 className="mb-2 text-xl font-semibold tracking-tight">{section.title}</h1>
+      <span className="eyebrow mb-3">{locked ? "Locked" : "Nothing here yet"}</span>
+      <h1 className="mb-2 font-display text-[1.75rem] font-semibold tracking-tight">{section.title}</h1>
       {locked ? (
         <>
           <p className="mb-4 text-sm text-zinc-600 dark:text-zinc-400">

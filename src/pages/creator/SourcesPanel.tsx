@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { creatorApi } from "../../lib/creatorApi";
 import type { CreatorSettings, ViralThresholds, WatchEntry } from "../../lib/types";
-import { EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
+import { Disclosure, EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
 import { btn, field, muted, panel, primary } from "./ui";
 
 interface Props {
   locked: boolean;
   xRunning: boolean;
-  paused: boolean;
 }
 
-export function SourcesPanel({ locked, xRunning, paused }: Props) {
+export function SourcesPanel({ locked, xRunning }: Props) {
   const api = creatorApi();
   const [watch, setWatch] = useState<WatchEntry[]>([]);
   const [handle, setHandle] = useState("");
@@ -54,15 +53,13 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
   );
 
   return (
-    <div className="space-y-4">
-      {paused && <Notice tone="warn">Everything is paused, so scans are off. Resume in the bar above.</Notice>}
+    <div className="space-y-8">
       {error && <Notice tone="error">{error}</Notice>}
       {notice && <Notice tone="ok">{notice}</Notice>}
       {!thresholds && !settings && !error && <LoadingBlock label="Loading sources" />}
 
       <section className={panel} aria-labelledby="wl-h">
-        <h2 id="wl-h" className="text-base font-medium">Creator watchlist</h2>
-        <p className={`mt-1 text-sm ${muted}`}>Creators whose posts you want to learn from. A scan opens one creator's profile in your X window, reads what is on screen and flags posts that over-perform. It only runs when you press Scan.</p>
+        <h2 id="wl-h" className="font-display text-lg font-semibold tracking-tight">Creators to learn from</h2>
         <form
           className="mt-3 flex flex-wrap gap-2"
           onSubmit={(e) => {
@@ -75,11 +72,10 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
           }}
         >
           <input aria-label="Creator handle" className={`${field} w-48`} value={handle} onChange={(e) => setHandle(e.target.value)} placeholder="@handle" />
-          <input aria-label="Follower count (optional)" className={`${field} w-48`} inputMode="numeric" value={followers} onChange={(e) => setFollowers(e.target.value)} placeholder="Followers (optional)" />
-          <button type="submit" className={primary} disabled={busy !== null || !handle.trim()}>Add creator</button>
+                    <button type="submit" className={primary} disabled={busy !== null || !handle.trim()}>Add</button>
         </form>
         {watch.length === 0 ? (
-          <div className="mt-3"><EmptyBlock title="No creators yet">Add a handle above to start learning from creators you admire.</EmptyBlock></div>
+          <div className="mt-3"><EmptyBlock>Add a creator to get started.</EmptyBlock></div>
         ) : (
           <ul className="mt-3 divide-y divide-zinc-200 text-sm dark:divide-zinc-800">
             {watch.map((w) => (
@@ -95,8 +91,8 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
                   <button
                     type="button"
                     className={btn}
-                    disabled={busy !== null || locked || !xRunning || paused}
-                    title={paused ? "Paused. Resume in the bar above." : xRunning ? undefined : "Open the X window first (Settings)"}
+                    disabled={busy !== null || locked || !xRunning}
+                    title={xRunning ? undefined : "Open the X window first (Settings)"}
                     onClick={() =>
                       run(`scan-${w.id}`, async () => {
                         const s = await api.watchScan(w.id);
@@ -114,11 +110,11 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
         )}
       </section>
 
+      <Disclosure summary="Advanced">
       {thresholds && (
-        <section className={panel} aria-labelledby="th-h">
-          <h2 id="th-h" className="text-base font-medium">What counts as viral</h2>
-          <p className={`mt-1 text-sm ${muted}`}>A post is flagged when it clears the minimum engagement and either beats the creator's follower count by the reach multiple or is saved unusually often. The defaults are a starting point; tune them against what you see.</p>
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <section aria-labelledby="th-h">
+          <h2 id="th-h" className="font-display text-lg font-semibold tracking-tight">What counts as viral</h2>
+                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
             {numField("Minimum engagement", thresholds.min_engagement, (n) => setThresholds({ ...thresholds, min_engagement: n }))}
             {numField("Reach multiple", thresholds.reach_multiple, (n) => setThresholds({ ...thresholds, reach_multiple: n }), 0.05)}
             {numField("Bookmark ratio", thresholds.bookmark_ratio, (n) => setThresholds({ ...thresholds, bookmark_ratio: n }), 0.01)}
@@ -132,8 +128,8 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
       )}
 
       {settings && (
-        <section className={panel} aria-labelledby="cs-h">
-          <h2 id="cs-h" className="text-base font-medium">Writing</h2>
+        <section aria-labelledby="cs-h">
+          <h2 id="cs-h" className="font-display text-lg font-semibold tracking-tight">Writing</h2>
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="block text-sm">
               <span className="mb-1 block text-zinc-500">Originality warning at {Math.round(settings.similarity_threshold * 100)}% overlap</span>
@@ -154,9 +150,9 @@ export function SourcesPanel({ locked, xRunning, paused }: Props) {
           <button type="button" className={`${btn} mt-3`} disabled={busy !== null} onClick={() => run("cs", async () => { setSettings(await api.saveSettings(settings)); setNotice("Saved."); })}>
             Save writing settings
           </button>
-          <p className={`mt-2 text-xs ${muted}`}>Standard X accounts allow 280 characters. Raise the limit only if your account has longer posts.</p>
         </section>
       )}
+      </Disclosure>
     </div>
   );
 }

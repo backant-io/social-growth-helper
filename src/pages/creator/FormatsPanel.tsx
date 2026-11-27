@@ -125,7 +125,7 @@ export function FormatsPanel() {
 
       <section aria-labelledby="lib-h" className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="lib-h" className="text-base font-medium">Format library</h2>
+          <h2 id="lib-h" className="font-display text-lg font-semibold tracking-tight">Format library</h2>
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <label className="flex items-center gap-1.5">
               <span className={muted}>Sort</span>
@@ -157,7 +157,7 @@ export function FormatsPanel() {
 
       <section aria-labelledby="cand-h" className="space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <h2 id="cand-h" className="text-base font-medium">Posts worth studying</h2>
+          <h2 id="cand-h" className="font-display text-lg font-semibold tracking-tight">Posts worth studying</h2>
           {candidates.length > 1 && (
             <button
               type="button"

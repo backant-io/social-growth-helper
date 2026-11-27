@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { btnGhost, btnPrimary } from "../components/ui";
 import { api } from "../lib/api";
 import type { RulesNotice, RulesStatus } from "../lib/types";
 
@@ -50,7 +51,7 @@ export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose
       {alreadyAcknowledged ? (
         <div className="mt-4 flex items-center justify-between border-t border-zinc-200 pt-4 dark:border-zinc-800">
           <span className="text-sm text-emerald-600 dark:text-emerald-400">You acknowledged this notice.</span>
-          <button type="button" onClick={onClose} className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white dark:bg-zinc-100 dark:text-zinc-900">
+          <button type="button" onClick={onClose} className={btnPrimary}>
             {closeLabel}
           </button>
         </div>
@@ -63,7 +64,7 @@ export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose
           {error && <p role="alert" className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           <div className="flex justify-between">
             {onBack ? (
-              <button type="button" onClick={onBack} className="rounded-lg px-4 py-2 text-sm text-zinc-600 dark:text-zinc-400">
+              <button type="button" onClick={onBack} className={btnGhost}>
                 Back
               </button>
             ) : <span />}
@@ -71,7 +72,7 @@ export function RulesStep({ onAcknowledged, onBack, alreadyAcknowledged, onClose
               type="button"
               onClick={confirm}
               disabled={!checked || busy}
-              className="rounded-lg bg-zinc-900 px-4 py-2 text-sm text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+              className={btnPrimary}
             >
               Confirm and continue
             </button>

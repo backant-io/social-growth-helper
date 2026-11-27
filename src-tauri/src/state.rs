@@ -52,6 +52,8 @@ pub struct AppState {
     /// Phase 5 model seam, backed by the Phase 2 router (`LlmRouter::complete_json_for_task`).
     pub llm: Arc<dyn StructuredLlm>,
     pub quit_approved: AtomicBool,
+    /// Model ids fetched live from each provider API (account id to ids). Merged into the catalogue.
+    pub remote_models: Mutex<std::collections::HashMap<String, Vec<String>>>,
 }
 
 impl AppState {
@@ -77,6 +79,7 @@ impl AppState {
             jobs: JobRegistry::new(),
             llm,
             quit_approved: AtomicBool::new(false),
+            remote_models: Mutex::new(std::collections::HashMap::new()),
         }
     }
 }

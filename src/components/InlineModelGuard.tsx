@@ -12,12 +12,12 @@ interface Props {
   onGoToSettings?: () => void;
   /** Shown under the "Choose a model" prompt while the route is unset. */
   hint?: string;
-  /** Show the model chip with "Change model" once a model is set. Defaults to on. */
+  /** Show the model chip with "Change model" once a model is set. Defaults to off: model choice lives in Settings. */
   showChip?: boolean;
 }
 
 /** The inline model chooser for one task: "Choose a model" while unset (LLM-21), "Change model" once set (LLM-22). */
-export function InlineModelGuard({ taskType, onAssigned, onGoToSettings, hint, showChip = true }: Props) {
+export function InlineModelGuard({ taskType, onAssigned, onGoToSettings, hint, showChip = false }: Props) {
   const [providers, setProviders] = useState<ProviderAccountView[]>([]);
   const [route, setRoute] = useState<TaskModelRoute | undefined>(undefined);
   const [loaded, setLoaded] = useState(false);
