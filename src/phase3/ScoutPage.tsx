@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "../lib/api";
 import { InlineModelGuard } from "../components/InlineModelGuard";
 import { XPostCard } from "../components/XPostCard";
-import { EmptyBlock, LoadingBlock, Page, PageHeader, Segmented } from "../components/ui";
+import { EmptyBlock, LoadingBlock, Modal, Page, PageHeader, Segmented } from "../components/ui";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { ReplyBox } from "./ReplyBox";
@@ -37,6 +37,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [setup, setSetup] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [completion, setCompletion] = useState<CompletionStatus>({ scoring: true, drafting: true, browser_navigation: true });
   const remembered = useRef(false);
@@ -79,6 +81,7 @@ export function ScoutPage({ onGoToSettings }: Props) {
   }, [reload, refreshQueue]);
 
   const start = async () => {
+    setStartError(null);
     setError(null);
     setBusy(true);
     try {
@@ -86,8 +89,9 @@ export function ScoutPage({ onGoToSettings }: Props) {
       await p3.scoutStart({ feed_source: feed, max_duration_sec: SESSION_SECONDS, max_posts: postsBudget(n), stop_after_queued: n, threshold });
       setProgress(null);
       setRunning(true);
+      setSetup(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setStartError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -115,43 +119,69 @@ export function ScoutPage({ onGoToSettings }: Props) {
 
   return (
     <Page>
-      <PageHeader title="Scout" />
+      <PageHeader
+        title="Scout"
+        actions={
+          running ? (
+            <button type="button" className={btn} onClick={() => void p3.scoutStop()}>
+              Stop
+            </button>
+          ) : (
+            <button type="button" data-testid="scout-start" className={btnPrimary} onClick={() => { setStartError(null); setSetup(true); }}>
+              Start scouting
+            </button>
+          )
+        }
+      />
 
       {error && <Notice tone="error">{error}</Notice>}
       {paused && <Notice tone="info">Paused while you use the X window. It resumes a few seconds after you stop.</Notice>}
       {!completion.drafting && <InlineModelGuard taskType="reply_drafting" onAssigned={reload} onGoToSettings={onGoToSettings} hint="Assign a reply model so every post gets a drafted reply." />}
 
-      {running ? (
-        <section aria-live="polite" className="flex items-center justify-between gap-4">
-          <p className="text-sm font-medium tabular-nums">
-            {found} of {goal} posts found
-            {progress && <span className={`ml-2 font-normal ${muted}`}>{progress.scanned} read</span>}
-          </p>
-          <button type="button" className={btn} onClick={() => void p3.scoutStop()}>
-            Stop
-          </button>
-        </section>
-      ) : (
-        <section aria-label="Scouting session" className="flex flex-wrap items-center gap-x-4 gap-y-3">
-          <Segmented
-            label="Feed"
-            value={feed}
-            options={[
-              { value: "for_you", label: "For You" },
-              { value: "following", label: "Following" },
-              { value: "both", label: "Both" },
-            ]}
-            onChange={setFeed}
-          />
-          <label className="flex items-center gap-2 text-sm">
-            <span className={muted}>Find</span>
-            <input type="number" min={1} max={500} value={target} onChange={(e) => setTarget(Number(e.target.value))} className={`${input} w-20`} aria-label="Posts to find" />
-            <span className={muted}>posts</span>
-          </label>
-          <button type="button" data-testid="scout-start" className={`${btnPrimary} ml-auto`} onClick={start} disabled={busy}>
-            Start scouting
-          </button>
-        </section>
+      {running && (
+        <p aria-live="polite" className="text-sm font-medium tabular-nums">
+          {found} of {goal} posts found
+          {progress && <span className={`ml-2 font-normal ${muted}`}>{progress.scanned} read</span>}
+        </p>
+      )}
+
+      {setup && (
+        <Modal
+          title="Start scouting"
+          onClose={() => !busy && setSetup(false)}
+          actions={
+            <>
+              <button type="button" className={btn} onClick={() => setSetup(false)} disabled={busy}>
+                Cancel
+              </button>
+              <button type="button" data-testid="scout-confirm-start" className={btnPrimary} onClick={start} disabled={busy}>
+                {busy ? "Starting..." : "Start"}
+              </button>
+            </>
+          }
+        >
+          <div className="space-y-5">
+            {startError && <Notice tone="error">{startError}</Notice>}
+            <div>
+              <span className={`mb-1.5 block text-sm ${muted}`}>Feed</span>
+              <Segmented
+                label="Feed"
+                value={feed}
+                options={[
+                  { value: "for_you", label: "For You" },
+                  { value: "following", label: "Following" },
+                  { value: "both", label: "Both" },
+                ]}
+                onChange={setFeed}
+              />
+            </div>
+            <label className="block">
+              <span className={`mb-1.5 block text-sm ${muted}`}>Posts to find</span>
+              <input type="number" min={1} max={500} value={target} onChange={(e) => setTarget(Number(e.target.value))} onKeyDown={(e) => e.key === "Enter" && !busy && void start()} className={`${input} w-28`} autoFocus />
+            </label>
+            <p className={`text-xs ${muted}`}>Scout keeps scrolling until it has found this many posts, or until you press Stop.</p>
+          </div>
+        </Modal>
       )}
 
       {!loaded ? (

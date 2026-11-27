@@ -49,18 +49,29 @@ export async function openExternal(url: string): Promise<void> {
   }
 }
 
-/** In the desktop app, sends every `target="_blank"` http(s) link to the system browser. Returns a cleanup. */
+/** The web address an anchor wants opened in a new window, or null when the app should leave it alone. */
+export function externalLinkTarget(a: { target?: string; href?: string } | null | undefined): string | null {
+  if (!a || a.target !== "_blank" || !a.href || !/^https?:\/\//i.test(a.href)) return null;
+  return a.href;
+}
+
+/**
+ * In the desktop app, sends every `target="_blank"` http(s) link to the system browser. It listens in the
+ * capture phase because React components that call `stopPropagation` (post cards, reply box) would otherwise
+ * swallow the click before it reached `document`. Returns a cleanup.
+ */
 export function routeExternalLinks(): () => void {
   if (!inTauri()) return () => undefined;
   const onClick = (e: MouseEvent) => {
     if (e.defaultPrevented || e.button !== 0) return;
     const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
-    if (!a || a.target !== "_blank" || !/^https?:\/\//i.test(a.href)) return;
+    const url = externalLinkTarget(a);
+    if (!url) return;
     e.preventDefault();
-    void openExternal(a.href).catch(() => undefined);
+    void openExternal(url).catch(() => undefined);
   };
-  document.addEventListener("click", onClick);
-  return () => document.removeEventListener("click", onClick);
+  document.addEventListener("click", onClick, true);
+  return () => document.removeEventListener("click", onClick, true);
 }
 
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {

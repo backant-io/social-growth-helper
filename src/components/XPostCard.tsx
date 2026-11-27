@@ -104,7 +104,7 @@ export function PostMedia({ media, postUrl }: { media: MediaItem[]; postUrl?: st
       {images.length > 0 && (
         <div className={`${frame} grid gap-0.5 ${images.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
           {images.slice(0, 4).map((img, idx) => (
-            <a key={`${img.url}-${idx}`} href={img.url ?? fallbackHref} target="_blank" rel="noreferrer" className="block">
+            <a key={`${img.url}-${idx}`} href={fallbackHref ?? img.url ?? undefined} target="_blank" rel="noreferrer" className="block">
               <img src={img.url!} alt={img.alt ?? "Post image"} loading="lazy" referrerPolicy="no-referrer" className={`w-full object-cover ${images.length === 1 ? "max-h-80" : "h-40"}`} />
             </a>
           ))}
