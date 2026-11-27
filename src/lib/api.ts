@@ -39,6 +39,30 @@ export function inTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
+/** Opens a web link in the system browser. Links inside the desktop window do nothing on their own. */
+export async function openExternal(url: string): Promise<void> {
+  if (inTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("open_external", { url });
+  } else {
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+}
+
+/** In the desktop app, sends every `target="_blank"` http(s) link to the system browser. Returns a cleanup. */
+export function routeExternalLinks(): () => void {
+  if (!inTauri()) return () => undefined;
+  const onClick = (e: MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+    if (!a || a.target !== "_blank" || !/^https?:\/\//i.test(a.href)) return;
+    e.preventDefault();
+    void openExternal(a.href).catch(() => undefined);
+  };
+  document.addEventListener("click", onClick);
+  return () => document.removeEventListener("click", onClick);
+}
+
 async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   try {

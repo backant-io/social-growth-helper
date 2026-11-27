@@ -1,4 +1,4 @@
-import type { DraftStatus, FormatBlueprint } from "./types";
+import type { DraftStatus, FormatBlueprint, FormatCandidate } from "./types";
 
 const URL_RE = /https?:\/\/\S+/g;
 const LINK_WEIGHT = 23;
@@ -80,4 +80,30 @@ export function blankBlueprint(): FormatBlueprint {
 /** Slots that match the skeleton's placeholders, keeping labels the user already wrote. */
 export function syncSlots(skeleton: string, existing: FormatBlueprint["slots"]): FormatBlueprint["slots"] {
   return slotKeys(skeleton).map((key) => existing.find((s) => s.key === key) ?? { key, label: key.replace(/_/g, " "), hint: "" });
+}
+
+export interface Insight {
+  label: string;
+  value: string;
+}
+
+const ratio = (n: number, d: number) => (d > 0 ? n / d : null);
+
+/** The numbers that explain why a post took off, only those the data supports. */
+export function candidateInsights(c: Pick<FormatCandidate, "metrics" | "author_followers" | "virality_score">): Insight[] {
+  const { likes, reposts, replies, bookmarks, views } = c.metrics;
+  const out: Insight[] = [{ label: "Virality", value: String(Math.round(c.virality_score)) }];
+  const reach = views != null && c.author_followers ? ratio(views, c.author_followers) : null;
+  if (reach !== null) out.push({ label: "Reach", value: `${reach >= 10 ? Math.round(reach) : reach.toFixed(1)}x followers` });
+  const engagement = views ? ratio(likes + reposts + replies + bookmarks, views) : null;
+  if (engagement !== null) out.push({ label: "Engagement", value: `${(engagement * 100).toFixed(engagement >= 0.1 ? 0 : 1)}%` });
+  const saves = ratio(bookmarks, likes);
+  if (saves !== null) out.push({ label: "Saves per like", value: `${Math.round(saves * 100)}%` });
+  return out;
+}
+
+/** Permalink of a post. A missing or odd handle falls back to `/i/status/<id>`, which X resolves itself. */
+export function xPostUrl(handle: string, id: string): string {
+  const h = handle.trim().replace(/^@+/, "");
+  return /^[A-Za-z0-9_]{1,15}$/.test(h) ? `https://x.com/${h}/status/${id.trim()}` : `https://x.com/i/status/${id.trim()}`;
 }

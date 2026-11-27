@@ -109,6 +109,7 @@ export interface ScoutProgress {
   queued: number;
   scored: number;
   elapsed_sec: number;
+  target?: number | null;
 }
 
 export interface VariantView {

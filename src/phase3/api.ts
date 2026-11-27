@@ -33,6 +33,10 @@ const SAMPLE_SVG =
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="#18181b"/><path d="M40 300 L170 250 L300 210 L440 120 L590 60" stroke="#10b981" stroke-width="5" fill="none"/><text x="40" y="54" fill="#e4e4e7" font-family="sans-serif" font-size="22" font-weight="600">Revenue per engineer ($M)</text></svg>',
   );
 
+const AVATAR = (c: string, ch: string) =>
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${c}"/><text x="32" y="43" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="30" font-weight="700">${ch}</text></svg>`);
+
 const now = () => new Date().toISOString();
 const mem = {
   kill: false,
@@ -50,6 +54,8 @@ const mem = {
         observed_id: "o1",
         platform_post_id: "111",
         handle: "naval",
+        author_name: "Naval",
+        avatar_url: AVATAR("#0f766e", "N"),
         text: "The best way to build wealth is to own equity in something that scales without you.",
         has_media: true,
         url: "https://x.com/naval/status/111",
@@ -80,6 +86,8 @@ const mem = {
         observed_id: "o2",
         platform_post_id: "222",
         handle: "paulg",
+        author_name: "Paul Graham",
+        avatar_url: AVATAR("#9a3412", "P"),
         text: "Startups are mostly about not dying until the market comes to you.",
         has_media: true,
         url: "https://x.com/paulg/status/222",

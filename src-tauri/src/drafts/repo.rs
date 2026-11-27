@@ -71,8 +71,28 @@ pub struct DraftView {
     pub created_at: String,
 }
 
+/// Permalink of a post. A missing or odd handle falls back to `/i/status/<id>`, which X resolves on its own.
 pub fn post_url(handle: &str, id: &str) -> String {
-    format!("https://x.com/{handle}/status/{id}")
+    let handle = handle.trim().trim_start_matches('@');
+    let id = id.trim();
+    if !handle.is_empty() && handle.len() <= 15 && handle.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        format!("https://x.com/{handle}/status/{id}")
+    } else {
+        format!("https://x.com/i/status/{id}")
+    }
+}
+
+#[cfg(test)]
+mod post_url_tests {
+    use super::post_url;
+
+    #[test]
+    fn builds_a_permalink_and_never_a_broken_one() {
+        assert_eq!(post_url("naval", "111"), "https://x.com/naval/status/111");
+        assert_eq!(post_url("@naval", " 111 "), "https://x.com/naval/status/111");
+        assert_eq!(post_url("", "111"), "https://x.com/i/status/111");
+        assert_eq!(post_url("not a handle", "111"), "https://x.com/i/status/111");
+    }
 }
 
 pub fn load_style(conn: &Connection, profile_id: &str) -> AppResult<StyleContext> {

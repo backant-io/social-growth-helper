@@ -59,6 +59,41 @@ pub fn get_app_info(state: State<'_, AppState>) -> AppResult<AppInfo> {
     })
 }
 
+/// Accepts only plain http(s) links, so nothing the page can do turns this into a way to run a program.
+pub fn external_url(raw: &str) -> AppResult<String> {
+    let url = raw.trim();
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
+    let ok = rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/'))
+        && url.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '<' | '>' | '`' | '\\' | '^' | '{' | '}' | '|'));
+    if ok {
+        Ok(url.to_string())
+    } else {
+        Err(AppError::Validation("that is not a web link the app can open".into()))
+    }
+}
+
+/// Opens a link in the system browser. Links in the app window do nothing on their own, so the UI routes
+/// every external link (such as "View on X") through here.
+#[tauri::command]
+pub fn open_external(url: String) -> AppResult<()> {
+    let url = external_url(&url)?;
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(&url);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler").arg(&url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.spawn().map(|_| ()).map_err(|e| AppError::Other(format!("could not open your browser: {e}")))
+}
+
 #[tauri::command]
 pub fn get_onboarding_status(state: State<'_, AppState>) -> AppResult<OnboardingStatus> {
     let db = state.db.lock().unwrap();
@@ -1145,6 +1180,14 @@ pub async fn style_run_bench(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn only_plain_web_links_can_be_opened() {
+        assert_eq!(external_url(" https://x.com/naval/status/111?s=20 ").unwrap(), "https://x.com/naval/status/111?s=20");
+        for bad in ["", "x.com/naval", "file:///etc/passwd", "javascript:alert(1)", "https://", "https:///x", "https://x.com/a b", "https://x.com/\"; rm -rf", "calc.exe"] {
+            assert!(external_url(bad).is_err(), "{bad} must be refused");
+        }
+    }
 
     #[test]
     fn sync_profile_state_seeds_cookies_and_skips_singleton_locks() {

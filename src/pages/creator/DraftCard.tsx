@@ -3,8 +3,8 @@ import { canEdit, fileName, hasPlaceholders, parsePaths, postLength, similarityN
 import { offlineActionHint, useOnlineStatus } from "../../lib/errors";
 import { creatorApi } from "../../lib/creatorApi";
 import type { FormatRecord, OgcDraft } from "../../lib/types";
-import { Notice } from "../../components/ui";
-import { btn, danger, field, Modal, muted, panel, primary } from "./ui";
+import { btnGhost, Notice } from "../../components/ui";
+import { btn, danger, field, Modal, muted, primary } from "./ui";
 
 interface Props {
   draft: OgcDraft;
@@ -95,7 +95,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, publ
   }
 
   return (
-    <article className={panel} data-draft-id={draft.id} aria-label="Draft">
+    <article className="rounded-2xl border border-zinc-200 p-4 dark:border-zinc-800" data-draft-id={draft.id} aria-label="Draft">
       <header className="mb-2 flex items-center justify-between text-xs">
         <span className={`flex min-w-0 flex-wrap items-center gap-2 ${muted}`}>
           <span className={`rounded-full px-2 py-0.5 font-medium ${draft.status === "published" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" : draft.status === "failed" || draft.status === "unconfirmed" ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" : "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"}`}>
@@ -118,6 +118,9 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, publ
         value={text}
         disabled={!editable || busy}
         onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          if (dirty && !busy && text.trim()) void save();
+        }}
       />
       <div className="mt-1 flex items-center justify-between text-xs">
         <span className={over ? danger : muted} aria-live="polite">{length} / {maxChars}</span>
@@ -163,14 +166,13 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, publ
 
       {editable && (
         <footer className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
-          <button type="button" className={btn} disabled={busy} onClick={async () => { if (await run(async () => { await api.discard(draft.id); return true; })) onRemoved(draft.id); }}>
+          <button type="button" className={btnGhost} disabled={busy} onClick={async () => { if (await run(async () => { await api.discard(draft.id); return true; })) onRemoved(draft.id); }}>
             Discard
           </button>
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`text-xs ${muted}`}>{publishBlock ?? "Not posted yet. You approve the exact text first."}</span>
-            <button type="button" className={btn} disabled={busy || !dirty} onClick={save}>Save edits</button>
+            {publishBlock && <span className={`text-xs ${muted}`}>{publishBlock}</span>}
             <button type="button" className={primary} disabled={busy || !online || !canPublish || !text.trim() || over} onClick={startPublish} title={offlineActionHint(online) ?? publishBlock}>
-              Review and publish
+              Post
             </button>
           </div>
         </footer>
