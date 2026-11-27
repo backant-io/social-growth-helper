@@ -115,13 +115,21 @@ export function commonRoute(routes: TaskModelRoute[]): { providerAccountId: stri
   return { providerAccountId: best.slice(0, i), modelId: best.slice(i + 2) };
 }
 
-/** Pull live model lists from every API-key provider. A failure keeps the built-in list and is reported, not thrown. */
-export async function refreshLiveModels(providers: ProviderAccountView[]): Promise<{ fetched: Record<string, number>; errors: Record<string, string> }> {
+/** Pull live model lists from connected API-key providers (or just one provider when `onlyProviderId` is given). A failure keeps the built-in list and is reported, not thrown. */
+export async function refreshLiveModels(
+  providers: ProviderAccountView[],
+  onlyProviderId?: string,
+): Promise<{ fetched: Record<string, number>; errors: Record<string, string> }> {
   const fetched: Record<string, number> = {};
   const errors: Record<string, string> = {};
   await Promise.all(
     providers
-      .filter((p) => (p.provider_type === "anthropic_api" || p.provider_type === "xai_api") && p.status === "connected")
+      .filter(
+        (p) =>
+          (p.provider_type === "anthropic_api" || p.provider_type === "xai_api") &&
+          p.status === "connected" &&
+          (!onlyProviderId || p.id === onlyProviderId),
+      )
       .map(async (p) => {
         try {
           fetched[p.id] = (await api.llmRefreshProviderModels(p.id)).length;
@@ -133,11 +141,13 @@ export async function refreshLiveModels(providers: ProviderAccountView[]): Promi
   return { fetched, errors };
 }
 
-/** Called after a provider connects: refresh live models, then give every unset task a sensible model. */
-export async function autoAssignDefaults(): Promise<{ assigned: number; label: string | null }> {
+/** Called after a provider connects: refresh live models for that provider only, then give every unset task a sensible model. */
+export async function autoAssignDefaults(onlyProviderId?: string): Promise<{ assigned: number; label: string | null }> {
   let providers = await api.llmListProviders();
-  await refreshLiveModels(providers);
-  providers = await api.llmListProviders();
+  if (onlyProviderId) {
+    await refreshLiveModels(providers, onlyProviderId);
+    providers = await api.llmListProviders();
+  }
   const routes = await api.llmListTaskRoutes();
   const patches = recommendRoutes(providers, routes);
   for (const p of patches) await api.llmSaveTaskRoute(p);

@@ -637,12 +637,12 @@ fn health_status_str(h: ProviderHealth) -> &'static str {
 }
 
 fn to_account_view(state: &AppState, acct: ProviderAccount, remote_models: &[String]) -> ProviderAccountView {
+    // Derive secret presence from SQLite's keychain_ref without reading the OS keychain;
+    // reading here triggers macOS Keychain permission prompts whenever views mount (Creator, Style, Settings).
     let has_secret = acct
         .keychain_ref
         .as_deref()
-        .and_then(|k| state.secrets.load(k).ok().flatten())
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+        .is_some_and(|k| !k.trim().is_empty());
     let cached = state.remote_models.lock().unwrap().get(&acct.id).cloned().unwrap_or_default();
     let remote = if remote_models.is_empty() { cached.as_slice() } else { remote_models };
     let models = catalog::merge_catalog(acct.provider_type, remote, &acct.config.custom_models);
@@ -671,16 +671,20 @@ fn sync_router_from_db(state: &AppState) -> AppResult<()> {
         .map_err(AppError::Llm)
 }
 
-#[tauri::command]
-pub fn llm_list_providers(state: State<'_, AppState>) -> AppResult<Vec<ProviderAccountView>> {
+fn list_provider_views(state: &AppState) -> AppResult<Vec<ProviderAccountView>> {
     let accounts = {
         let db = state.db.lock().unwrap();
         llm_repo::list_provider_accounts(&db)?
     };
     Ok(accounts
         .into_iter()
-        .map(|a| to_account_view(&state, a, &[]))
+        .map(|a| to_account_view(state, a, &[]))
         .collect())
+}
+
+#[tauri::command]
+pub fn llm_list_providers(state: State<'_, AppState>) -> AppResult<Vec<ProviderAccountView>> {
+    list_provider_views(&state)
 }
 
 #[derive(Serialize)]
@@ -990,30 +994,45 @@ pub async fn llm_health_check_provider(
     Ok(to_account_view(&state, updated, &[]))
 }
 
-#[tauri::command]
-pub async fn llm_refresh_provider_models(
-    state: State<'_, AppState>,
-    account_id: String,
+async fn refresh_provider_models_inner(
+    state: &AppState,
+    account_id: &str,
 ) -> AppResult<Vec<ModelInfo>> {
     let acct = {
         let db = state.db.lock().unwrap();
-        llm_repo::get_provider_account(&db, &account_id)?
+        llm_repo::get_provider_account(&db, account_id)?
             .ok_or_else(|| AppError::Validation("provider account not found".into()))?
     };
     let remote = match acct.provider_type {
         ProviderType::XaiApi => {
             let kref = acct
                 .keychain_ref
-                .clone()
-                .unwrap_or_else(|| format!("provider:{}", acct.id));
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| {
+                    AppError::Llm(crate::llm::LlmError::new(
+                        crate::llm::LlmErrorKind::NotLoggedIn,
+                        "no xAI API key stored for this account",
+                    ))
+                })?
+                .to_string();
             let p = XaiApiProvider::new(acct.id.clone(), kref, state.secrets.clone());
             p.fetch_model_ids().await.map_err(AppError::Llm)?
         }
         ProviderType::AnthropicApi => {
             let kref = acct
                 .keychain_ref
-                .clone()
-                .unwrap_or_else(|| format!("provider:{}", acct.id));
+                .as_deref()
+                .map(str::trim)
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| {
+                    AppError::Llm(crate::llm::LlmError::new(
+                        crate::llm::LlmErrorKind::NotLoggedIn,
+                        "no Anthropic API key stored for this account",
+                    ))
+                })?
+                .to_string();
             let p = AnthropicApiProvider::new(acct.id.clone(), kref, state.secrets.clone());
             p.fetch_model_ids().await.map_err(AppError::Llm)?
         }
@@ -1027,6 +1046,14 @@ pub async fn llm_refresh_provider_models(
         &remote,
         &acct.config.custom_models,
     ))
+}
+
+#[tauri::command]
+pub async fn llm_refresh_provider_models(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> AppResult<Vec<ModelInfo>> {
+    refresh_provider_models_inner(&state, &account_id).await
 }
 
 #[tauri::command]
@@ -1257,6 +1284,170 @@ mod tests {
 
         // Second sync without newer Cookies should be a no-op.
         assert!(!sync_profile_state_if_newer(&src, &dst));
+    }
+
+    #[test]
+    fn to_account_view_never_touches_keychain() {
+        use crate::secrets::{Platform, SecretBackend, SecretError, SecretsService};
+        use crate::state::AppPaths;
+        use std::sync::Arc;
+
+        struct PanicBackend;
+        impl SecretBackend for PanicBackend {
+            fn set(&self, k: &str, _: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain set({k}) during account view build");
+            }
+            fn get(&self, k: &str) -> Result<Option<String>, SecretError> {
+                panic!("unexpected keychain get({k}) during account view build");
+            }
+            fn delete(&self, k: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain delete({k}) during account view build");
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::under(dir.path().to_path_buf());
+        let (db, _) = storage::open(&paths.db_path, &paths.backup_dir).unwrap();
+        let pid = repo::ensure_default_profile(&db, "/tmp/p").unwrap();
+        let mut state = AppState::new(paths, db, pid);
+        state.secrets = Arc::new(SecretsService::with_backend(
+            Box::new(PanicBackend),
+            Platform::Macos,
+            true,
+        ));
+
+        let api_acct = ProviderAccount {
+            id: "anthropic_api".into(),
+            provider_type: ProviderType::AnthropicApi,
+            label: "Anthropic API".into(),
+            keychain_ref: Some("provider:anthropic_api".into()),
+            billing_lane: BillingLane::Api,
+            status: "connected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        let view = to_account_view(&state, api_acct, &[]);
+        assert!(view.has_secret);
+
+        let cli_acct = ProviderAccount {
+            id: "claude_cli".into(),
+            provider_type: ProviderType::ClaudeCli,
+            label: "Claude CLI".into(),
+            keychain_ref: None,
+            billing_lane: BillingLane::Subscription,
+            status: "connected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        assert!(!to_account_view(&state, cli_acct, &[]).has_secret);
+
+        let blank_ref_acct = ProviderAccount {
+            id: "xai_api".into(),
+            provider_type: ProviderType::XaiApi,
+            label: "xAI API".into(),
+            keychain_ref: Some("   ".into()),
+            billing_lane: BillingLane::Api,
+            status: "disconnected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        assert!(!to_account_view(&state, blank_ref_acct, &[]).has_secret);
+    }
+
+    #[tokio::test]
+    async fn creator_style_settings_mount_reads_never_touch_keychain() {
+        use crate::secrets::{Platform, SecretBackend, SecretError, SecretsService};
+        use crate::state::AppPaths;
+        use std::sync::Arc;
+
+        struct PanicBackend;
+        impl SecretBackend for PanicBackend {
+            fn set(&self, k: &str, _: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain set({k}) during navigation/mount");
+            }
+            fn get(&self, k: &str) -> Result<Option<String>, SecretError> {
+                panic!("unexpected keychain get({k}) during navigation/mount");
+            }
+            fn delete(&self, k: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain delete({k}) during navigation/mount");
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::under(dir.path().to_path_buf());
+        let (db, _) = storage::open(&paths.db_path, &paths.backup_dir).unwrap();
+        let pid = repo::ensure_default_profile(&db, "/tmp/p").unwrap();
+        let mut state = AppState::new(paths, db, pid);
+        state.secrets = Arc::new(SecretsService::with_backend(
+            Box::new(PanicBackend),
+            Platform::Macos,
+            true,
+        ));
+
+        // Seed connected API-key & OAuth providers plus a missing-key account in SQLite.
+        {
+            let conn = state.db.lock().unwrap();
+            for (id, ptype, kref, lane, status) in [
+                ("anthropic_api", ProviderType::AnthropicApi, Some("provider:anthropic_api"), BillingLane::Api, "connected"),
+                ("xai_api", ProviderType::XaiApi, Some("provider:xai_api"), BillingLane::Api, "connected"),
+                ("xai_oauth", ProviderType::XaiOAuth, Some("provider:xai_oauth"), BillingLane::Subscription, "connected"),
+                ("imported_xai", ProviderType::XaiApi, None, BillingLane::Api, "needs_key"),
+            ] {
+                llm_repo::upsert_provider_account(
+                    &conn,
+                    &ProviderAccount {
+                        id: id.into(),
+                        provider_type: ptype,
+                        label: id.into(),
+                        keychain_ref: kref.map(str::to_string),
+                        billing_lane: lane,
+                        status: status.into(),
+                        last_verified_at: None,
+                        last_error: None,
+                        config: ProviderAccountConfig::default(),
+                    },
+                )
+                .unwrap();
+            }
+        }
+
+        // App startup router sync + Creator / Style / Settings mount reads must not touch Keychain.
+        sync_router_from_db(&state).unwrap();
+        let views = list_provider_views(&state).unwrap();
+        assert_eq!(views.len(), 4);
+        assert!(views.iter().find(|v| v.id == "anthropic_api").unwrap().has_secret);
+        assert!(views.iter().find(|v| v.id == "xai_oauth").unwrap().has_secret);
+        assert!(!views.iter().find(|v| v.id == "imported_xai").unwrap().has_secret);
+
+        let sec_status = state.secrets.status();
+        assert!(sec_status.available);
+
+        {
+            let conn = state.db.lock().unwrap();
+            let _routes = llm_repo::list_task_routes(&conn).unwrap();
+            let _formats = crate::formats::repo::list_formats(
+                &conn,
+                &state.profile_id,
+                false,
+                crate::formats::repo::FormatSort::Working,
+            )
+            .unwrap();
+            let _candidates =
+                crate::formats::repo::list_candidates(&conn, &state.profile_id, "pending", 20).unwrap();
+            let _drafts = crate::creator::drafts::list_recent(&conn, &state.profile_id, 20).unwrap();
+            let _guide = style_repo::get_active_style_guide(&conn, &state.profile_id).unwrap();
+            let _versions = style_repo::list_style_guide_versions(&conn, &state.profile_id).unwrap();
+            let _examples = style_repo::list_style_examples(&conn, &state.profile_id, None).unwrap();
+        }
+
+        // Refreshing models for an account without a keychain_ref fails cleanly without reading Keychain.
+        let err = refresh_provider_models_inner(&state, "imported_xai")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no xAI API key stored"), "{err}");
     }
 }
 

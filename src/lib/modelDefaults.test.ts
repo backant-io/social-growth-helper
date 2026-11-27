@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { commonRoute, recommendRoutes, recommendedModel } from "./modelDefaults";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "./api";
+import { commonRoute, recommendRoutes, recommendedModel, refreshLiveModels } from "./modelDefaults";
 import type { ModelInfo, ProviderAccountView, ProviderType, TaskModelRoute, TaskType } from "./types";
 import { TASK_METAS } from "./types";
 
@@ -50,5 +51,23 @@ describe("filling routes", () => {
     const routes = [unset("post_scoring"), unset("reply_drafting"), unset("dashboard_builder")].map((r, i) => ({ ...r, provider_account_id: "a", model_id: i < 2 ? "m1" : "m2" }));
     expect(commonRoute(routes)).toEqual({ providerAccountId: "a", modelId: "m1" });
     expect(commonRoute([unset("post_scoring")])).toBeNull();
+  });
+});
+
+describe("refreshLiveModels scoping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("only refreshes the specified provider so connecting another provider does not touch unrelated API keys", async () => {
+    const xai = acct("xai_api", [model("grok-4.6", "xai_api")]);
+    const spy = vi.spyOn(api, "llmRefreshProviderModels").mockResolvedValue([]);
+
+    await refreshLiveModels([anthropic, xai], "claude_cli");
+    expect(spy).not.toHaveBeenCalled();
+
+    await refreshLiveModels([anthropic, xai], "xai_api");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledWith("xai_api");
   });
 });
