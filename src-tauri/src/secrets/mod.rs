@@ -62,7 +62,15 @@ fn map_err(e: keyring::Error) -> SecretError {
 
 impl SecretBackend for KeyringBackend {
     fn set(&self, key: &str, value: &str) -> Result<(), SecretError> {
-        self.entry(key)?.set_password(value).map_err(map_err)
+        let entry = self.entry(key)?;
+        // With ad-hoc code signing on macOS, updating an existing login Keychain item in place
+        // preserves the older build's CDHash ACL and can re-prompt on access. Deleting first so
+        // `set_password` adds a fresh entry binds the ACL to the current binary.
+        #[cfg(target_os = "macos")]
+        {
+            let _ = entry.delete_credential();
+        }
+        entry.set_password(value).map_err(map_err)
     }
 
     fn get(&self, key: &str) -> Result<Option<String>, SecretError> {
@@ -260,36 +268,32 @@ impl SecretsService {
     /// `key` is an opaque keychain_ref (for example `provider:anthropic_api`); SQLite stores only the ref.
     pub fn store(&self, key: &str, value: &str) -> Result<(), SecretError> {
         self.require_platform_ready()?;
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         self.backend.set(key, value)?;
-        self.cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(key.to_string(), value.to_string());
+        guard.insert(key.to_string(), value.to_string());
         Ok(())
     }
 
     pub fn load(&self, key: &str) -> Result<Option<String>, SecretError> {
         self.require_platform_ready()?;
-        {
-            let guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cached) = guard.get(key) {
-                return Ok(Some(cached.clone()));
-            }
+        // Hold the cache lock across the cold-miss backend read so concurrent callers on the
+        // first AI call serialize instead of stacking duplicate macOS Keychain password prompts.
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cached) = guard.get(key) {
+            return Ok(Some(cached.clone()));
         }
         let value = self.backend.get(key)?;
         if let Some(ref secret) = value {
-            self.cache
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .insert(key.to_string(), secret.clone());
+            guard.insert(key.to_string(), secret.clone());
         }
         Ok(value)
     }
 
     pub fn remove(&self, key: &str) -> Result<(), SecretError> {
         self.require_platform_ready()?;
+        let mut guard = self.cache.lock().unwrap_or_else(|e| e.into_inner());
         self.backend.delete(key)?;
-        self.cache.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+        guard.remove(key);
         Ok(())
     }
 }
@@ -434,6 +438,58 @@ mod tests {
         );
         assert!(svc.load("provider:anthropic_api").is_err());
         assert_eq!(svc.load("provider:anthropic_api").unwrap().as_deref(), Some("sk-ok"));
+    }
+
+    #[test]
+    fn concurrent_first_loads_only_touch_keychain_once() {
+        use std::sync::Barrier;
+        use std::time::Duration;
+
+        struct SlowCountingBackend {
+            gets: AtomicUsize,
+        }
+        impl SecretBackend for SlowCountingBackend {
+            fn set(&self, _k: &str, _v: &str) -> Result<(), SecretError> { Ok(()) }
+            fn get(&self, _k: &str) -> Result<Option<String>, SecretError> {
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(25));
+                Ok(Some("sk-shared".into()))
+            }
+            fn delete(&self, _k: &str) -> Result<(), SecretError> { Ok(()) }
+        }
+        struct SharedSlow(Arc<SlowCountingBackend>);
+        impl SecretBackend for SharedSlow {
+            fn set(&self, k: &str, v: &str) -> Result<(), SecretError> { self.0.set(k, v) }
+            fn get(&self, k: &str) -> Result<Option<String>, SecretError> { self.0.get(k) }
+            fn delete(&self, k: &str) -> Result<(), SecretError> { self.0.delete(k) }
+        }
+
+        let backend = Arc::new(SlowCountingBackend { gets: AtomicUsize::new(0) });
+        let svc = Arc::new(SecretsService::with_backend(
+            Box::new(SharedSlow(backend.clone())),
+            Platform::Macos,
+            true,
+        ));
+        let barrier = Arc::new(Barrier::new(4));
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let svc = svc.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    svc.load("provider:anthropic_api").unwrap()
+                })
+            })
+            .collect();
+
+        for h in handles {
+            assert_eq!(h.join().unwrap().as_deref(), Some("sk-shared"));
+        }
+        assert_eq!(
+            backend.gets.load(Ordering::SeqCst),
+            1,
+            "concurrent cold loads for the same key must coalesce into one OS keychain read"
+        );
     }
 
     #[test]

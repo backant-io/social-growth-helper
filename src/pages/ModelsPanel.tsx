@@ -111,15 +111,15 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
   const find = (t: ProviderType) => providers.find((p) => p.provider_type === t);
   const connected = connectedProviders(providers);
 
-  const run = async (tag: string, fn: () => Promise<void>, assign = false) => {
+  const run = async (tag: string, fn: () => Promise<void>, assignForProvider?: string) => {
     setBusy(tag);
     setError(null);
     setNote(null);
     try {
       await fn();
-      if (assign) {
+      if (assignForProvider) {
         setOpen(null);
-        const r = await autoAssignDefaults();
+        const r = await autoAssignDefaults(assignForProvider);
         if (r.assigned > 0) setNote(`Ready. ${r.label ?? "A default model"} is now used for ${r.assigned} task${r.assigned === 1 ? "" : "s"}. Change it below any time.`);
         else setNote("Connected. Models refreshed from the provider.");
       }
@@ -148,10 +148,10 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
     return (
       <ProviderRow key={def.type} def={def} acct={acct} open={open === def.type} onToggle={() => setOpen(open === def.type ? null : def.type)}>
         {def.type === "anthropic_api" && (
-          <KeyForm label="Anthropic API key" placeholder="sk-ant-..." stored={!!acct?.has_secret} disabled={offline || busy !== null} onSave={(k) => run("save-anthropic", async () => void (await api.llmSaveApiKeyProvider("anthropic_api", null, k)), true)} />
+          <KeyForm label="Anthropic API key" placeholder="sk-ant-..." stored={!!acct?.has_secret} disabled={offline || busy !== null} onSave={(k) => run("save-anthropic", async () => void (await api.llmSaveApiKeyProvider("anthropic_api", null, k)), "anthropic_api")} />
         )}
         {def.type === "xai_api" && (
-          <KeyForm label="xAI API key" placeholder="xai-..." stored={!!acct?.has_secret} disabled={offline || busy !== null} onSave={(k) => run("save-xai", async () => void (await api.llmSaveApiKeyProvider("xai_api", null, k)), true)} />
+          <KeyForm label="xAI API key" placeholder="xai-..." stored={!!acct?.has_secret} disabled={offline || busy !== null} onSave={(k) => run("save-xai", async () => void (await api.llmSaveApiKeyProvider("xai_api", null, k)), "xai_api")} />
         )}
         {def.type === "claude_cli" && (
           <>
@@ -163,7 +163,7 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
               <button type="button" className={btn} disabled={busy !== null} onClick={() => run("detect-cli", async () => setCliDetect(await api.llmDetectClaudeCli(cliPath.trim() || null)))}>
                 Detect
               </button>
-              <button type="button" className={btnPrimary} disabled={offline || busy !== null} onClick={() => run("connect-cli", async () => void (await api.llmConnectClaudeCli(null, cliPath.trim() || null)), true)}>
+              <button type="button" className={btnPrimary} disabled={offline || busy !== null} onClick={() => run("connect-cli", async () => void (await api.llmConnectClaudeCli(null, cliPath.trim() || null)), "claude_cli")}>
                 Connect
               </button>
             </div>
@@ -218,7 +218,7 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
                           setOauthStatus(`Sign-in ${res.outcome.state}. Start again.`);
                         }
                       },
-                      true,
+                      "xai_oauth",
                     )
                   }
                 >
@@ -232,7 +232,7 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
         {def.type === "grok_web" && (
           <>
             <p className={`text-xs ${muted}`}>Drives x.com/i/grok inside your X window. Fragile; prefer an API key or sign-in.</p>
-            <button type="button" className={btn} disabled={offline || busy !== null} onClick={() => run("grok-web", async () => void (await api.llmConnectGrokWeb(null)), true)}>
+            <button type="button" className={btn} disabled={offline || busy !== null} onClick={() => run("grok-web", async () => void (await api.llmConnectGrokWeb(null)), "grok_web")}>
               {acct ? "Re-check" : "Enable"}
             </button>
           </>
