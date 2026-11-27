@@ -431,7 +431,7 @@ async fn compose_and_post(d: &dyn BrowserDriver, kill: &KillSwitch, text: &str, 
     let closed = format!("!document.querySelector({})", q(COMPOSER));
     if !wait_for(d, &closed, t.confirm_wait, t.poll).await.unwrap_or(false) {
         return Ok(ComposeOutcome::Unconfirmed {
-            message: "Could not confirm the post yet. Check your X profile before posting again.".into(),
+            message: "Not confirmed yet".into(),
         });
     }
     let href = format!("(document.querySelector({}) || {{}}).href || null", q(TOAST_LINK));

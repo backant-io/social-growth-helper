@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { xPostUrl, candidateInsights, canEdit, fillSkeleton, fileName, parsePaths, percent, postLength, similarityNote, slotKeys, syncSlots } from "./creator";
+import { xPostUrl, candidateInsights, canEdit, statusLabel, fillSkeleton, fileName, parsePaths, percent, postLength, similarityNote, slotKeys, syncSlots } from "./creator";
 
 describe("postLength", () => {
   it("counts every link as 23 characters", () => {
@@ -66,5 +66,14 @@ describe("xPostUrl", () => {
     expect(xPostUrl("@bob", "2")).toBe("https://x.com/bob/status/2");
     expect(xPostUrl("", "2")).toBe("https://x.com/i/status/2");
     expect(xPostUrl("not a handle", "2")).toBe("https://x.com/i/status/2");
+  });
+});
+
+describe("statusLabel", () => {
+  it("uses short calm outcome lines with no advice", () => {
+    expect(statusLabel("published")).toBe("Posted");
+    expect(statusLabel("publishing")).toBe("Checking…");
+    expect(statusLabel("unconfirmed")).toBe("Not confirmed yet");
+    expect(statusLabel("failed")).toBe("Didn't post");
   });
 });

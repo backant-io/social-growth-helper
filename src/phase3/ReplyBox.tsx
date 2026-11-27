@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { enqueueGeneration } from "./genQueue";
-import { bundleForMode, charInfo, modeOfBundle, type ComposeMode } from "./logic";
+import { bundleForMode, charInfo, modeOfBundle, publishLine, type ComposeMode } from "./logic";
 import type { DraftView, QueueItem } from "./types";
 import { muted, Notice } from "./ui";
 
@@ -172,7 +172,8 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged, mode = "reply",
   const sent = status === "published";
   const busy = sending || status === "queued_for_publish" || status === "publishing";
   const info = charInfo(text);
-  const failure = status === "failed" ? (draft?.error_message ?? item.draft_error) : null;
+  const failedMessage = status === "failed" ? (draft?.error_message ?? item.draft_error) : null;
+  const line = publishLine(failedMessage ? "failed" : status, failedMessage);
   const url = draft?.published_url ?? item.draft_published_url;
 
   const quoting = mode === "quote";
@@ -248,10 +249,22 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged, mode = "reply",
 
       {warnings.length > 0 && <Notice tone="warn">{warnings.join(" ")}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
-      {failure && <Notice tone="error">{failure}</Notice>}
+      {line && line.action && (
+        <div className="flex items-center gap-3 text-sm" title={failedMessage ?? undefined}>
+          <span className={muted}>{line.text}</span>
+          <button type="button" data-testid="publish-retry" className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-bold hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={busy || generating || !text.trim() || info.over} onClick={() => void send()}>
+            {line.action}
+          </button>
+        </div>
+      )}
+      {line && !line.action && !sent && (
+        <p aria-live="polite" className={`text-sm ${muted}`}>
+          {line.text}
+        </p>
+      )}
       {sent && (
         <p className={`text-sm ${muted}`}>
-          {quoting ? "Quote posted." : "Reply posted."}{" "}
+          Posted{" "}
           {url && (
             <a href={url} target="_blank" rel="noreferrer" className="underline">
               View on X

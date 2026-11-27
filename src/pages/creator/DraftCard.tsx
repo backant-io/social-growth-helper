@@ -154,13 +154,13 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, publ
 
       {draft.status === "unconfirmed" && (
         <div role="alert" className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-          <p>{draft.error_message}</p>
+          <p>Not confirmed yet</p>
           <button type="button" className={`${btn} mt-2`} disabled={busy} onClick={async () => { const d = await run(() => api.reopen(draft.id)); if (d) onChanged(d); }}>
-            Not on X, post again
+            Post again
           </button>
         </div>
       )}
-      {draft.status === "failed" && draft.error_message && <div className="mt-3"><Notice tone="error">{draft.error_message}</Notice></div>}
+      {draft.status === "failed" && draft.error_message && <div className="mt-3" title={draft.error_message}><Notice tone="error">Didn't post</Notice></div>}
       {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
 
       {editable && (
@@ -171,7 +171,7 @@ export function DraftCard({ draft, format, threshold, maxChars, canPublish, publ
           <div className="flex flex-wrap items-center gap-2">
             {publishBlock && <span className={`text-xs ${muted}`}>{publishBlock}</span>}
             <button type="button" className={primary} disabled={busy || !online || !canPublish || !text.trim() || over} onClick={startPublish} title={offlineActionHint(online) ?? publishBlock}>
-              Post
+              {draft.status === "failed" ? "Try again" : "Post"}
             </button>
           </div>
         </footer>

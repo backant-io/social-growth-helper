@@ -57,6 +57,23 @@ export function repostMenuOptions(reposted: boolean): Array<{ id: RepostChoice; 
   ];
 }
 
+export const NOT_CONFIRMED = "Not confirmed yet";
+
+export interface PublishLine {
+  text: string;
+  /** The single follow-up action, if any. */
+  action: "Post again" | "Try again" | null;
+}
+
+/** One short, calm line for a publish outcome. No advice about checking X: just what happened and one next step. */
+export function publishLine(status: string | null | undefined, errorMessage?: string | null): PublishLine | null {
+  if (status === "published") return { text: "Posted", action: null };
+  if (status === "queued_for_publish" || status === "publishing") return { text: "Checking…", action: null };
+  if (status === "unconfirmed" || (status === "failed" && (errorMessage ?? "").startsWith(NOT_CONFIRMED))) return { text: NOT_CONFIRMED, action: "Post again" };
+  if (status === "failed") return { text: "Didn't post", action: "Try again" };
+  return null;
+}
+
 export function bundleText(actions: ActionName[]): ActionName | null {
   return actions.find(isTextAction) ?? null;
 }

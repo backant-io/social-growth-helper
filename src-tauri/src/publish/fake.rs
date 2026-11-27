@@ -444,8 +444,7 @@ mod tests {
         assert_eq!(r.steps(), vec![("like".into(), "done".into()), ("reply".into(), "uncertain".into())]);
         assert_eq!(r.status(), "failed");
         let msg = first.message.unwrap();
-        assert!(msg.contains("could not confirm your reply"), "{msg}");
-        assert!(!msg.contains('\n') && msg.len() < 100, "calm one-liner: {msg}");
+        assert_eq!(msg, "Not confirmed yet");
         let likes_before = r.fake.clicks().iter().filter(|c| *c == "like").count();
 
         r.fake.0.lock().unwrap().submit_ignored = false;

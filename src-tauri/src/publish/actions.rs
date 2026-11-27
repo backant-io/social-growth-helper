@@ -319,7 +319,6 @@ impl Page<'_> {
         let js = selectors::submit_result_js(self.post_id, self.me.as_deref(), snippet);
         let mut text_gone = 0u32;
         let mut toast_ok = false;
-        let mut error_toast = false;
         for _ in 0..self.t.polls.saturating_mul(2) {
             if let Ok(v) = self.d.eval_json(&js).await {
                 if let Ok(r) = serde_json::from_value::<SubmitResult>(v) {
@@ -327,7 +326,6 @@ impl Page<'_> {
                         return Ok(Outcome::Done { detail: None, post_id: Some(id) });
                     }
                     toast_ok |= r.toast.as_deref() == Some("ok");
-                    error_toast |= r.toast.as_deref() == Some("error");
                     if kind == ActionKind::Quote {
                         if r.holds {
                             text_gone = 0;
@@ -362,15 +360,10 @@ impl Page<'_> {
                 }
             }
             if toast_ok {
-                return Ok(Outcome::Done { detail: Some("Posted. It may take a moment to show up.".into()), post_id: None });
+                return Ok(Outcome::Done { detail: Some("Posted".into()), post_id: None });
             }
         }
-        let noun = if kind == ActionKind::Quote { "quote" } else { "reply" };
-        Ok(Outcome::Uncertain(if error_toast {
-            format!("X showed an error, so your {noun} is not confirmed. Check X before trying again.")
-        } else {
-            format!("Still checking: could not confirm your {noun} yet. Check X before trying again.")
-        }))
+        Ok(Outcome::Uncertain("Not confirmed yet".into()))
     }
 
     async fn find_published(&self, snippet: &str) -> Option<String> {

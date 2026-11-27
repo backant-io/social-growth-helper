@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, bundleForMode, modeOfBundle, repostMenuOptions, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, bundleForMode, modeOfBundle, repostMenuOptions, publishLine, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -77,7 +77,7 @@ describe("palette and steps", () => {
   it("summarises publish progress", () => {
     const s = stepSummary([
       { action: "like", status: "done", detail: null },
-      { action: "reply", status: "uncertain", detail: "check X" },
+      { action: "reply", status: "uncertain", detail: "Not confirmed yet" },
     ]);
     expect(s).toMatchObject({ done: 1, total: 2 });
     expect(s.blocked?.action).toBe("reply");
@@ -118,5 +118,22 @@ describe("repost menu", () => {
 
   it("turns Repost into Undo repost once reposted", () => {
     expect(repostMenuOptions(true).map((o) => o.label)).toEqual(["Undo repost", "Quote"]);
+  });
+});
+
+describe("publishLine", () => {
+  it("uses only short calm status lines", () => {
+    expect(publishLine("published")).toEqual({ text: "Posted", action: null });
+    expect(publishLine("publishing")).toEqual({ text: "Checking…", action: null });
+    expect(publishLine("queued_for_publish")).toEqual({ text: "Checking…", action: null });
+    expect(publishLine("unconfirmed")).toEqual({ text: "Not confirmed yet", action: "Post again" });
+    expect(publishLine("failed", "Not confirmed yet")).toEqual({ text: "Not confirmed yet", action: "Post again" });
+    expect(publishLine("failed", "the composer did not open")).toEqual({ text: "Didn't post", action: "Try again" });
+    expect(publishLine("draft")).toBeNull();
+  });
+
+  it("never tells the user to go check X", () => {
+    const all = [publishLine("published"), publishLine("publishing"), publishLine("unconfirmed"), publishLine("failed", "x")];
+    for (const l of all) expect(`${l?.text} ${l?.action}`).not.toMatch(/check (x|your)|profile|look at/i);
   });
 });

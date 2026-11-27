@@ -159,10 +159,10 @@ export function ScoutPage({ onGoToSettings }: Props) {
     setRepostBusy((b) => ({ ...b, [id]: true }));
     try {
       const r = await p3.engage(item.post.observed_id, "repost", undo);
-      if (!r.ok) throw new Error(r.message ?? "Could not repost. Try again.");
+      if (!r.ok) throw new Error("Didn't repost");
       setReposted((m) => ({ ...m, [id]: !undo }));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(e instanceof Error && e.message === "Didn't repost" ? e.message : "Didn't repost");
     } finally {
       setRepostBusy((b) => ({ ...b, [id]: false }));
     }
