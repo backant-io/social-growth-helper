@@ -75,6 +75,21 @@ export function compactCount(n: number): string {
   return String(n);
 }
 
+/** X-style age: "now", "5m", "3h", then "Nov 26" (adds the year when it is not the current one). */
+export function relativeTime(iso: string | null, nowMs: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const sec = Math.max(0, Math.round((nowMs - t) / 1000));
+  if (sec < 45) return "now";
+  if (sec < 3600) return `${Math.max(1, Math.round(sec / 60))}m`;
+  if (sec < 86_400) return `${Math.round(sec / 3600)}h`;
+  const d = new Date(t);
+  const month = d.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+  const sameYear = d.getUTCFullYear() === new Date(nowMs).getUTCFullYear();
+  return sameYear ? `${month} ${d.getUTCDate()}` : `${month} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+
 export function stepSummary(steps: StepView[]): { done: number; total: number; blocked: StepView | null } {
   return {
     done: steps.filter((s) => s.status === "done" || s.status === "skipped").length,
@@ -99,10 +114,10 @@ export interface Shortcut {
 
 export const SHORTCUTS: Shortcut[] = [
   { keys: "Cmd/Ctrl+K", label: "Open the command palette" },
-  { keys: "Cmd/Ctrl+Enter", label: "Publish the current draft (opens the confirmation)" },
+  { keys: "Cmd/Ctrl+Enter", label: "Send the reply for the current post" },
   { keys: "J / K", label: "Next / previous queue item or draft" },
   { keys: "D", label: "Dismiss the current queue item" },
-  { keys: "Enter", label: "Open the selected queue item in Reply Studio" },
+  { keys: "Enter", label: "Expand the selected queue item and draft a reply" },
   { keys: "?", label: "Show this list" },
   { keys: "Esc", label: "Close a dialog or the palette" },
 ];

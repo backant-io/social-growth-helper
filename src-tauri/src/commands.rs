@@ -59,6 +59,41 @@ pub fn get_app_info(state: State<'_, AppState>) -> AppResult<AppInfo> {
     })
 }
 
+/// Accepts only plain http(s) links, so nothing the page can do turns this into a way to run a program.
+pub fn external_url(raw: &str) -> AppResult<String> {
+    let url = raw.trim();
+    let rest = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://"));
+    let ok = rest.is_some_and(|r| !r.is_empty() && !r.starts_with('/'))
+        && url.chars().all(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '<' | '>' | '`' | '\\' | '^' | '{' | '}' | '|'));
+    if ok {
+        Ok(url.to_string())
+    } else {
+        Err(AppError::Validation("that is not a web link the app can open".into()))
+    }
+}
+
+/// Opens a link in the system browser. Links in the app window do nothing on their own, so the UI routes
+/// every external link (such as "View on X") through here.
+#[tauri::command]
+pub fn open_external(url: String) -> AppResult<()> {
+    let url = external_url(&url)?;
+    let mut cmd = if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(&url);
+        c
+    } else if cfg!(target_os = "windows") {
+        let mut c = std::process::Command::new("rundll32");
+        c.arg("url.dll,FileProtocolHandler").arg(&url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.spawn().map(|_| ()).map_err(|e| AppError::Other(format!("could not open your browser: {e}")))
+}
+
 #[tauri::command]
 pub fn get_onboarding_status(state: State<'_, AppState>) -> AppResult<OnboardingStatus> {
     let db = state.db.lock().unwrap();
@@ -153,15 +188,17 @@ pub fn set_browser_path(state: State<'_, AppState>, path: Option<String>) -> App
     }
 }
 
-/// Opens the dedicated X Chrome window. Blocked until the rules of engagement are acknowledged, because
-/// the next step is logging in and working inside X.
-#[tauri::command]
-pub async fn browser_launch_x(app: AppHandle, state: State<'_, AppState>) -> AppResult<bool> {
+/// Ensures the visible X Chrome window (used for login and Scout browsing) is open.
+pub async fn ensure_x_browser_open(app: &AppHandle, state: &AppState) -> AppResult<bool> {
     {
         let db = state.db.lock().unwrap();
         onboarding::require_acknowledged(&db)?;
     }
-    let override_path = configured_browser_path(&state)?;
+    if state.browser.is_running().await {
+        state.browser_health.set_expected_open(true);
+        return Ok(false);
+    }
+    let override_path = configured_browser_path(state)?;
     let install = discovery::discover_system(override_path.as_deref())?;
     let cfg = ChromeLaunchConfig {
         binary_path: install.path,
@@ -169,15 +206,132 @@ pub async fn browser_launch_x(app: AppHandle, state: State<'_, AppState>) -> App
         start_url: X_HOME_URL.to_string(),
         width: 560,
         height: 900,
+        invisible: false,
     };
     let launched = state.browser.launch(cfg).await?;
     state.browser_health.set_expected_open(true);
     if launched {
-        if let Err(e) = arrange_windows(&app, &state, true).await {
+        if let Err(e) = arrange_windows(app, state, true).await {
             log::warn!("restoring window layout: {e}");
         }
     }
     Ok(launched)
+}
+
+fn copy_dir_skipping_locks(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !src.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.starts_with("Singleton") || name_str == "LOCK" || name_str.ends_with(".lock") {
+            continue;
+        }
+        let from = entry.path();
+        let to = dst.join(&name);
+        if from.is_dir() {
+            copy_dir_skipping_locks(&from, &to)?;
+        } else {
+            let _ = std::fs::copy(&from, &to);
+        }
+    }
+    Ok(())
+}
+
+fn file_mtime(p: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).ok()?.modified().ok()
+}
+
+fn sync_profile_state_if_newer(src_profile: &Path, dst_profile: &Path) -> bool {
+    if !src_profile.exists() {
+        return false;
+    }
+    let src_cookies = src_profile.join("Default").join("Cookies");
+    let dst_cookies = dst_profile.join("Default").join("Cookies");
+    let needs_seed = !dst_profile.exists() || !dst_cookies.exists();
+    let src_newer = matches!((file_mtime(&src_cookies), file_mtime(&dst_cookies)), (Some(s), Some(d)) if s > d);
+    if !needs_seed && !src_newer {
+        return false;
+    }
+    let _ = std::fs::create_dir_all(dst_profile.join("Default"));
+    for root_file in ["Local State"] {
+        let s = src_profile.join(root_file);
+        if s.is_file() {
+            let _ = std::fs::copy(&s, dst_profile.join(root_file));
+        }
+    }
+    for def_file in ["Cookies", "Cookies-journal", "Preferences"] {
+        let s = src_profile.join("Default").join(def_file);
+        if s.is_file() {
+            let _ = std::fs::copy(&s, dst_profile.join("Default").join(def_file));
+        }
+    }
+    for def_dir in ["Local Storage", "Session Storage"] {
+        let _ = copy_dir_skipping_locks(&src_profile.join("Default").join(def_dir), &dst_profile.join("Default").join(def_dir));
+    }
+    true
+}
+
+/// Ensures the separate invisible reply/publish Chrome instance is running and shares cookies/session
+/// state with the visible X browser profile (`x-default`).
+pub async fn ensure_publish_browser_ready(state: &AppState) -> AppResult<()> {
+    {
+        let db = state.db.lock().unwrap();
+        onboarding::require_acknowledged(&db)?;
+    }
+    let override_path = configured_browser_path(state)?;
+    let install = discovery::discover_system(override_path.as_deref())?;
+    let scout_running = state.browser.is_running().await;
+
+    if scout_running {
+        let cookies = state.browser.export_cookies().await.unwrap_or_default();
+        if !state.publish_browser.is_running().await {
+            sync_profile_state_if_newer(&state.paths.browser_profile_dir, &state.paths.publish_browser_profile_dir);
+            let cfg = ChromeLaunchConfig {
+                binary_path: install.path,
+                profile_dir: state.paths.publish_browser_profile_dir.clone(),
+                start_url: "about:blank".to_string(),
+                width: 1280,
+                height: 900,
+                invisible: true,
+            };
+            state.publish_browser.launch(cfg).await?;
+        }
+        if !cookies.is_empty() {
+            state.publish_browser.import_cookies(&cookies).await?;
+        }
+    } else {
+        let src_cookies = state.paths.browser_profile_dir.join("Default").join("Cookies");
+        let dst_cookies = state.paths.publish_browser_profile_dir.join("Default").join("Cookies");
+        let src_newer = !dst_cookies.exists()
+            || matches!((file_mtime(&src_cookies), file_mtime(&dst_cookies)), (Some(s), Some(d)) if s > d);
+        if src_newer && state.publish_browser.is_running().await {
+            let _ = state.publish_browser.close().await;
+        }
+        sync_profile_state_if_newer(&state.paths.browser_profile_dir, &state.paths.publish_browser_profile_dir);
+        if !state.publish_browser.is_running().await {
+            let cfg = ChromeLaunchConfig {
+                binary_path: install.path,
+                profile_dir: state.paths.publish_browser_profile_dir.clone(),
+                start_url: X_HOME_URL.to_string(),
+                width: 1280,
+                height: 900,
+                invisible: true,
+            };
+            state.publish_browser.launch(cfg).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Opens the dedicated X Chrome window. Blocked until the rules of engagement are acknowledged, because
+/// the next step is logging in and working inside X.
+#[tauri::command]
+pub async fn browser_launch_x(app: AppHandle, state: State<'_, AppState>) -> AppResult<bool> {
+    ensure_x_browser_open(&app, &state).await
 }
 
 const MAIN_WINDOW: &str = "main";
@@ -414,7 +568,9 @@ pub fn begin_shutdown(app: &AppHandle) {
     }
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        handle.state::<AppState>().browser.shutdown().await;
+        let st = handle.state::<AppState>();
+        st.browser.shutdown().await;
+        st.publish_browser.shutdown().await;
         handle.exit(0);
     });
 }
@@ -1018,5 +1174,43 @@ pub async fn style_run_bench(
         onboarding::require_acknowledged(&db)?;
     }
     bench::run_style_bench(&state.db, &state.llm_router, &state.profile_id, input).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn only_plain_web_links_can_be_opened() {
+        assert_eq!(external_url(" https://x.com/naval/status/111?s=20 ").unwrap(), "https://x.com/naval/status/111?s=20");
+        for bad in ["", "x.com/naval", "file:///etc/passwd", "javascript:alert(1)", "https://", "https:///x", "https://x.com/a b", "https://x.com/\"; rm -rf", "calc.exe"] {
+            assert!(external_url(bad).is_err(), "{bad} must be refused");
+        }
+    }
+
+    #[test]
+    fn sync_profile_state_seeds_cookies_and_skips_singleton_locks() {
+        let dir = tempdir().unwrap();
+        let src = dir.path().join("x-default");
+        let dst = dir.path().join("x-publish");
+        std::fs::create_dir_all(src.join("Default").join("Local Storage")).unwrap();
+        std::fs::write(src.join("Local State"), b"{}").unwrap();
+        std::fs::write(src.join("Default").join("Cookies"), b"cookie-v1").unwrap();
+        std::fs::write(src.join("Default").join("Preferences"), b"{\"a\":1}").unwrap();
+        std::fs::write(src.join("Default").join("Local Storage").join("0001.ldb"), b"data").unwrap();
+        std::fs::write(src.join("Default").join("Local Storage").join("LOCK"), b"lock").unwrap();
+        std::fs::write(src.join("Default").join("Local Storage").join("SingletonSocket"), b"sock").unwrap();
+
+        assert!(sync_profile_state_if_newer(&src, &dst));
+        assert_eq!(std::fs::read(dst.join("Default").join("Cookies")).unwrap(), b"cookie-v1");
+        assert_eq!(std::fs::read(dst.join("Local State")).unwrap(), b"{}");
+        assert!(dst.join("Default").join("Local Storage").join("0001.ldb").exists());
+        assert!(!dst.join("Default").join("Local Storage").join("LOCK").exists());
+        assert!(!dst.join("Default").join("Local Storage").join("SingletonSocket").exists());
+
+        // Second sync without newer Cookies should be a no-op.
+        assert!(!sync_profile_state_if_newer(&src, &dst));
+    }
 }
 

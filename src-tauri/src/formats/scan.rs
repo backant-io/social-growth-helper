@@ -2,6 +2,7 @@
 //! The page script only reads. Metric text is parsed in Rust so the parsing is testable without a browser.
 
 use super::detect::PostMetrics;
+use crate::scout::model::MediaItem;
 use crate::browser::service::BrowserService;
 use crate::browser::BrowserError;
 use serde::Deserialize;
@@ -21,7 +22,27 @@ pub const READ_POSTS_WITH_METRICS_JS: &str = r#"(() => {
       promoted: !!a.querySelector('[data-testid="placementTracking"]'),
       repost: !!a.querySelector('[data-testid="socialContext"]'),
       metrics: a.querySelector('[role="group"][aria-label]')?.getAttribute('aria-label') || '',
-      time: a.querySelector('time')?.getAttribute('datetime') || null
+      time: a.querySelector('time')?.getAttribute('datetime') || null,
+      name: (a.querySelector('[data-testid="User-Name"]')?.innerText || '').split('\n')[0],
+      avatar: (() => { const u = a.querySelector('[data-testid="Tweet-User-Avatar"] img')?.src || ''; return /^https:\/\/pbs\.twimg\.com\/profile_images\//.test(u) ? u.replace(/_(normal|mini|bigger)\./, '_bigger.') : null; })(),
+      media: (() => {
+        const quote = a.querySelector('[data-testid="quoteTweet"]');
+        const items = [];
+        for (const img of a.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+          if ((quote && quote.contains(img)) || !/^https:\/\/pbs\.twimg\.com\//.test(img.src || '')) continue;
+          if (!items.some(x => x.url === img.src) && items.length < 4) items.push({ kind: 'image', url: img.src, poster_url: null, alt: img.alt || null, duration: null });
+        }
+        for (const vp of a.querySelectorAll('[data-testid="videoPlayer"]')) {
+          if (quote && quote.contains(vp)) continue;
+          const v = vp.querySelector('video');
+          if (!v) continue;
+          const src = v.currentSrc || v.src || '';
+          const poster = /^https:\/\/pbs\.twimg\.com\//.test(v.poster || '') ? v.poster : null;
+          const dur = (vp.innerText || '').match(/\b\d+:\d{2}\b/);
+          if (poster || /^https:\/\//.test(src)) items.push({ kind: poster && poster.includes('/tweet_video_thumb/') ? 'gif' : 'video', url: /^https:\/\//.test(src) ? src : null, poster_url: poster, alt: null, duration: dur ? dur[0] : null });
+        }
+        return items;
+      })()
     });
   }
   return out;
@@ -39,6 +60,12 @@ pub struct RawPost {
     #[serde(default)]
     pub metrics: String,
     pub time: Option<String>,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub media: Vec<MediaItem>,
 }
 
 fn parse_count(raw: &str) -> Option<u64> {
@@ -78,6 +105,9 @@ pub struct ScannedPost {
     pub text: String,
     pub posted_at: Option<String>,
     pub metrics: PostMetrics,
+    pub author_name: String,
+    pub avatar_url: Option<String>,
+    pub media: Vec<MediaItem>,
 }
 
 /// Keeps the creator's own original posts: no ads, no reposts, no posts by other authors, no empty text.
@@ -90,20 +120,47 @@ pub fn usable_posts(raw: Vec<RawPost>, creator: &str) -> Vec<ScannedPost> {
             handle: p.handle,
             text: p.text,
             posted_at: p.time,
+            author_name: p.name,
+            avatar_url: p.avatar,
+            media: p.media,
         })
         .collect()
 }
 
 const SCROLL_STEPS: usize = 4;
 
-/// Opens a creator's profile in the X window and reads the posts it renders. Read-only apart from scrolling.
-pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<ScannedPost>, BrowserError> {
+/// Read-only extraction of the profile header's follower count label (e.g. `"1,234 Followers"` or `"42.1K"`).
+pub const READ_PROFILE_FOLLOWERS_JS: &str = r#"(() => {
+  const el = document.querySelector('a[href$="/followers"], a[href$="/verified_followers"]');
+  return el ? (el.innerText || el.getAttribute('aria-label') || '') : null;
+})()"#;
+
+pub fn parse_followers_label(label: &str) -> Option<u64> {
+    let token = label
+        .split_whitespace()
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))?;
+    parse_count(token)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileScan {
+    pub followers: Option<u64>,
+    pub posts: Vec<ScannedPost>,
+}
+
+/// Opens a creator's profile in the X window and reads their follower count plus recent posts. Read-only apart from scrolling.
+pub async fn scan_profile_with_followers(browser: &BrowserService, handle: &str) -> Result<ProfileScan, BrowserError> {
     let d = browser.lock().await;
     if !d.is_running() {
         return Err(BrowserError::Disconnected);
     }
     d.navigate(&format!("https://x.com/{handle}")).await?;
     tokio::time::sleep(Duration::from_millis(1500)).await;
+    let followers = d
+        .eval_json(READ_PROFILE_FOLLOWERS_JS)
+        .await
+        .ok()
+        .and_then(|v| v.as_str().and_then(parse_followers_label));
     let mut all: Vec<RawPost> = Vec::new();
     for step in 0..=SCROLL_STEPS {
         let v = d.eval_json(READ_POSTS_WITH_METRICS_JS).await?;
@@ -119,7 +176,12 @@ pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<
             tokio::time::sleep(Duration::from_millis(1200)).await;
         }
     }
-    Ok(usable_posts(all, handle))
+    Ok(ProfileScan { followers, posts: usable_posts(all, handle) })
+}
+
+/// Opens a creator's profile in the X window and reads the posts it renders. Read-only apart from scrolling.
+pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<ScannedPost>, BrowserError> {
+    Ok(scan_profile_with_followers(browser, handle).await?.posts)
 }
 
 #[cfg(test)]
@@ -155,6 +217,9 @@ mod tests {
             repost,
             metrics: "10 likes".into(),
             time: None,
+            name: String::new(),
+            avatar: None,
+            media: vec![],
         };
         let posts = usable_posts(
             vec![

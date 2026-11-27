@@ -8,13 +8,24 @@ export interface Metrics {
   views: number;
 }
 
+export interface MediaItem {
+  kind: "image" | "video" | "gif";
+  url: string | null;
+  poster_url: string | null;
+  alt: string | null;
+  duration: string | null;
+}
+
 export interface PostView {
   observed_id: string;
   platform_post_id: string;
   handle: string;
+  author_name: string;
+  avatar_url: string | null;
   text: string;
   has_media: boolean;
   url: string;
+  media: MediaItem[];
 }
 
 export interface QueueItem {
@@ -22,6 +33,10 @@ export interface QueueItem {
   session_id: string | null;
   post: PostView;
   score: number;
+  outlier_score: number | null;
+  breakout_flags: string[];
+  author_followers: number | null;
+  author_verified: boolean;
   angle: string;
   reasoning: string;
   model_used: string;
@@ -29,6 +44,10 @@ export interface QueueItem {
   metrics: Metrics;
   posted_at: string | null;
   draft_id: string | null;
+  draft_text: string | null;
+  draft_status: string | null;
+  draft_error: string | null;
+  draft_published_url: string | null;
   created_at: string;
 }
 
@@ -90,6 +109,7 @@ export interface ScoutProgress {
   queued: number;
   scored: number;
   elapsed_sec: number;
+  target?: number | null;
 }
 
 export interface VariantView {
@@ -112,6 +132,9 @@ export interface DraftView {
   angle: string | null;
   reasoning: string | null;
   score: number | null;
+  outlier_score: number | null;
+  breakout_flags: string[];
+  author_followers: number | null;
   kind: string;
   initial_text: string;
   edited_text: string;

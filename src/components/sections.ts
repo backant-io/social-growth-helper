@@ -9,8 +9,7 @@ export interface Section {
 }
 
 export const SECTIONS: Section[] = [
-  { id: "scout", label: "Scout Queue", title: "Scout Queue", empty: "Start a session and posts worth answering will appear here.", phase: 3 },
-  { id: "reply", label: "Reply Studio", title: "Reply Studio", empty: "Pick a post from the Scout Queue to draft a reply in your voice.", phase: 4 },
+  { id: "scout", label: "Scout", title: "Scout", empty: "Start a session and posts worth answering will appear here with inline reply drafts.", phase: 3 },
   { id: "creator", label: "Creator", title: "Creator", empty: "Start an original post from a topic or a viral format.", phase: 5 },
   { id: "analytics", label: "Analytics", title: "Analytics", empty: "Your numbers show up here after the first sync.", phase: 6 },
   { id: "learning", label: "Learning", title: "Learning", empty: "Weekly insights appear after you have posted and Analytics has synced.", phase: 7 },

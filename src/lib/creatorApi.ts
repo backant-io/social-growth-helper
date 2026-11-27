@@ -38,6 +38,7 @@ export interface CreatorApi {
   saveSettings(s: CreatorSettings): Promise<CreatorSettings>;
   matchFormats(topic: string): Promise<FormatMatch[]>;
   generate(formatId: string, topic: string): Promise<Generated>;
+  variation(candidateId: string): Promise<Generated>;
   createBlank(formatId: string | null, text: string): Promise<OgcDraft>;
   drafts(): Promise<OgcDraft[]>;
   edit(id: string, text: string): Promise<OgcDraft>;
@@ -76,6 +77,7 @@ const tauriCreator: CreatorApi = {
   saveSettings: (settings) => call("creator_save_settings", { settings }),
   matchFormats: (topic) => call("creator_match_formats", { topic }),
   generate: (formatId, topic) => call("creator_generate", { formatId, topic }),
+  variation: (candidateId) => call("creator_variation", { candidateId }),
   createBlank: (formatId, text) => call("creator_create_blank", { formatId, text }),
   drafts: () => call("creator_drafts"),
   edit: (id, text) => call("creator_edit", { id, text }),

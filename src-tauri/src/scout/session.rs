@@ -2,8 +2,12 @@
 
 use super::filter::{classify, FilterConfig, FilterCounts, DEFAULT_MAX_AGE_SECS};
 use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead, Metrics, ScrapedPost};
+use super::outlier::{evaluate_outlier, OutlierSignals};
 use super::repo::{self, SessionParams};
-use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
+use super::score::{apply_outlier_and_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
+use crate::drafts::edit::DEFAULT_MAX_CHARS;
+use crate::drafts::generate::{self as draft_gen, GenRequest, Instruction};
+use crate::drafts::repo as draft_repo;
 use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::{BrowserService, X_FOLLOWING_URL, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
@@ -21,7 +25,12 @@ use std::sync::{Arc, Mutex};
 use crate::phase3::get_watchlist;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const EXHAUSTED_AFTER_EMPTY_SCROLLS: u32 = 5;
+/// A feed is only "exhausted" after this many scrolls in a row that revealed nothing new. X loads more posts
+/// lazily and sometimes stalls, so the loop waits, retries and reloads before it gives up.
+const EXHAUSTED_AFTER_EMPTY_SCROLLS: u32 = 14;
+/// After this many empty scrolls the feed page is reloaded once (the timeline is rebuilt from the top; posts
+/// already seen are skipped).
+const RELOAD_AFTER_EMPTY_SCROLLS: u32 = 7;
 /// The scout holds still while the user touched the page less than this long ago (SCT-14).
 pub const USER_IDLE_MS: u64 = 5_000;
 const MAX_THUMBS_PER_SESSION: usize = 12;
@@ -60,7 +69,14 @@ pub struct SessionSummary {
 
 /// Feeds every organic post the scout reads into continuous viral detection (OGC-06). It runs before the scout's
 /// own filters, because a stale or already-scored post can still be a good format source. Never fails the session.
-fn consider_for_formats(env: &ScoutEnv<'_>, thresholds: &ViralThresholds, post: &ScrapedPost, metrics: &Metrics, own_handle: Option<&str>) -> bool {
+fn consider_for_formats(
+    env: &ScoutEnv<'_>,
+    thresholds: &ViralThresholds,
+    post: &ScrapedPost,
+    metrics: &Metrics,
+    own_handle: Option<&str>,
+    author_followers: Option<i64>,
+) -> bool {
     let (Some(id), Some(handle)) = (post.id.as_deref(), post.handle.as_deref()) else { return false };
     if post.promoted || post.text.trim().is_empty() || own_handle.is_some_and(|me| me.eq_ignore_ascii_case(handle)) {
         return false;
@@ -68,10 +84,13 @@ fn consider_for_formats(env: &ScoutEnv<'_>, thresholds: &ViralThresholds, post: 
     let input = PostInput {
         platform_post_id: id.to_string(),
         author_handle: handle.to_string(),
-        author_followers: None,
+        author_followers: author_followers.and_then(|f| u64::try_from(f).ok()),
         text: post.text.clone(),
         metrics: PostMetrics { likes: metrics.likes, reposts: metrics.reposts, replies: metrics.replies, bookmarks: metrics.bookmarks, views: (metrics.views > 0).then_some(metrics.views) },
         posted_at: post.time.clone(),
+        author_name: post.author.clone(),
+        avatar_url: post.avatar_url.clone(),
+        media: post.resolved_media(),
     };
     let db = env.db.lock().unwrap();
     pipeline::consider_post(&db, env.profile_id, &input, PostSource::Scout, thresholds, false).map(|d| d.candidate.is_some()).unwrap_or(false)
@@ -114,7 +133,7 @@ async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], pref
         if m != "heuristic" {
             *model_name = m.clone();
         }
-        out.push((c.clone(), apply_preferences(s, c.post.handle.as_deref().unwrap_or(""), prefs), m));
+        out.push((c.clone(), apply_outlier_and_preferences(s, c, prefs), m));
     }
     out
 }
@@ -251,7 +270,10 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     let targets = targets(&params.feed_source, &watchlist);
     let following_in_play = uses_following(&params.feed_source);
     let per_target = ((params.max_posts as usize).div_ceil(targets.len().max(1))).max(5);
+    let queued_quota = params.stop_after_queued.filter(|_| targets.len() > 1).map(|n| ((n + targets.len() as i64 - 1) / targets.len() as i64).max(1));
     let (mut target_idx, mut target_new) = (0usize, 0usize);
+    let mut target_queued_start = 0i64;
+    let mut reloaded_this_target = false;
     let mut paused_total = Duration::ZERO;
     let mut thumb_budget = MAX_THUMBS_PER_SESSION;
     {
@@ -336,7 +358,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             new_ids += 1;
             target_new += 1;
             let metrics = post.metrics_label.as_deref().map(parse_metrics_label).unwrap_or_default();
-            if consider_for_formats(env, &viral_thresholds, &post, &metrics, read.me.as_deref()) {
+            let author_followers = post.handle.as_deref().and_then(|h| {
+                let db = env.db.lock().unwrap();
+                repo::lookup_author_followers(&db, env.profile_id, h)
+            });
+            if consider_for_formats(env, &viral_thresholds, &post, &metrics, read.me.as_deref(), author_followers) {
                 format_candidates += 1;
             }
             let drop = {
@@ -349,7 +375,17 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             }
             let age_secs = post.time.as_deref().and_then(parse_rfc3339_unix).map(|t| (cfg.now_unix - t).max(0)).unwrap_or(3600);
             let v = velocity(&metrics, age_secs);
-            candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, image: None });
+            let outlier = evaluate_outlier(&OutlierSignals {
+                metrics: &metrics,
+                age_minutes: age_secs / 60,
+                author_followers,
+                author_verified: post.author_verified,
+                is_repost: post.is_repost,
+                has_media: post.has_media || !post.resolved_media().is_empty(),
+                text: &post.text,
+                has_context: post.context_text().is_some(),
+            });
+            candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, author_followers, outlier, image: None });
         }
         attach_thumbnails(env, &mut candidates, &mut thumb_budget).await;
 
@@ -358,13 +394,64 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                 continue 'main;
             }
             let results = score_batch(env, &rubric, batch, &prefs, &mut heuristic_scored, &mut model_name).await;
-            let db = env.db.lock().unwrap();
-            for (c, s, model) in results {
-                let Ok(obs) = repo::upsert_observed(&db, env.profile_id, &c.post, &c.metrics, c.velocity, &params.feed_source) else { continue };
-                if repo::insert_evaluation(&db, &obs, session_id, rubric_version, &model, s.score, &s.angle, &s.reasoning).is_ok() {
-                    scored += 1;
-                    if s.score >= params.threshold {
-                        queued += 1;
+            let mut to_draft: Vec<(String, String, String)> = vec![];
+            {
+                let db = env.db.lock().unwrap();
+                for (c, s, model) in results {
+                    let Ok(obs) = repo::upsert_observed(&db, env.profile_id, &c.post, &c.metrics, c.velocity, &params.feed_source, c.author_followers) else { continue };
+                    if let Ok(eval_id) = repo::insert_evaluation_with_outlier(
+                        &db,
+                        &obs,
+                        session_id,
+                        rubric_version,
+                        &model,
+                        s.score,
+                        &s.angle,
+                        &s.reasoning,
+                        Some(c.outlier.outlier_score),
+                        &c.outlier.breakout_flags,
+                    ) {
+                        scored += 1;
+                        if s.score >= params.threshold {
+                            queued += 1;
+                            to_draft.push((eval_id, s.angle, s.reasoning));
+                        }
+                    }
+                }
+            }
+            if env.completion.is_configured(TaskSlot::ReplyDrafting) && !to_draft.is_empty() {
+                for (eval_id, angle, reasoning) in to_draft {
+                    if env.kill.is_engaged() || env.stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let prep = {
+                        let db = env.db.lock().unwrap();
+                        let Ok(draft_id) = draft_repo::create_for_evaluation(&db, env.profile_id, &eval_id) else { continue };
+                        let Ok(view) = draft_repo::get_view(&db, &draft_id) else { continue };
+                        if !view.edited_text.trim().is_empty() || !view.variants.is_empty() {
+                            continue;
+                        }
+                        let Ok(style) = draft_repo::load_style_for_generation(&db, env.profile_id, &view.post.text) else { continue };
+                        let context = draft_repo::post_context(&db, &view.post.observed_id).ok().flatten();
+                        Some((draft_id, view, style, context))
+                    };
+                    let Some((draft_id, view, style, context)) = prep else { continue };
+                    let req = GenRequest {
+                        quote: view.kind == "quote",
+                        handle: &view.post.handle,
+                        post_text: &view.post.text,
+                        max_chars: DEFAULT_MAX_CHARS,
+                        style: &style,
+                        instruction: Instruction::Fresh,
+                        current: None,
+                        angle: (!angle.trim().is_empty()).then_some(angle.as_str()),
+                        model_hint: None,
+                        context: context.as_deref(),
+                        why_working: (!reasoning.trim().is_empty()).then_some(reasoning.as_str()),
+                    };
+                    if let Ok(gen) = draft_gen::generate(&*env.completion, &req).await {
+                        let db = env.db.lock().unwrap();
+                        let _ = draft_repo::add_variants(&db, &draft_id, &gen.variants, &gen.model);
                     }
                 }
             }
@@ -377,7 +464,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         }
         env.sink.emit(
             "scout:progress",
-            json!({ "session_id": session_id, "scanned": scanned, "queued": queued, "scored": scored, "elapsed_sec": started.elapsed().as_secs(), "filtered": filtered }),
+            json!({ "session_id": session_id, "scanned": scanned, "queued": queued, "target": params.stop_after_queued, "scored": scored, "elapsed_sec": started.elapsed().as_secs(), "filtered": filtered }),
         );
 
         if new_ids == 0 {
@@ -385,13 +472,26 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         } else {
             empty_scrolls = 0;
         }
-        let target_done = empty_scrolls >= EXHAUSTED_AFTER_EMPTY_SCROLLS || (targets.len() > 1 && target_new >= per_target);
+        if empty_scrolls == RELOAD_AFTER_EMPTY_SCROLLS && !reloaded_this_target {
+            reloaded_this_target = true;
+            let d = env.browser.lock().await;
+            if visit(&*d, &targets[target_idx], following_in_play).await.is_err() {
+                break 'main "browser_error".into();
+            }
+            drop(d);
+            env.kill.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0)), env.stop).await;
+            continue;
+        }
+        let quota_met = queued_quota.is_some_and(|q| queued - target_queued_start >= q);
+        let target_done = empty_scrolls >= EXHAUSTED_AFTER_EMPTY_SCROLLS || (targets.len() > 1 && (target_new >= per_target || quota_met));
         if target_done {
             if target_idx + 1 >= targets.len() {
                 break "feed_exhausted".into();
             }
             target_idx += 1;
             (target_new, empty_scrolls) = (0, 0);
+            target_queued_start = queued;
+            reloaded_this_target = false;
             let d = env.browser.lock().await;
             if visit(&*d, &targets[target_idx], following_in_play).await.is_err() {
                 break 'main "browser_error".into();
@@ -403,7 +503,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
 
         {
             let d = env.browser.lock().await;
-            let delta = 700.0 + jitter((0, 400)) as f64;
+            let stalled = empty_scrolls.min(6) as f64;
+            let delta = 700.0 + jitter((0, 400)) as f64 + stalled * 350.0;
+            if empty_scrolls > 0 {
+                let _ = d.eval_json(&selectors::retry_feed_js()).await;
+            }
             let _ = d.eval_json(&selectors::set_busy_js(true)).await;
             let scrolled = d.wheel_scroll(640.0, 500.0, delta).await;
             let _ = d.eval_json(&selectors::set_busy_js(false)).await;
@@ -413,6 +517,9 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         }
         if !env.kill.sleep(Duration::from_millis(jitter(env.pause_ms)), env.stop).await {
             continue;
+        }
+        if empty_scrolls > 0 && env.pause_ms.1 > 0 {
+            env.kill.sleep(Duration::from_millis(1200 * u64::from(empty_scrolls.min(4))), env.stop).await;
         }
     };
 
@@ -459,7 +566,7 @@ mod tests {
 
     async fn browser(mock: &MockDriver) -> BrowserService {
         let svc = BrowserService::new(Box::new(mock.clone()));
-        svc.launch(ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: X_HOME_URL.into(), width: 1, height: 1 }).await.unwrap();
+        svc.launch(ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: X_HOME_URL.into(), width: 1, height: 1, invisible: false }).await.unwrap();
         svc
     }
 
@@ -551,6 +658,27 @@ mod tests {
         let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
         let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
         assert_eq!((s.reason.as_str(), s.scanned), ("feed_exhausted", 3));
+    }
+
+    #[tokio::test]
+    async fn keeps_scrolling_through_a_stall_until_the_target_is_found() {
+        use std::sync::atomic::AtomicUsize;
+        let reads = Arc::new(AtomicUsize::new(0));
+        let rc = reads.clone();
+        let mock = MockDriver::new().with_eval_fn(move |js| {
+            if js.contains("posts.push") {
+                let n = rc.fetch_add(1, Ordering::SeqCst);
+                return if n < 9 { feed(3, 0) } else { feed(12, 0) };
+            }
+            feed(3, 0)
+        });
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(500, Some(8));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!(s.reason, "queue_goal", "a feed that stalls for several scrolls is not exhausted");
+        assert!(s.queued >= 8);
     }
 
     #[tokio::test]

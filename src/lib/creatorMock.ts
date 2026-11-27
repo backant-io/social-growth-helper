@@ -5,6 +5,13 @@ let seq = 0;
 const id = (p: string) => `${p}-${++seq}`;
 const now = () => new Date().toISOString();
 
+const avatar = (color: string, ch: string) =>
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${color}"/><text x="32" y="43" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="30" font-weight="700">${ch}</text></svg>`);
+const chart =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="#18181b"/><path d="M40 300 L170 250 L300 210 L440 120 L590 60" stroke="#10b981" stroke-width="5" fill="none"/><text x="40" y="54" fill="#e4e4e7" font-family="sans-serif" font-size="22" font-weight="600">Month 6: 12 to 4,100 followers</text></svg>');
+
 const SEED_TEXT = "Unpopular opinion: hustle culture is wrong. It burns people out before they find work they love.";
 
 function record(bp: FormatBlueprint, extra: Partial<FormatRecord> = {}): FormatRecord {
@@ -46,10 +53,13 @@ export function createMockCreator(): CreatorApi {
       id: id("cand"),
       platform_post_id: "2",
       author_handle: "bob",
+      author_name: "Bob Lindqvist",
+      avatar_url: avatar("#7c3aed", "B"),
       author_followers: 4200,
       text: "I spent 6 months building in public. Here is what nobody tells you: the audience is not the product.",
+      media: [{ kind: "image", url: chart, poster_url: null, alt: "Follower growth chart", duration: null }],
       metrics: { likes: 1800, reposts: 210, replies: 95, bookmarks: 420, views: 190000 },
-      posted_at: null,
+      posted_at: new Date(Date.now() - 5 * 3600_000).toISOString(),
       source: "watchlist",
       virality_score: 74,
       reasons: ["Engagement is 1.2x the author's follower count", "Bookmarks are 23% of likes"],
@@ -58,7 +68,27 @@ export function createMockCreator(): CreatorApi {
       error_message: null,
       created_at: now(),
     },
+    {
+      id: id("cand"),
+      platform_post_id: "3",
+      author_handle: "alice",
+      author_name: "Alice Moreau",
+      avatar_url: avatar("#be123c", "A"),
+      author_followers: 18000,
+      text: SEED_TEXT,
+      media: [],
+      metrics: { likes: 5200, reposts: 640, replies: 210, bookmarks: 1100, views: 610000 },
+      posted_at: new Date(Date.now() - 30 * 3600_000).toISOString(),
+      source: "scout",
+      virality_score: 88,
+      reasons: ["Reached 34x her follower count", "Saved more than most posts of this length"],
+      status: "extracted",
+      format_id: null,
+      error_message: null,
+      created_at: now(),
+    },
   ];
+  candidates[1].format_id = formats[0].id;
   let watch: WatchEntry[] = [];
   let drafts: OgcDraft[] = [];
   let thresholds: ViralThresholds = { min_engagement: 150, reach_multiple: 0.25, bookmark_ratio: 0.15, min_bookmarks: 15, assumed_followers: 5000 };
@@ -85,6 +115,28 @@ export function createMockCreator(): CreatorApi {
   const replaceDraft = (d: OgcDraft) => {
     drafts = drafts.map((x) => (x.id === d.id ? d : x));
     return d;
+  };
+  const extractOne = (cid: string) => {
+    const c = candidates.find((x) => x.id === cid);
+    if (!c) throw new Error("that post is no longer in your list");
+    const f = record(
+      {
+        ...seedBlueprint,
+        name: "Lesson nobody tells you",
+        archetype: "story_lesson",
+        hook_formula: "Open with what you did, then the lesson nobody tells you",
+        skeleton: "I spent {time} {doing}. Here is what nobody tells you: {lesson}.",
+        slots: [
+          { key: "time", label: "How long", hint: "" },
+          { key: "doing", label: "What you did", hint: "" },
+          { key: "lesson", label: "The lesson", hint: "" },
+        ],
+      },
+      { example_texts: [c.text], observed_win_rate: 0.38 },
+    );
+    formats = [f, ...formats];
+    candidates = candidates.map((x) => (x.id === cid ? { ...x, status: "extracted", format_id: f.id } : x));
+    return { candidate_id: cid, format: f, merged: false, similarity: null };
   };
   const find = (draftId: string) => {
     const d = drafts.find((x) => x.id === draftId);
@@ -113,15 +165,12 @@ export function createMockCreator(): CreatorApi {
     dismissCandidate: async (cid) => {
       candidates = candidates.map((c) => (c.id === cid ? { ...c, status: "dismissed" } : c));
     },
-    extract: async () => {
-      throw new Error('No model is chosen for "format_extraction". Pick one in Settings > AI models once the model router is connected; until then you can still build and edit formats by hand.');
+    extract: async (cid) => extractOne(cid),
+    extractPending: async () => {
+      const pending = candidates.filter((c) => c.status === "pending");
+      pending.forEach((c) => extractOne(c.id));
+      return { created: pending.length, merged: 0, failed: 0, stopped_reason: null };
     },
-    extractPending: async () => ({
-      created: 0,
-      merged: 0,
-      failed: 0,
-      stopped_reason: 'No model is chosen for "format_extraction". Pick one in Settings > AI models once the model router is connected; until then you can still build and edit formats by hand.',
-    }),
     addPost: async (post) => {
       const m = post.url.match(/(?:x|twitter)\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/);
       if (!m) throw new Error("paste a post link like https://x.com/name/status/123456789");
@@ -129,6 +178,9 @@ export function createMockCreator(): CreatorApi {
         id: id("cand"),
         platform_post_id: m[2],
         author_handle: m[1],
+        author_name: "",
+        avatar_url: null,
+        media: [],
         author_followers: post.author_followers,
         text: post.text,
         metrics: { likes: post.likes, reposts: post.reposts, replies: post.replies, bookmarks: post.bookmarks, views: post.views },
@@ -158,14 +210,16 @@ export function createMockCreator(): CreatorApi {
     watchRemove: async (wid) => {
       watch = watch.filter((w) => w.id !== wid);
     },
-    watchScan: async () => {
-      throw new Error("Browser control is only available in the desktop app.");
+    watchScan: async (wid) => {
+      const w = watch.find((x) => x.id === wid);
+      return { handle: w?.handle ?? "", posts_read: 30, flagged: 0, new_candidates: 0 };
     },
     settings: async () => settings,
     saveSettings: async (s) => (settings = s),
     matchFormats: async () => formats.filter((f) => f.status === "active").map((f) => ({ format_id: f.id, score: 0.5 })),
     generate: async (formatId, topic) => {
-      if (!topic.trim()) throw new Error("write a rough thought or topic first");
+      const subject = topic.trim() || "shipping small things often";
+      topic = subject;
       const batch = id("batch");
       const texts = [
         `Unpopular opinion: ${topic.trim()} is overrated.\n\nMost people copy it without asking what it costs.\n\nPick the version that fits your week.`,
@@ -173,6 +227,21 @@ export function createMockCreator(): CreatorApi {
         `Everyone says ${topic.trim()} works. I tested it for a month and it mostly didn't.`,
       ];
       const created = texts.map((t) => ({ ...draft(t, "variant", formatId, batch, topic), similarity: 0.12 }));
+      drafts = [...created, ...drafts];
+      return { batch_id: batch, drafts: created };
+    },
+    variation: async (cid) => {
+      const c = candidates.find((x) => x.id === cid);
+      if (!c) throw new Error("that post is no longer in your list");
+      const f = c.format_id ? c.format_id : extractOne(cid).format.id;
+      const batch = id("batch");
+      const label = `Variation of @${c.author_handle}`;
+      const texts = [
+        "I spent a year shipping weekly. Nobody tells you: consistency is the product, the audience just follows.",
+        "Six months of posting daily taught me one thing: the habit is the asset, not the follower count.",
+        "Here is what building in public really gave me: a reason to finish things, not an audience.",
+      ];
+      const created = texts.map((t) => ({ ...draft(t, "variant", f, batch, label), similarity: 0.31 }));
       drafts = [...created, ...drafts];
       return { batch_id: batch, drafts: created };
     },

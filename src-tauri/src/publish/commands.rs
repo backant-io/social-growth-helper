@@ -24,9 +24,16 @@ impl JobRunner for AppRunner {
         let sink = TauriSink(self.handle.clone());
         let completion = p3.completion();
         let _job = state.jobs.register("Publishing");
+        if let Err(e) = crate::commands::ensure_publish_browser_ready(&state).await {
+            return JobResult {
+                ok: false,
+                message: Some(format!("Could not prepare background publish browser: {e}")),
+                published_post_id: None,
+            };
+        }
         let env = PublishEnv {
             db: &state.db,
-            browser: &state.browser,
+            browser: &state.publish_browser,
             kill: &p3.kill,
             sink: &sink,
             profile_id: &state.profile_id,
@@ -54,13 +61,15 @@ pub fn spawn_worker(app: &AppHandle) {
     });
 }
 
-/// The user pressed Publish and confirmed the exact text. Queues the whole approved bundle.
+/// The user pressed Publish and confirmed the exact text. Queues the whole approved bundle
+/// on the separate invisible publish browser (sharing cookies/profile state with the Scout browser).
 #[tauri::command]
-pub fn publish_draft(state: State<'_, AppState>, p3: State<'_, Phase3>, draft_id: String, confirmed_text: String) -> AppResult<()> {
+pub async fn publish_draft(state: State<'_, AppState>, p3: State<'_, Phase3>, draft_id: String, confirmed_text: String) -> AppResult<()> {
     let approval = {
         let db = state.db.lock().unwrap();
         gate::approve_bundle(&db, &state.profile_id, &draft_id, &confirmed_text, p3.kill.is_engaged())?
     };
+    crate::commands::ensure_publish_browser_ready(&state).await?;
     p3.publish.submit(approval);
     Ok(())
 }
@@ -73,6 +82,7 @@ pub async fn engage_action(state: State<'_, AppState>, p3: State<'_, Phase3>, ob
         let db = state.db.lock().unwrap();
         gate::approve_action(&db, &observed_post_id, kind, undo, p3.kill.is_engaged())?
     };
+    crate::commands::ensure_publish_browser_ready(&state).await?;
     let rx = p3.publish.submit_and_wait(approval);
     rx.await.map_err(|_| AppError::Other("the publish worker stopped".into()))
 }
@@ -100,7 +110,8 @@ pub async fn get_action_state(state: State<'_, AppState>, p3: State<'_, Phase3>,
         (post, known)
     };
     let live = if refresh {
-        executor::probe_state(&state.browser, &post.handle, &post.platform_post_id, &p3.kill)
+        crate::commands::ensure_publish_browser_ready(&state).await?;
+        executor::probe_state(&state.publish_browser, &post.handle, &post.platform_post_id, &p3.kill)
             .await?
             .map(|p| LiveState { like: p.like, bookmark: p.bookmark, repost: p.repost, follow: p.follow })
     } else {
@@ -136,7 +147,7 @@ struct LiveToggler<'a> {
 #[async_trait::async_trait]
 impl super::checklist::Toggler for LiveToggler<'_> {
     async fn probe(&self) -> Result<Option<super::actions::Probe>, String> {
-        executor::probe_state(&self.state.browser, &self.handle, &self.post_id, &self.p3.kill).await.map_err(|e| e.to_string())
+        executor::probe_state(&self.state.publish_browser, &self.handle, &self.post_id, &self.p3.kill).await.map_err(|e| e.to_string())
     }
 
     async fn toggle(&self, kind: ActionKind, undo: bool) -> JobResult {
@@ -158,6 +169,7 @@ impl super::checklist::Toggler for LiveToggler<'_> {
 #[tauri::command]
 pub async fn checklist_run(state: State<'_, AppState>, p3: State<'_, Phase3>, post_url: String) -> AppResult<super::checklist::ChecklistReport> {
     let (handle, post_id) = super::checklist::parse_post_url(&post_url)?;
+    crate::commands::ensure_publish_browser_ready(&state).await?;
     let observed_id = {
         let db = state.db.lock().unwrap();
         prepo::ensure_observed(&db, &state.profile_id, &handle, &post_id)?

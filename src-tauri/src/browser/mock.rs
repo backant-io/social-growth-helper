@@ -12,6 +12,7 @@ pub struct MockDriver {
     eval_fn: Option<EvalFn>,
     screenshot: Arc<Mutex<Vec<u8>>>,
     pub bounds: Arc<Mutex<WindowBounds>>,
+    pub cookies: Arc<Mutex<Vec<Value>>>,
 }
 
 pub type EvalFn = Arc<dyn Fn(&str) -> Value + Send + Sync>;
@@ -26,6 +27,7 @@ impl MockDriver {
             eval_fn: None,
             screenshot: Arc::new(Mutex::new(vec![0x89, 0x50])),
             bounds: Arc::new(Mutex::new(WindowBounds { left: 0, top: 0, width: 560, height: 900 })),
+            cookies: Arc::default(),
         }
     }
 
@@ -114,6 +116,15 @@ impl BrowserDriver for MockDriver {
     }
     async fn bring_to_front(&self) -> Result<(), BrowserError> {
         self.record("front");
+        Ok(())
+    }
+    async fn export_cookies(&self) -> Result<Vec<Value>, BrowserError> {
+        self.record("export_cookies");
+        Ok(self.cookies.lock().unwrap().clone())
+    }
+    async fn import_cookies(&self, cookies: &[Value]) -> Result<(), BrowserError> {
+        self.record(format!("import_cookies {}", cookies.len()));
+        *self.cookies.lock().unwrap() = cookies.to_vec();
         Ok(())
     }
     async fn get_bounds(&self) -> Result<WindowBounds, BrowserError> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, relativeTime, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -36,6 +36,19 @@ describe("text helpers", () => {
   });
 });
 
+describe("relativeTime", () => {
+  const now = Date.parse("2026-11-27T12:00:00Z");
+  it("formats the age like X does", () => {
+    expect(relativeTime("2026-11-27T11:59:50Z", now)).toBe("now");
+    expect(relativeTime("2026-11-27T11:48:00Z", now)).toBe("12m");
+    expect(relativeTime("2026-11-27T09:00:00Z", now)).toBe("3h");
+    expect(relativeTime("2026-11-20T09:00:00Z", now)).toBe("Nov 20");
+    expect(relativeTime("2025-03-02T09:00:00Z", now)).toBe("Mar 2, 2025");
+    expect(relativeTime(null, now)).toBe("");
+    expect(relativeTime("nope", now)).toBe("");
+  });
+});
+
 describe("shortcuts", () => {
   it("recognises the palette and publish combos anywhere", () => {
     expect(matchShortcut({ key: "k", metaKey: true })).toBe("palette");
@@ -53,10 +66,10 @@ describe("shortcuts", () => {
 describe("palette and steps", () => {
   const cmds = [
     { id: "a", label: "Start scout session" },
-    { id: "b", label: "Open Reply Studio" },
+    { id: "b", label: "Open Scout" },
   ];
   it("filters by every word", () => {
-    expect(filterCommands(cmds, "reply studio").map((c) => c.id)).toEqual(["b"]);
+    expect(filterCommands(cmds, "open scout").map((c) => c.id)).toEqual(["b"]);
     expect(filterCommands(cmds, "")).toHaveLength(2);
     expect(filterCommands(cmds, "zzz")).toHaveLength(0);
   });

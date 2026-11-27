@@ -89,6 +89,7 @@ pub async fn draft_generate(state: State<'_, AppState>, p3: State<'_, Phase3>, d
         angle: view.angle.as_deref(),
         model_hint: model.as_deref().filter(|m| !m.trim().is_empty()),
         context: context.as_deref(),
+        why_working: view.reasoning.as_deref(),
     };
     let generated = generate(&*provider, &req).await.map_err(|e| AppError::Other(e.to_string()))?;
     let db = state.db.lock().unwrap();

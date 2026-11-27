@@ -214,7 +214,7 @@ mod tests {
     use serde_json::json;
 
     fn cfg() -> ChromeLaunchConfig {
-        ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: "https://x.com/home".into(), width: 1, height: 1 }
+        ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: "https://x.com/home".into(), width: 1, height: 1, invisible: false }
     }
 
     fn params() -> SessionParams {

@@ -133,6 +133,12 @@ pub fn wipe(conn: &Connection, paths: &AppPaths, secrets: &SecretsService, confi
             Err(e) => report.warnings.push(format!("could not delete the browser profile: {e}")),
         }
     }
+    if paths.publish_browser_profile_dir.exists() && !paths.publish_browser_profile_dir.starts_with(&paths.data_dir) {
+        match std::fs::remove_dir_all(&paths.publish_browser_profile_dir) {
+            Ok(()) => report.files_removed += 1,
+            Err(e) => report.warnings.push(format!("could not delete the publish browser profile: {e}")),
+        }
+    }
     Ok(report)
 }
 

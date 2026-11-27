@@ -24,6 +24,9 @@ pub struct ChromeLaunchConfig {
     pub start_url: String,
     pub width: u32,
     pub height: u32,
+    /// When `true`, launch Chrome invisibly (`--headless=new`) for background reply publishing
+    /// instead of a visible `--app` window.
+    pub invisible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -110,6 +113,12 @@ pub trait BrowserDriver: Send + Sync {
     /// Graceful `Browser.close` so Chrome flushes cookies and storage before exiting (BRW-16).
     /// Raises the X window (tray "Focus X window", challenge takeover). No-op for drivers without windows.
     async fn bring_to_front(&self) -> Result<(), BrowserError> {
+        Ok(())
+    }
+    async fn export_cookies(&self) -> Result<Vec<serde_json::Value>, BrowserError> {
+        Ok(vec![])
+    }
+    async fn import_cookies(&self, _cookies: &[serde_json::Value]) -> Result<(), BrowserError> {
         Ok(())
     }
     async fn close_gracefully(&mut self) -> Result<(), BrowserError>;

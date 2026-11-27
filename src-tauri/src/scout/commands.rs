@@ -41,12 +41,10 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
     if p3.kill.is_engaged() {
         return Err(AppError::Validation("Everything is paused (kill switch on). Resume it before scouting.".into()));
     }
-    if !state.browser.is_running().await {
-        return Err(AppError::Validation("Open the X window first (sidebar, then Open X).".into()));
-    }
     if matches!(params.feed_source.as_str(), "watchlist" | "both") && crate::phase3::get_watchlist(&state.db.lock().unwrap()).is_empty() {
         return Err(AppError::Validation("Add accounts to your watchlist in Settings first.".into()));
     }
+    crate::commands::ensure_x_browser_open(&app, &state).await?;
     let stop = Arc::new(AtomicBool::new(false));
     let pause = Arc::new(AtomicBool::new(false));
     let session_id = {

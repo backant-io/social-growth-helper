@@ -1,4 +1,4 @@
-use super::model::{Metrics, ScrapedPost};
+use super::model::{MediaItem, Metrics, ScrapedPost};
 use crate::drafts::repo::{post_url, PostView};
 use crate::error::{AppError, AppResult};
 use crate::storage::repo::{get_setting, set_setting};
@@ -69,21 +69,81 @@ pub fn set_threshold(conn: &Connection, v: f64) -> AppResult<f64> {
     Ok(v)
 }
 
-pub fn upsert_observed(conn: &Connection, profile_id: &str, p: &ScrapedPost, m: &Metrics, velocity: f64, feed_source: &str) -> AppResult<String> {
+/// Best known follower count for `@handle`: checks `creator_watchlist.followers` first, then the most recent
+/// `observed_posts.author_followers` row for that handle.
+pub fn lookup_author_followers(conn: &Connection, profile_id: &str, handle: &str) -> Option<i64> {
+    let clean = handle.trim().trim_start_matches('@');
+    if clean.is_empty() {
+        return None;
+    }
+    if let Ok(Some(f)) = conn.query_row(
+        "SELECT followers FROM creator_watchlist WHERE profile_id = ?1 AND lower(handle) = lower(?2) AND followers IS NOT NULL LIMIT 1",
+        params![profile_id, clean],
+        |r| r.get::<_, Option<i64>>(0),
+    ) {
+        return Some(f);
+    }
+    conn.query_row(
+        "SELECT author_followers FROM observed_posts WHERE profile_id = ?1 AND lower(author_handle) = lower(?2) AND author_followers IS NOT NULL ORDER BY first_seen_at DESC LIMIT 1",
+        params![profile_id, clean],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+pub fn upsert_observed(
+    conn: &Connection,
+    profile_id: &str,
+    p: &ScrapedPost,
+    m: &Metrics,
+    velocity: f64,
+    feed_source: &str,
+    author_followers: Option<i64>,
+) -> AppResult<String> {
     let pid = p.id.clone().unwrap_or_default();
     let metrics = serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
+    let media_items = p.resolved_media();
+    let media_json = serde_json::to_string(&media_items).unwrap_or_else(|_| "[]".into());
     if let Some(id) = conn
         .query_row("SELECT id FROM observed_posts WHERE profile_id = ?1 AND platform_post_id = ?2", params![profile_id, pid], |r| r.get::<_, String>(0))
         .optional()?
     {
+        let _ = conn.execute(
+            "UPDATE observed_posts
+             SET author_followers = COALESCE(?2, author_followers),
+                 author_verified = MAX(author_verified, ?3),
+                 media_json = CASE WHEN ?4 <> '[]' THEN ?4 ELSE media_json END,
+                 author_avatar_url = COALESCE(?5, author_avatar_url)
+             WHERE id = ?1",
+            params![id, author_followers, p.author_verified as i64, media_json, p.avatar_url],
+        );
         return Ok(id);
     }
     let id = new_id();
     conn.execute(
-        "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_display_name, text, has_media, feed_source,
-            posted_at, first_seen_at, metrics_at_capture_json, velocity_score, context_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![id, profile_id, pid, p.handle.clone().unwrap_or_default(), p.author, p.text, p.has_media as i64, feed_source, p.time, now_rfc3339(), metrics, velocity, p.context_text()],
+        "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_display_name, author_followers, author_verified, text, has_media, media_json, feed_source,
+            posted_at, first_seen_at, metrics_at_capture_json, velocity_score, context_json, author_avatar_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            id,
+            profile_id,
+            pid,
+            p.handle.clone().unwrap_or_default(),
+            p.author,
+            author_followers,
+            p.author_verified as i64,
+            p.text,
+            (p.has_media || !media_items.is_empty()) as i64,
+            media_json,
+            feed_source,
+            p.time,
+            now_rfc3339(),
+            metrics,
+            velocity,
+            p.context_text(),
+            p.avatar_url
+        ],
     )?;
     Ok(id)
 }
@@ -128,11 +188,28 @@ pub fn ensure_default_rubric(conn: &Connection, profile_id: &str) -> AppResult<(
 
 #[allow(clippy::too_many_arguments)]
 pub fn insert_evaluation(conn: &Connection, observed_id: &str, session_id: &str, rubric_version: i64, model: &str, score: f64, angle: &str, reasoning: &str) -> AppResult<String> {
+    insert_evaluation_with_outlier(conn, observed_id, session_id, rubric_version, model, score, angle, reasoning, None, &[])
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn insert_evaluation_with_outlier(
+    conn: &Connection,
+    observed_id: &str,
+    session_id: &str,
+    rubric_version: i64,
+    model: &str,
+    score: f64,
+    angle: &str,
+    reasoning: &str,
+    outlier_score: Option<f64>,
+    breakout_flags: &[String],
+) -> AppResult<String> {
     let id = new_id();
+    let flags_json = serde_json::to_string(breakout_flags).unwrap_or_else(|_| "[]".into());
     conn.execute(
-        "INSERT OR IGNORE INTO scout_evaluations (id, observed_post_id, session_id, rubric_version, model_used, potential_score, angle_summary, reasoning, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'queued', ?9)",
-        params![id, observed_id, session_id, rubric_version, model, score, angle, reasoning, now_rfc3339()],
+        "INSERT OR IGNORE INTO scout_evaluations (id, observed_post_id, session_id, rubric_version, model_used, potential_score, angle_summary, reasoning, outlier_score, breakout_flags_json, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'queued', ?11)",
+        params![id, observed_id, session_id, rubric_version, model, score, angle, reasoning, outlier_score, flags_json, now_rfc3339()],
     )?;
     Ok(id)
 }
@@ -207,6 +284,10 @@ pub struct QueueItem {
     pub session_id: Option<String>,
     pub post: PostView,
     pub score: f64,
+    pub outlier_score: Option<f64>,
+    pub breakout_flags: Vec<String>,
+    pub author_followers: Option<i64>,
+    pub author_verified: bool,
     pub angle: String,
     pub reasoning: String,
     pub model_used: String,
@@ -214,6 +295,10 @@ pub struct QueueItem {
     pub metrics: Metrics,
     pub posted_at: Option<String>,
     pub draft_id: Option<String>,
+    pub draft_text: Option<String>,
+    pub draft_status: Option<String>,
+    pub draft_error: Option<String>,
+    pub draft_published_url: Option<String>,
     pub created_at: String,
 }
 
@@ -223,27 +308,56 @@ pub fn queue(conn: &Connection, profile_id: &str, threshold: f64, now_unix: i64,
     let mut st = conn.prepare(
         "SELECT e.id, e.session_id, e.potential_score, e.angle_summary, e.reasoning, e.model_used, e.status, e.created_at,
                 o.id, o.platform_post_id, o.author_handle, o.text, o.has_media, o.metrics_at_capture_json, o.posted_at,
-                (SELECT d.id FROM reply_drafts d WHERE d.evaluation_id = e.id AND d.status <> 'discarded' ORDER BY d.created_at DESC LIMIT 1)
-         FROM scout_evaluations e JOIN observed_posts o ON o.id = e.observed_post_id
+                e.outlier_score, e.breakout_flags_json, o.author_followers, o.author_verified, o.media_json,
+                d.id, COALESCE(d.edited_text, d.initial_text), d.status, d.error_message, d.published_url,
+                o.author_display_name, o.author_avatar_url
+         FROM scout_evaluations e
+         JOIN observed_posts o ON o.id = e.observed_post_id
+         LEFT JOIN reply_drafts d ON d.id = (
+             SELECT d2.id FROM reply_drafts d2
+             WHERE d2.evaluation_id = e.id AND d2.status <> 'discarded'
+             ORDER BY d2.created_at DESC LIMIT 1
+         )
          WHERE o.profile_id = ?1 AND e.status IN ('queued', 'drafted') AND e.potential_score >= ?2 AND e.created_at >= ?3
          ORDER BY e.potential_score DESC, e.created_at DESC LIMIT ?4",
     )?;
     let rows = st.query_map(params![profile_id, threshold, cutoff, limit], |r| {
         let (handle, pid): (String, String) = (r.get(10)?, r.get(9)?);
         let metrics: String = r.get(13)?;
+        let flags_raw: String = r.get::<_, Option<String>>(16)?.unwrap_or_else(|| "[]".into());
+        let media_raw: String = r.get::<_, Option<String>>(19)?.unwrap_or_else(|| "[]".into());
+        let media: Vec<MediaItem> = serde_json::from_str(&media_raw).unwrap_or_default();
         Ok(QueueItem {
             evaluation_id: r.get(0)?,
             session_id: r.get(1)?,
             score: r.get(2)?,
+            outlier_score: r.get(15)?,
+            breakout_flags: serde_json::from_str(&flags_raw).unwrap_or_default(),
+            author_followers: r.get(17)?,
+            author_verified: r.get::<_, Option<i64>>(18)?.unwrap_or(0) != 0,
             angle: r.get(3)?,
             reasoning: r.get(4)?,
             model_used: r.get(5)?,
             status: r.get(6)?,
             created_at: r.get(7)?,
-            post: PostView { observed_id: r.get(8)?, url: post_url(&handle, &pid), platform_post_id: pid, handle, text: r.get(11)?, has_media: r.get::<_, i64>(12)? != 0 },
+            post: PostView {
+                observed_id: r.get(8)?,
+                url: post_url(&handle, &pid),
+                platform_post_id: pid,
+                handle,
+                author_name: r.get::<_, Option<String>>(25)?.unwrap_or_default(),
+                avatar_url: r.get(26)?,
+                text: r.get(11)?,
+                has_media: r.get::<_, i64>(12)? != 0 || !media.is_empty(),
+                media,
+            },
             metrics: serde_json::from_str(&metrics).unwrap_or_default(),
             posted_at: r.get(14)?,
-            draft_id: r.get(15)?,
+            draft_id: r.get(20)?,
+            draft_text: r.get(21)?,
+            draft_status: r.get(22)?,
+            draft_error: r.get(23)?,
+            draft_published_url: r.get(24)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)

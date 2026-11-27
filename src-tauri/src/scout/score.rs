@@ -2,6 +2,7 @@
 //! model is chosen. Post text is untrusted (SEC-07); see `crate::guard`.
 
 use super::model::{Metrics, ScrapedPost};
+use super::outlier::OutlierReport;
 use crate::completion::PromptSlots;
 use crate::guard::{extract_json, neutralize, FENCE_CLOSE, FENCE_OPEN, UNTRUSTED_RULES};
 use crate::storage::repo::Preferences;
@@ -16,6 +17,8 @@ pub struct Candidate {
     pub metrics: Metrics,
     pub age_minutes: i64,
     pub velocity: f64,
+    pub author_followers: Option<i64>,
+    pub outlier: OutlierReport,
     /// Base64 thumbnail of the first image, when one was fetched (SCT-19).
     pub image: Option<String>,
 }
@@ -31,8 +34,8 @@ pub struct Score {
 /// The built-in rubric. It is stored as rubric v1 the first time the app is opened (`repo::ensure_default_rubric`)
 /// so Scout and Learning read, version and roll back one and the same text.
 pub const DEFAULT_RUBRIC: &str = "Score each post 0-100 for how good a reply opportunity it is for this user.\n\
-High: early momentum, a question or open take that invites replies, room for a sharp or funny angle, overlap with the user's niche.\n\
-Low: ragebait, giveaways, posts already buried in replies, pure ads, topics outside the niche.";
+High: breakout / outlier posts where engagement or views far exceed the author's follower size (especially small/mid accounts <=50k), high bookmarks/shares per view, early-wave posts with reply headroom, questions or open takes inviting sharp replies, overlap with the user's niche.\n\
+Low: routine mega-account noise with weak save/share efficiency, ragebait/ratioed posts, giveaways, posts already buried in replies, pure ads, topics outside the niche.";
 
 /// The user's current preferences, appended to whichever rubric version is active so that editing preferences
 /// in Settings takes effect without minting a rubric version.
@@ -72,12 +75,22 @@ fn fenced_posts(batch: &[Candidate]) -> String {
             json!({
                 "id": c.post.id,
                 "author": neutralize(c.post.handle.as_deref().unwrap_or("")),
+                "author_followers": c.author_followers,
+                "author_verified": c.post.author_verified,
                 "text": neutralize(&c.post.text),
                 "age_minutes": c.age_minutes,
                 "likes": c.metrics.likes,
                 "replies": c.metrics.replies,
                 "reposts": c.metrics.reposts,
+                "bookmarks": c.metrics.bookmarks,
                 "views": c.metrics.views,
+                "velocity_per_min": (c.velocity * 10.0).round() / 10.0,
+                "outlier_score": c.outlier.outlier_score,
+                "breakout_flags": c.outlier.breakout_flags,
+                "reach_multiple": c.outlier.reach_multiple,
+                "engagement_per_1k_views": c.outlier.engagement_per_1k_views,
+                "reply_headroom": c.outlier.reply_headroom,
+                "outlier_why": c.outlier.why,
                 "has_media": c.post.has_media,
                 "image_index": image_index,
                 "text_truncated": c.post.truncated,
@@ -139,24 +152,43 @@ pub fn apply_preferences(mut s: Score, handle: &str, prefs: &Preferences) -> Sco
     s
 }
 
-/// Score used when `post_scoring` has no model: velocity, niche keyword hits, freshness, media.
+/// Blends verified breakout/outlier signals with the model score (keeping strong small-account outliers
+/// competitive) before applying author preferences.
+pub fn apply_outlier_and_preferences(mut s: Score, c: &Candidate, prefs: &Preferences) -> Score {
+    if c.outlier.outlier_score >= 68.0 {
+        let bonus = ((c.outlier.outlier_score - 60.0) * 0.25).min(8.0);
+        s.score = (s.score + bonus).min(100.0);
+        if !c.outlier.why.is_empty() && !s.reasoning.contains(&c.outlier.why) {
+            s.reasoning = format!("{} {}", s.reasoning.trim(), c.outlier.why).trim().to_string();
+        }
+    }
+    apply_preferences(s, c.post.handle.as_deref().unwrap_or(""), prefs)
+}
+
+/// Score used when `post_scoring` has no model: outlier virality, velocity, niche keyword hits, freshness.
 /// Honest about being a heuristic in the stored reasoning.
 pub fn heuristic_score(c: &Candidate, prefs: &Preferences) -> Score {
     let text = c.post.text.to_lowercase();
     let hits = prefs.niche_topics.iter().filter(|t| !t.is_empty() && text.contains(&t.to_lowercase())).count().min(2);
-    let momentum = (c.velocity.max(0.0) + 1.0).log10() * 22.0;
-    let fresh = if c.age_minutes <= 30 { 12.0 } else if c.age_minutes <= 120 { 6.0 } else { 0.0 };
-    let question = if c.post.text.contains('?') { 8.0 } else { 0.0 };
-    let score = (30.0 + momentum + fresh + question + hits as f64 * 10.0).clamp(0.0, 100.0);
+    let momentum = (c.velocity.max(0.0) + 1.0).log10() * 14.0;
+    let fresh = if c.age_minutes <= 30 { 10.0 } else if c.age_minutes <= 120 { 5.0 } else { 0.0 };
+    let question = if c.post.text.contains('?') { 6.0 } else { 0.0 };
+    let outlier_part = c.outlier.outlier_score * 0.52;
+    let score = (16.0 + outlier_part + momentum + fresh + question + hits as f64 * 9.0).clamp(0.0, 100.0);
     let id = c.post.id.clone().unwrap_or_default();
+    let reason = if c.outlier.why.is_empty() {
+        format!(
+            "Local heuristic (no model chosen for post scoring): {:.1} engagement/min, {} min old, {} niche match(es).",
+            c.velocity, c.age_minutes, hits
+        )
+    } else {
+        format!("Local heuristic: {} ({} niche match(es)).", c.outlier.why.trim_end_matches('.'), hits)
+    };
     Score {
         id,
         score,
         angle: if question > 0.0 { "Answer the question with one concrete detail.".into() } else { "Add a specific, short take.".into() },
-        reasoning: format!(
-            "Local heuristic (no model chosen for post scoring): {:.1} engagement/min, {} min old, {} niche match(es).",
-            c.velocity, c.age_minutes, hits
-        ),
+        reasoning: reason,
     }
 }
 
@@ -165,11 +197,25 @@ mod tests {
     use super::*;
 
     fn cand(id: &str, text: &str) -> Candidate {
+        let post = ScrapedPost { id: Some(id.into()), handle: Some("a".into()), text: text.into(), ..Default::default() };
+        let metrics = Metrics { likes: 50, ..Default::default() };
+        let outlier = super::super::outlier::evaluate_outlier(&super::super::outlier::OutlierSignals {
+            metrics: &metrics,
+            age_minutes: 20,
+            author_followers: None,
+            author_verified: false,
+            is_repost: false,
+            has_media: false,
+            text: &post.text,
+            has_context: false,
+        });
         Candidate {
-            post: ScrapedPost { id: Some(id.into()), handle: Some("a".into()), text: text.into(), ..Default::default() },
-            metrics: Metrics { likes: 50, ..Default::default() },
+            post,
+            metrics,
             age_minutes: 20,
             velocity: 2.5,
+            author_followers: None,
+            outlier,
             image: None,
         }
     }

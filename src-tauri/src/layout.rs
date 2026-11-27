@@ -161,7 +161,7 @@ mod tests {
     async fn restored_layout_reaches_the_browser_through_the_driver() {
         let mock = MockDriver::new();
         let svc = BrowserService::new(Box::new(mock.clone()));
-        let cfg = ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: "u".into(), width: 1, height: 1 };
+        let cfg = ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: "u".into(), width: 1, height: 1, invisible: false };
         assert!(svc.set_bounds(default_layout(&SCREEN).browser).await.is_err(), "no window yet");
         svc.launch(cfg).await.unwrap();
         let LayoutPlan::Apply(l) = plan(DisplayServer::X11, None, &SCREEN) else { panic!() };

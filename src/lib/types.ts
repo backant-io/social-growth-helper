@@ -97,7 +97,7 @@ export interface AppInfo {
   arch: string;
 }
 
-export type SectionId = "scout" | "reply" | "creator" | "analytics" | "learning" | "style" | "activity" | "settings";
+export type SectionId = "scout" | "creator" | "analytics" | "learning" | "style" | "activity" | "settings";
 
 export type QuitGuardPayload = { kind: "needs_confirmation"; jobs: string[] } | { kind: "proceed" };
 
@@ -481,8 +481,11 @@ export interface FormatCandidate {
   id: string;
   platform_post_id: string;
   author_handle: string;
+  author_name: string;
+  avatar_url: string | null;
   author_followers: number | null;
   text: string;
+  media: Array<{ kind: "image" | "video" | "gif"; url: string | null; poster_url: string | null; alt: string | null; duration: string | null }>;
   metrics: PostMetrics;
   posted_at: string | null;
   source: "scout" | "watchlist" | "manual";

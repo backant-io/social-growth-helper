@@ -27,6 +27,16 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 /** Browser preview: an in-memory backend so the screens can be explored and screenshotted without Tauri. */
+const SAMPLE_SVG =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><rect width="640" height="360" fill="#18181b"/><path d="M40 300 L170 250 L300 210 L440 120 L590 60" stroke="#10b981" stroke-width="5" fill="none"/><text x="40" y="54" fill="#e4e4e7" font-family="sans-serif" font-size="22" font-weight="600">Revenue per engineer ($M)</text></svg>',
+  );
+
+const AVATAR = (c: string, ch: string) =>
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${c}"/><text x="32" y="43" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="30" font-weight="700">${ch}</text></svg>`);
+
 const now = () => new Date().toISOString();
 const mem = {
   kill: false,
@@ -40,22 +50,54 @@ const mem = {
     {
       evaluation_id: "e1",
       session_id: "s1",
-      post: { observed_id: "o1", platform_post_id: "111", handle: "naval", text: "The best way to build wealth is to own equity in something that scales without you.", has_media: false, url: "https://x.com/naval/status/111" },
+      post: {
+        observed_id: "o1",
+        platform_post_id: "111",
+        handle: "naval",
+        author_name: "Naval",
+        avatar_url: AVATAR("#0f766e", "N"),
+        text: "The best way to build wealth is to own equity in something that scales without you.",
+        has_media: true,
+        url: "https://x.com/naval/status/111",
+        media: [{ kind: "image", url: SAMPLE_SVG, poster_url: null, alt: "Revenue per engineer chart", duration: null }],
+      },
       score: 91,
+      outlier_score: 86,
+      breakout_flags: ["high-saves", "3.4x-reach", "reply-headroom"],
+      author_followers: 18400,
+      author_verified: true,
       angle: "Add the counterpoint: equity needs a team first",
       reasoning: "Fresh post (12 min) with fast likes and few replies, squarely in your startups topic.",
       model_used: "preview",
       status: "queued",
-      metrics: { replies: 14, reposts: 40, likes: 612, bookmarks: 55, views: 22000 },
+      metrics: { replies: 14, reposts: 40, likes: 612, bookmarks: 145, views: 22000 },
       posted_at: now(),
       draft_id: null,
+      draft_text: null,
+      draft_status: null,
+      draft_error: null,
+      draft_published_url: null,
       created_at: now(),
     },
     {
       evaluation_id: "e2",
       session_id: "s1",
-      post: { observed_id: "o2", platform_post_id: "222", handle: "paulg", text: "Startups are mostly about not dying until the market comes to you.", has_media: false, url: "https://x.com/paulg/status/222" },
+      post: {
+        observed_id: "o2",
+        platform_post_id: "222",
+        handle: "paulg",
+        author_name: "Paul Graham",
+        avatar_url: AVATAR("#9a3412", "P"),
+        text: "Startups are mostly about not dying until the market comes to you.",
+        has_media: true,
+        url: "https://x.com/paulg/status/222",
+        media: [{ kind: "video", url: null, poster_url: SAMPLE_SVG, alt: "Founder clip", duration: "0:42" }],
+      },
       score: 78,
+      outlier_score: 64,
+      breakout_flags: ["high-efficiency"],
+      author_followers: 92000,
+      author_verified: true,
       angle: "Share a concrete survival tactic",
       reasoning: "Strong engagement velocity, low reply count.",
       model_used: "preview",
@@ -63,6 +105,10 @@ const mem = {
       metrics: { replies: 30, reposts: 90, likes: 1400, bookmarks: 120, views: 61000 },
       posted_at: now(),
       draft_id: null,
+      draft_text: null,
+      draft_status: null,
+      draft_error: null,
+      draft_published_url: null,
       created_at: now(),
     },
   ] as QueueItem[],
@@ -89,6 +135,9 @@ function mockDraft(item: QueueItem): DraftView {
     angle: item.angle,
     reasoning: item.reasoning,
     score: item.score,
+    outlier_score: item.outlier_score,
+    breakout_flags: item.breakout_flags,
+    author_followers: item.author_followers,
     kind: "reply",
     initial_text: v[0].text,
     edited_text: v[0].text,
@@ -206,7 +255,21 @@ export const p3 = {
   async publishDraft(draftId: string, confirmedText: string): Promise<void> {
     if (inTauri()) return call("publish_draft", { draftId, confirmedText });
     const d = mem.drafts.get(draftId)!;
-    put({ ...d, status: "published", published_url: "https://x.com/i/status/9001", steps: d.actions.map((a) => ({ action: a, status: "done", detail: null })) });
+    const url = "https://x.com/i/status/9001";
+    put({
+      ...d,
+      edited_text: confirmedText,
+      status: "published",
+      published_url: url,
+      steps: d.actions.map((a) => ({ action: a, status: "done", detail: null })),
+    });
+    const q = mem.queue.find((item) => item.evaluation_id === d.evaluation_id);
+    if (q) {
+      q.draft_id = d.id;
+      q.draft_text = confirmedText;
+      q.draft_status = "published";
+      q.draft_published_url = url;
+    }
   },
   async engage(observedPostId: string, action: ActionName, undo: boolean): Promise<JobResult> {
     if (inTauri()) return call("engage_action", { observedPostId, action, undo });

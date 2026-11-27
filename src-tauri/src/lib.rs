@@ -69,6 +69,7 @@ pub fn run() {
             }
             let state = init_state()?;
             let profile_dir = state.paths.browser_profile_dir.clone();
+            let publish_profile_dir = state.paths.publish_browser_profile_dir.clone();
             let kill_engaged = {
                 let db = state.db.lock().unwrap();
                 let _ = scout::repo::close_orphans(&db);
@@ -90,12 +91,14 @@ pub fn run() {
             // A Chrome left running by a crashed or force-killed previous session is closed before anything else.
             tauri::async_runtime::spawn(async move {
                 browser::launcher::reclaim_stale_chrome(&profile_dir).await;
+                browser::launcher::reclaim_stale_chrome(&publish_profile_dir).await;
             });
             browser::health::spawn_crash_watcher(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_app_info,
+            commands::open_external,
             commands::get_onboarding_status,
             commands::get_rules_notice,
             commands::acknowledge_rules,
@@ -235,6 +238,7 @@ pub fn run() {
             creator::commands::creator_save_settings,
             creator::commands::creator_match_formats,
             creator::commands::creator_generate,
+            creator::commands::creator_variation,
             creator::commands::creator_create_blank,
             creator::commands::creator_drafts,
             creator::commands::creator_edit,
