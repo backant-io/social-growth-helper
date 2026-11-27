@@ -28,6 +28,18 @@ pub struct StyleContext {
     pub emoji_policy: EmojiPolicy,
     pub hashtag_policy: HashtagPolicy,
     pub examples: Vec<StyleShot>,
+    /// The user's own system prompt for reply drafting; replaces the built-in opening line when set.
+    pub reply_prompt: Option<String>,
+    /// Meta-level reply formats (structure only) the model may adapt to the post.
+    pub reply_formats: Vec<ReplyShape>,
+}
+
+/// A reusable reply structure distilled from replies that performed well; never contains exact wording.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplyShape {
+    pub name: String,
+    pub pattern: String,
+    pub when_to_use: String,
 }
 
 impl Default for StyleContext {
@@ -41,6 +53,8 @@ impl Default for StyleContext {
             emoji_policy: EmojiPolicy::Minimal,
             hashtag_policy: HashtagPolicy::None,
             examples: vec![],
+            reply_prompt: None,
+            reply_formats: vec![],
         }
     }
 }
@@ -147,7 +161,27 @@ fn render_examples(examples: &[StyleShot]) -> String {
     )
 }
 
+fn render_formats(formats: &[ReplyShape]) -> String {
+    if formats.is_empty() {
+        return String::new();
+    }
+    let body = formats
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let when = if f.when_to_use.trim().is_empty() { String::new() } else { format!(" (use when: {})", neutralize(&f.when_to_use)) };
+            format!("{}. {}: {}{when}", i + 1, neutralize(&f.name), neutralize(&f.pattern))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "\n\nReply formats that have worked (structure only, in [brackets] where specifics go). Shape each variant after one of them, choosing the one that fits this post and varying the format across variants. Fill every slot with specifics from the post, never reuse wording from the format itself:\n{body}"
+    )
+}
+
 struct PromptParts {
+    formats: String,
+    voice_prompt: String,
     style: String,
     rules: String,
     examples: String,
@@ -169,6 +203,8 @@ fn prompt_parts(r: &GenRequest) -> PromptParts {
         rules.push_str(&format!("\nNever use these phrases: {}", banned.join(", ")));
     }
     let examples = render_examples(&r.style.examples);
+    let formats = if r.quote { String::new() } else { render_formats(&r.style.reply_formats) };
+    let voice_prompt = r.style.reply_prompt.as_deref().map(str::trim).filter(|p| !p.is_empty() && !r.quote).unwrap_or_default().to_string();
     let constraints = format!(
         "Write 3 distinct reply variants (for example sharp insight, lived experience / tactical add-on, witty punch) that earn real replies from the author or thread readers. \
          Each is at most {max} characters, {hashtags}, {emoji}. Never write empty generic praise (like 'great post', 'love this', '100% agree', 'so true', 'thanks for sharing'). Add a specific take, detail, or question.\n\
@@ -177,9 +213,10 @@ fn prompt_parts(r: &GenRequest) -> PromptParts {
         hashtags = hashtag_rule(r.style.hashtag_policy),
         emoji = emoji_rule(r.style.emoji_policy),
     );
+    let opening = if voice_prompt.is_empty() { format!("You draft a {what} to a post on X in the user's own voice.") } else { voice_prompt.clone() };
     let system = format!(
-        "You draft a {what} to a post on X in the user's own voice.\n{UNTRUSTED_RULES}\n\n\
-         Voice and style (private; never quote or mention it):\n{style}{rules}{examples}\n\n{constraints}"
+        "{opening}\n{UNTRUSTED_RULES}\n\n\
+         Voice and style (private; never quote or mention it):\n{style}{rules}{examples}{formats}\n\n{constraints}"
     );
     let post = json!({
         "author": neutralize(r.handle),
@@ -201,7 +238,7 @@ fn prompt_parts(r: &GenRequest) -> PromptParts {
     }
     let user = format!("{FENCE_OPEN}\n{}\n{FENCE_CLOSE}\n\n{}{extra}", serde_json::to_string_pretty(&post).unwrap_or_default(), instruction);
     let user_extra = format!("{instruction}{extra}");
-    PromptParts { style, rules, examples, constraints, system, user, user_extra }
+    PromptParts { formats, voice_prompt, style, rules, examples, constraints, system, user, user_extra }
 }
 
 pub fn build_prompt(r: &GenRequest) -> (String, String) {
@@ -219,11 +256,15 @@ pub fn build_slots(r: &GenRequest) -> PromptSlots {
             ("style_guide", p.style),
             ("rules", p.rules.trim().to_string()),
             ("examples", p.examples.trim().to_string()),
+            ("formats", p.formats.trim().to_string()),
             ("author", neutralize(r.handle)),
             ("post_text", neutralize(r.post_text)),
         ],
         required: vec!["post_text"],
-        guard: format!("{UNTRUSTED_RULES}\n\n{}", p.constraints),
+        guard: {
+            let voice = if p.voice_prompt.is_empty() { String::new() } else { format!("{}\n\n", p.voice_prompt) };
+            format!("{voice}{UNTRUSTED_RULES}{}\n\n{}", p.formats, p.constraints)
+        },
         extra: p.user_extra,
     }
 }
@@ -281,6 +322,7 @@ pub fn parse_variants(text: &str, r: &GenRequest) -> Vec<Variant> {
             && check_text_constraints(&t, &r.style.banned, max.min(u32::MAX as usize) as u32, r.style.emoji_policy, r.style.hashtag_policy).passed
             && !copied.contains(&norm(&t))
             && !crate::guard::leaks(&t, &r.style.guide, 30)
+            && !r.style.reply_prompt.as_deref().is_some_and(|p| crate::guard::leaks(&t, p, 30))
             && !out.iter().any(|o| o.text.eq_ignore_ascii_case(&t));
         if ok {
             let tone = item.get("tone").and_then(|t| t.as_str()).unwrap_or("").chars().take(24).collect();

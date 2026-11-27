@@ -109,11 +109,15 @@ pub fn load_style(conn: &Connection, profile_id: &str) -> AppResult<StyleContext
         emoji_policy: guide.emoji_policy,
         hashtag_policy: guide.hashtag_policy,
         examples: vec![],
+        ..StyleContext::default()
     })
 }
 
 /// How many few-shot examples go into a drafting prompt.
 pub const FEW_SHOT_LIMIT: usize = 4;
+
+/// How many reply formats go into a drafting prompt.
+pub const REPLY_FORMATS_LIMIT: usize = 6;
 
 /// The active style guide plus pinned, FTS-matched and top-performing examples for `post_text` (STY-03).
 pub fn load_style_for_generation(conn: &Connection, profile_id: &str, post_text: &str) -> AppResult<StyleContext> {
@@ -122,6 +126,8 @@ pub fn load_style_for_generation(conn: &Connection, profile_id: &str, post_text:
         .into_iter()
         .map(|r| StyleShot { context: r.example.source_context_text, text: r.example.example_text, why: r.example.why_it_works })
         .collect();
+    style.reply_prompt = crate::replyvoice::get_custom_prompt(conn)?;
+    style.reply_formats = crate::replyvoice::shapes_for_prompt(conn, profile_id, REPLY_FORMATS_LIMIT)?;
     Ok(style)
 }
 
@@ -526,7 +532,13 @@ mod tests {
         upsert_style_example(&conn, &profile, ex("PgBouncer in transaction mode fixes spikes.", "postgres serverless connections", "promoted_winner", false)).unwrap();
         upsert_style_example(&conn, &profile, ex("Subgrid aligns card footers.", "css grid", "manual", false)).unwrap();
 
+        crate::replyvoice::set_custom_prompt(&conn, "Reply as Pavel, blunt and short.").unwrap();
+        for (name, pattern, likes) in [("Pointed question", "Ask the [follow-up question] the post leaves open", 30.0), ("Counter then proof", "Counter [claim], then give [one example]", 10.0)] {
+            crate::replyvoice::repo::insert_if_new(&conn, &profile, &crate::replyvoice::repo::NewFormat { name: name.into(), pattern: pattern.into(), when_to_use: String::new(), why_it_works: String::new(), source_replies: 3, avg_likes: likes }).unwrap();
+        }
         let style = load_style_for_generation(&conn, &profile, "Postgres connections keep exhausting on serverless").unwrap();
+        assert_eq!(style.reply_prompt.as_deref(), Some("Reply as Pavel, blunt and short."));
+        assert_eq!(style.reply_formats.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Pointed question", "Counter then proof"]);
         assert_eq!(style.max_reply_chars, Some(50));
         assert_eq!(style.emoji_policy, EmojiPolicy::None);
         assert_eq!(style.hashtag_policy, HashtagPolicy::None);
@@ -565,5 +577,7 @@ mod tests {
         assert!(sent[0].system.contains("PgBouncer in transaction mode fixes spikes."));
         assert!(sent[0].system.contains("Lead with the fix"));
         assert!(sent[0].system.contains("at most 50 characters"));
+        assert!(sent[0].system.starts_with("Reply as Pavel, blunt and short."));
+        assert!(sent[0].system.contains("Ask the [follow-up question] the post leaves open"));
     }
 }

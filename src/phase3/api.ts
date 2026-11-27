@@ -12,7 +12,9 @@ import type {
   PacingUsage,
   PostActionState,
   ModelOption,
+  FormatFetchSummary,
   QueueItem,
+  ReplyVoice,
   ScoutStatus,
   SessionParams,
 } from "./types";
@@ -38,6 +40,8 @@ const AVATAR = (c: string, ch: string) =>
   encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${c}"/><text x="32" y="43" text-anchor="middle" fill="#fff" font-family="sans-serif" font-size="30" font-weight="700">${ch}</text></svg>`);
 
 const now = () => new Date().toISOString();
+const memVoice: ReplyVoice = { prompt: "", formats: [] };
+
 const mem = {
   kill: false,
   threshold: 72,
@@ -343,6 +347,34 @@ export const p3 = {
   },
   async checklistReports(): Promise<ChecklistReport[]> {
     return inTauri() ? call("checklist_reports") : [...mem.reports];
+  },
+  async replyVoiceGet(): Promise<ReplyVoice> {
+    return inTauri() ? call("reply_voice_get") : { ...memVoice, formats: [...memVoice.formats] };
+  },
+  async replyVoiceSetPrompt(prompt: string): Promise<ReplyVoice> {
+    if (inTauri()) return call("reply_voice_set_prompt", { prompt });
+    memVoice.prompt = prompt.trim();
+    return { ...memVoice, formats: [...memVoice.formats] };
+  },
+  async replyFormatSetEnabled(id: string, enabled: boolean): Promise<ReplyVoice> {
+    if (inTauri()) return call("reply_format_set_enabled", { id, enabled });
+    memVoice.formats = memVoice.formats.map((f) => (f.id === id ? { ...f, enabled } : f));
+    return { ...memVoice, formats: [...memVoice.formats] };
+  },
+  async replyFormatDelete(id: string): Promise<ReplyVoice> {
+    if (inTauri()) return call("reply_format_delete", { id });
+    memVoice.formats = memVoice.formats.filter((f) => f.id !== id);
+    return { ...memVoice, formats: [...memVoice.formats] };
+  },
+  async replyFormatsFetch(): Promise<FormatFetchSummary> {
+    if (inTauri()) return call("reply_formats_fetch");
+    const sample = [
+      { name: "Counter then proof", pattern: "Open with a short counterpoint to [claim], then back it with [one concrete example].", when_to_use: "Confident opinions", why_it_works: "Adds a real second view." },
+      { name: "Pointed question", pattern: "Ask the one [follow-up question] the post leaves open, in under fifteen words.", when_to_use: "Claims without detail", why_it_works: "Invites the author to answer." },
+    ].filter((s) => !memVoice.formats.some((f) => f.name === s.name));
+    const added = sample.map((s, i) => ({ ...s, id: `rf-${Date.now()}-${i}`, source_replies: 9, avg_likes: 24.5, enabled: true, created_at: now() }));
+    memVoice.formats = [...added, ...memVoice.formats];
+    return { posts_read: 6, replies_used: 9, added, duplicates: 2 - added.length };
   },
 };
 

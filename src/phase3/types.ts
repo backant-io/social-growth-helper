@@ -236,3 +236,28 @@ export interface ModelOption {
   value: string;
   label: string;
 }
+
+export interface ReplyFormat {
+  id: string;
+  name: string;
+  pattern: string;
+  when_to_use: string;
+  why_it_works: string;
+  source_replies: number;
+  avg_likes: number;
+  enabled: boolean;
+  created_at: string;
+}
+
+export interface ReplyVoice {
+  /** The saved prompt; empty while the built-in opening is in use. */
+  prompt: string;
+  formats: ReplyFormat[];
+}
+
+export interface FormatFetchSummary {
+  posts_read: number;
+  replies_used: number;
+  added: ReplyFormat[];
+  duplicates: number;
+}

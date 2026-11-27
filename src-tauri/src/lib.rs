@@ -20,6 +20,7 @@ mod menu;
 pub mod onboarding;
 pub mod phase3;
 pub mod publish;
+pub mod replyvoice;
 pub mod scout;
 pub mod secrets;
 pub mod selectors;
@@ -212,6 +213,11 @@ pub fn run() {
             drafts::commands::draft_check,
             drafts::commands::draft_generate,
             drafts::commands::draft_model_options,
+            replyvoice::commands::reply_voice_get,
+            replyvoice::commands::reply_voice_set_prompt,
+            replyvoice::commands::reply_format_set_enabled,
+            replyvoice::commands::reply_format_delete,
+            replyvoice::commands::reply_formats_fetch,
             publish::commands::publish_draft,
             publish::commands::engage_action,
             publish::commands::get_action_state,
