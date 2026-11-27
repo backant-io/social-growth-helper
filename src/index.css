@@ -354,25 +354,3 @@ html[data-vibrancy="sidebar"] [data-vibrancy-sidebar] {
     border-color: rgb(255 255 255 / 0.1);
   }
 }
-
-/* macOS only: the native title bar overlays the content (Tauri titleBarStyle "Overlay"), so the traffic lights
-   float over the app's own surface instead of sitting in a second, empty bar above it. */
-.titlebar-drag {
-  display: none;
-}
-
-html[data-titlebar="overlay"] .titlebar-drag {
-  display: block;
-  position: fixed;
-  inset: 0 0 auto 0;
-  height: 1.75rem;
-  z-index: 30;
-}
-
-html[data-titlebar="overlay"] .sidebar-surface {
-  padding-top: 2.5rem;
-}
-
-html[data-titlebar="overlay"] .atmosphere {
-  padding-top: 1.75rem;
-}

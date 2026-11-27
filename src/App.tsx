@@ -164,7 +164,6 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <div data-tauri-drag-region aria-hidden="true" className="titlebar-drag" />
       <Sidebar
         active={section}
         onSelect={setSection}

@@ -386,9 +386,11 @@ fn current_work_area(win: &WebviewWindow) -> Option<WorkArea> {
     })
 }
 
+/// Outer frame (title bar included), the same convention Chrome's `Browser.setWindowBounds` uses for the X window,
+/// so the two windows' tops and bottoms line up.
 fn current_app_bounds(win: &WebviewWindow) -> Option<WindowBounds> {
     let s = win.scale_factor().ok()?;
-    let (pos, size) = (win.outer_position().ok()?, win.inner_size().ok()?);
+    let (pos, size) = (win.outer_position().ok()?, win.outer_size().ok()?);
     Some(WindowBounds {
         left: logical(pos.x, s),
         top: logical(pos.y, s),
@@ -398,8 +400,16 @@ fn current_app_bounds(win: &WebviewWindow) -> Option<WindowBounds> {
 }
 
 fn place_app_window(win: &WebviewWindow, b: &WindowBounds) {
+    let (frame_w, frame_h) = match (win.scale_factor(), win.outer_size(), win.inner_size()) {
+        (Ok(s), Ok(o), Ok(i)) => (
+            logical(o.width as i32 - i.width as i32, s).max(0) as u32,
+            logical(o.height as i32 - i.height as i32, s).max(0) as u32,
+        ),
+        _ => (0, 0),
+    };
     let _ = win.set_position(LogicalPosition::new(b.left, b.top));
-    let _ = win.set_size(LogicalSize::new(b.width, b.height));
+    let (w, h) = layout::inner_size(b, frame_w, frame_h);
+    let _ = win.set_size(LogicalSize::new(w, h));
 }
 
 #[derive(Serialize)]
