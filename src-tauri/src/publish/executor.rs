@@ -197,7 +197,8 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
         if ok {
             executed.push(prepo::event_name(kind, a.undo()));
         } else {
-            problem = Some(format!("{} failed: {}", kind.as_str(), detail.unwrap_or_default()));
+            let detail = detail.unwrap_or_default();
+            problem = Some(if status == "uncertain" { detail } else { format!("{} failed: {}", kind.as_str(), detail) });
             break;
         }
         if i + 1 < bundle.len() {
@@ -430,7 +431,7 @@ async fn compose_and_post(d: &dyn BrowserDriver, kill: &KillSwitch, text: &str, 
     let closed = format!("!document.querySelector({})", q(COMPOSER));
     if !wait_for(d, &closed, t.confirm_wait, t.poll).await.unwrap_or(false) {
         return Ok(ComposeOutcome::Unconfirmed {
-            message: "The Post button was clicked but X did not confirm. Check your profile before trying again.".into(),
+            message: "Not confirmed yet".into(),
         });
     }
     let href = format!("(document.querySelector({}) || {{}}).href || null", q(TOAST_LINK));

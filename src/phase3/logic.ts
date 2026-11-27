@@ -33,6 +33,47 @@ export function toggleInBundle(actions: ActionName[], a: ActionName): ActionName
   return normalizeBundle([...next, a]);
 }
 
+export type ComposeMode = "reply" | "quote";
+
+export const REPLY_BUNDLE: ActionName[] = ["like", "reply"];
+export const QUOTE_BUNDLE: ActionName[] = ["quote"];
+
+/** The action bundle a compose box publishes: a reply goes under the post, a quote is a new post that embeds it. */
+export function bundleForMode(mode: ComposeMode): ActionName[] {
+  return mode === "quote" ? QUOTE_BUNDLE : REPLY_BUNDLE;
+}
+
+export function modeOfBundle(actions: ActionName[]): ComposeMode {
+  return actions.includes("quote") ? "quote" : "reply";
+}
+
+export type RepostChoice = "repost" | "quote";
+
+/** The two entries X shows when the repost icon is pressed. */
+export function repostMenuOptions(reposted: boolean): Array<{ id: RepostChoice; label: string }> {
+  return [
+    { id: "repost", label: reposted ? "Undo repost" : "Repost" },
+    { id: "quote", label: "Quote" },
+  ];
+}
+
+export const NOT_CONFIRMED = "Not confirmed yet";
+
+export interface PublishLine {
+  text: string;
+  /** The single follow-up action, if any. */
+  action: "Post again" | "Try again" | null;
+}
+
+/** One short, calm line for a publish outcome. No advice about checking X: just what happened and one next step. */
+export function publishLine(status: string | null | undefined, errorMessage?: string | null): PublishLine | null {
+  if (status === "published") return { text: "Posted", action: null };
+  if (status === "queued_for_publish" || status === "publishing") return { text: "Checking…", action: null };
+  if (status === "unconfirmed" || (status === "failed" && (errorMessage ?? "").startsWith(NOT_CONFIRMED))) return { text: NOT_CONFIRMED, action: "Post again" };
+  if (status === "failed") return { text: "Didn't post", action: "Try again" };
+  return null;
+}
+
 export function bundleText(actions: ActionName[]): ActionName | null {
   return actions.find(isTextAction) ?? null;
 }

@@ -72,7 +72,7 @@ pub fn mark_published(conn: &Connection, draft_id: &str, post_id: Option<&str>, 
 /// was for that session); it becomes retryable so the user decides.
 pub fn recover_interrupted(conn: &Connection) -> AppResult<usize> {
     Ok(conn.execute(
-        "UPDATE reply_drafts SET status = 'failed', error_message = 'The app closed before this finished. Check X, then retry.'
+        "UPDATE reply_drafts SET status = 'failed', error_message = 'Not confirmed yet'
          WHERE status IN ('queued_for_publish', 'publishing')",
         [],
     )?)
@@ -154,6 +154,6 @@ mod tests {
         assert_eq!(recover_interrupted(&conn).unwrap(), 1);
         let v = crate::drafts::repo::get_view(&conn, &d).unwrap();
         assert_eq!(v.status, "failed");
-        assert!(v.error_message.unwrap().contains("retry"));
+        assert_eq!(v.error_message.as_deref(), Some("Not confirmed yet"));
     }
 }

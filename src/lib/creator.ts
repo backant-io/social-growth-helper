@@ -58,10 +58,10 @@ export function similarityNote(score: number | null, threshold: number): { tone:
 const STATUS_TEXT: Record<DraftStatus, string> = {
   variant: "Variant",
   draft: "Draft",
-  publishing: "Publishing",
-  published: "Published",
-  failed: "Not posted",
-  unconfirmed: "Check X",
+  publishing: "Checking…",
+  published: "Posted",
+  failed: "Didn't post",
+  unconfirmed: "Not confirmed yet",
   discarded: "Discarded",
 };
 

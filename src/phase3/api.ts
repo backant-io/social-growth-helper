@@ -1,5 +1,5 @@
 import { inTauri, listen } from "../lib/api";
-import { normalizeBundle } from "./logic";
+import { modeOfBundle, normalizeBundle } from "./logic";
 import type {
   ActionName,
   ActivityEntry,
@@ -238,7 +238,8 @@ export const p3 = {
   async draftSetActions(draftId: string, actions: ActionName[]): Promise<DraftView> {
     if (inTauri()) return call("draft_set_actions", { draftId, actions });
     const d = mem.drafts.get(draftId)!;
-    return put({ ...d, actions: normalizeBundle(actions) });
+    const bundle = normalizeBundle(actions);
+    return put({ ...d, actions: bundle, kind: modeOfBundle(bundle) });
   },
   async draftDiscard(draftId: string, reason: string | null): Promise<void> {
     if (inTauri()) return call("draft_discard", { draftId, reason });

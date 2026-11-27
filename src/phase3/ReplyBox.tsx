@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { listen } from "../lib/api";
 import { p3 } from "./api";
 import { enqueueGeneration } from "./genQueue";
-import { charInfo } from "./logic";
+import { bundleForMode, charInfo, modeOfBundle, publishLine, type ComposeMode } from "./logic";
 import type { DraftView, QueueItem } from "./types";
 import { muted, Notice } from "./ui";
 
@@ -12,12 +12,15 @@ interface Props {
   canDraft: boolean;
   onDismiss: (reason: string) => void;
   onChanged: () => void;
+  /** "quote" publishes the text as a quote post of the original; "reply" (default) posts it under the post. */
+  mode?: ComposeMode;
+  onModeChange?: (mode: ComposeMode) => void;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** The reply that sits under a post card: pre-filled, editable in place, one control for a fresh version. */
-export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
+export function ReplyBox({ item, canDraft, onDismiss, onChanged, mode = "reply", onModeChange }: Props) {
   const evalId = item.evaluation_id;
   const [draft, setDraft] = useState<DraftView | null>(null);
   const [text, setText] = useState(item.draft_text ?? "");
@@ -29,6 +32,7 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
   const root = useRef<HTMLDivElement>(null);
   const started = useRef(false);
   const dirty = useRef(false);
+  const touched = useRef(false);
 
   useEffect(() => {
     const el = root.current;
@@ -54,6 +58,7 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
         setDraft(updated);
         setText(updated.edited_text);
         dirty.current = false;
+        touched.current = false;
         setWarnings([]);
       } catch (e) {
         setError(message(e));
@@ -102,6 +107,29 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
     return () => void off.then((f) => f());
   }, [draft, onChanged]);
 
+  const modeApplied = useRef<ComposeMode>("reply");
+  useEffect(() => {
+    if (!draft || draft.status === "published" || draft.status === "queued_for_publish" || draft.status === "publishing") return;
+    const current = modeOfBundle(draft.actions);
+    if (current === mode) {
+      modeApplied.current = mode;
+      return;
+    }
+    if (modeApplied.current === mode) return;
+    modeApplied.current = mode;
+    void (async () => {
+      try {
+        const switched = await p3.draftSetActions(draft.id, bundleForMode(mode));
+        setDraft(switched);
+        if (!touched.current && canDraft) await fresh(switched, null);
+      } catch (e) {
+        setError(message(e));
+        modeApplied.current = current;
+        onModeChange?.(current);
+      }
+    })();
+  }, [mode, draft, canDraft, fresh, onModeChange]);
+
   const regenerate = async () => {
     const d = draft ?? (await p3.draftOpen(evalId).catch(() => null));
     if (d) await fresh(d, null);
@@ -120,6 +148,7 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
     setSending(true);
     try {
       const d = draft ?? (await p3.draftOpen(evalId));
+      if (modeOfBundle(d.actions) !== mode) await p3.draftSetActions(d.id, bundleForMode(mode));
       const saved = await p3.draftSaveEdit(d.id, body);
       setDraft(saved);
       const found = await p3.draftCheck(d.id);
@@ -143,15 +172,19 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
   const sent = status === "published";
   const busy = sending || status === "queued_for_publish" || status === "publishing";
   const info = charInfo(text);
-  const failure = status === "failed" ? (draft?.error_message ?? item.draft_error) : null;
+  const failedMessage = status === "failed" ? (draft?.error_message ?? item.draft_error) : null;
+  const line = publishLine(failedMessage ? "failed" : status, failedMessage);
   const url = draft?.published_url ?? item.draft_published_url;
+
+  const quoting = mode === "quote";
+  const noun = quoting ? "quote" : "reply";
 
   const near280 = info.count > 240;
 
   return (
     <div ref={root} className="space-y-2">
       <label htmlFor={`reply-${evalId}`} className="sr-only">
-        Your reply
+        Your {noun}
       </label>
       <div className={`rounded-2xl border bg-white px-3.5 pt-2.5 pb-2 transition-colors focus-within:border-zinc-900 dark:bg-zinc-950 dark:focus-within:border-zinc-100 ${info.over ? "border-rose-500" : "border-zinc-200 dark:border-zinc-800"}`}>
         <textarea
@@ -159,9 +192,10 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
           rows={2}
           value={text}
           disabled={busy || sent}
-          placeholder={generating ? "Writing a reply in your voice..." : canDraft ? "Post your reply" : "Post your reply, or assign a reply model in Settings to draft one."}
+          placeholder={generating ? `Writing a ${noun} in your voice...` : canDraft ? (quoting ? "Add a comment" : "Post your reply") : `Post your ${noun}, or assign a reply model in Settings to draft one.`}
           onChange={(e) => {
             dirty.current = true;
+            touched.current = true;
             setText(e.target.value);
           }}
           onBlur={save}
@@ -175,14 +209,19 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
                 type="button"
                 onClick={() => void regenerate()}
                 disabled={generating || busy || !canDraft}
-                aria-label="Write a new reply"
-                title={canDraft ? "Write a new reply" : "Assign a reply model in Settings"}
+                aria-label={`Write a new ${noun}`}
+                title={canDraft ? `Write a new ${noun}` : "Assign a reply model in Settings"}
                 className="rounded-full p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-40 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
               >
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={generating ? "animate-spin" : ""} aria-hidden="true">
                   <path d="M20 12a8 8 0 1 1-2.5-5.8" />
                   <path d="M20 4v5h-5" />
                 </svg>
+              </button>
+            )}
+            {!sent && quoting && onModeChange && (
+              <button type="button" data-testid="quote-cancel" onClick={() => onModeChange("reply")} disabled={busy} className="rounded-full px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-50">
+                Reply instead
               </button>
             )}
             {!sent && (
@@ -202,7 +241,7 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
           <div className="flex items-center gap-3">
             {near280 && <span className={`text-xs tabular-nums ${info.over ? "text-rose-600 dark:text-rose-400" : muted}`}>{280 - info.count}</span>}
             <button type="button" className="rounded-full bg-zinc-950 px-4 py-1.5 text-sm font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-40 dark:bg-zinc-50 dark:text-zinc-950" disabled={busy || sent || generating || !text.trim() || info.over} onClick={() => void send()}>
-              {sent ? "Sent" : busy ? "Sending" : "Reply"}
+              {sent ? "Sent" : busy ? "Sending" : quoting ? "Quote" : "Reply"}
             </button>
           </div>
         </div>
@@ -210,10 +249,22 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged }: Props) {
 
       {warnings.length > 0 && <Notice tone="warn">{warnings.join(" ")}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
-      {failure && <Notice tone="error">{failure}</Notice>}
+      {line && line.action && (
+        <div className="flex items-center gap-3 text-sm" title={failedMessage ?? undefined}>
+          <span className={muted}>{line.text}</span>
+          <button type="button" data-testid="publish-retry" className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-bold hover:bg-zinc-100 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800" disabled={busy || generating || !text.trim() || info.over} onClick={() => void send()}>
+            {line.action}
+          </button>
+        </div>
+      )}
+      {line && !line.action && !sent && (
+        <p aria-live="polite" className={`text-sm ${muted}`}>
+          {line.text}
+        </p>
+      )}
       {sent && (
         <p className={`text-sm ${muted}`}>
-          Reply posted.{" "}
+          Posted{" "}
           {url && (
             <a href={url} target="_blank" rel="noreferrer" className="underline">
               View on X

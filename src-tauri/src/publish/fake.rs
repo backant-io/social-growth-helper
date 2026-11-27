@@ -443,7 +443,8 @@ mod tests {
         assert!(!first.ok);
         assert_eq!(r.steps(), vec![("like".into(), "done".into()), ("reply".into(), "uncertain".into())]);
         assert_eq!(r.status(), "failed");
-        assert!(first.message.unwrap().contains("not found under the post"));
+        let msg = first.message.unwrap();
+        assert_eq!(msg, "Not confirmed yet");
         let likes_before = r.fake.clicks().iter().filter(|c| *c == "like").count();
 
         r.fake.0.lock().unwrap().submit_ignored = false;
