@@ -542,7 +542,9 @@ impl ChromeCdpDriver {
         let filters: Vec<String> = req.network_url_filters.iter().map(|f| f.to_lowercase()).collect();
 
         // Enable Network ONLY on this dedicated analytics tab (ANL-04).
-        let _ = session.send("Network.enable", json!({}), Some(&sid)).await;
+        if !filters.is_empty() {
+            let _ = session.send("Network.enable", json!({}), Some(&sid)).await;
+        }
 
         let nav_res = session.send("Page.navigate", json!({ "url": req.url }), Some(&sid)).await;
         if let Err(e) = nav_res {

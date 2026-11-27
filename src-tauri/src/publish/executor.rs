@@ -59,6 +59,11 @@ fn emit_update(env: &PublishEnv, draft_id: &str, status: &str) {
     env.sink.emit("publish:update", json!({ "draft_id": draft_id, "status": status }));
 }
 
+/// Tells the Analytics page the local ledger changed, so likes, replies and posts show without any fetch.
+fn emit_ledger(env: &PublishEnv, what: &str) {
+    env.sink.emit("analytics:updated", json!({ "source": what }));
+}
+
 async fn screenshot(env: &PublishEnv<'_>, d: &dyn crate::browser::BrowserDriver, tag: &str, ref_id: &str) -> Option<String> {
     let dir = env.shots_dir.as_ref()?;
     let png = d.screenshot_png().await.ok()?;
@@ -191,6 +196,9 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
                 let _ = prepo::record_event(&db, env.profile_id, a.platform_post_id(), &prepo::event_name(kind, a.undo()), a.source(), ok);
             }
         }
+        if status != "skipped" {
+            emit_ledger(env, "action");
+        }
         if let Some(did) = a.draft_id() {
             emit_update(env, did, "publishing");
         }
@@ -236,6 +244,7 @@ pub async fn execute(env: &PublishEnv<'_>, a: &Approval) -> JobResult {
         }
         _ => {}
     }
+    emit_ledger(env, "publish");
     JobResult { ok: problem.is_none(), message: problem, published_post_id: published_id }
 }
 
@@ -320,6 +329,7 @@ fn record_top_level(env: &PublishEnv<'_>, approval_ref: &str, draft_id: &str, ou
             let _ = drafts::mark_published(&db, env.profile_id, draft_id, url.as_deref());
             let _ = drafts::write_audit(&db, env.profile_id, draft_id, approval_ref, true, None, None, None);
             let published_post_id = url.as_deref().and_then(drafts::extract_status_id_from_url);
+            let _ = prepo::record_event(&db, env.profile_id, published_post_id.as_deref().unwrap_or(draft_id), "ogc", "publish", true);
             JobResult { ok: true, message: None, published_post_id }
         }
         ComposeOutcome::Failed { message } => {
@@ -334,6 +344,7 @@ fn record_top_level(env: &PublishEnv<'_>, approval_ref: &str, draft_id: &str, ou
         }
     };
     drop(db);
+    emit_ledger(env, "ogc");
     match outcome {
         ComposeOutcome::Published { .. } => {
             env.sink.emit("notify", json!({ "kind": "publish_done", "title": "Published", "body": "Your post is live on X." }));
@@ -609,6 +620,29 @@ mod top_level_tests {
         assert_eq!(calls[0], "navigate https://x.com/compose/post");
         assert!(calls.iter().any(|c| c == "insert Hello\nworld"));
         assert_eq!(clicks(&calls), 2, "one click into the composer, one on Post");
+    }
+
+    #[tokio::test]
+    async fn a_published_post_lands_in_the_ledger_and_tells_analytics_without_any_fetch() {
+        let h = harness("Hello", &[]);
+        let a = approval(&h, "Hello");
+        let d = healthy();
+        let browser = BrowserService::new(Box::new(d.clone()));
+        let sink = crate::control::CollectSink::default();
+        let kill = KillSwitch::new(false);
+        let env = PublishEnv { db: &h.db, browser: &browser, kill: &kill, sink: &sink, profile_id: &h.pid, timing: Timing::LIVE, step_gap_ms: (0, 0), shots_dir: None, vision: None };
+        let out = execute_top_level(&env, &a, fast()).await;
+        assert!(out.ok, "{out:?}");
+
+        let ogc: i64 = h
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM action_events WHERE profile_id = ?1 AND action = 'ogc' AND source = 'publish' AND ok = 1", [&h.pid], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ogc, 1);
+        let events = sink.0.lock().unwrap();
+        assert!(events.iter().any(|(name, _)| name == "analytics:updated"), "{events:?}");
     }
 
     #[tokio::test]

@@ -137,38 +137,10 @@ export interface ScheduleSummary {
   items: TrackedPostSchedule[];
 }
 
-export type HealthSeverity = "ok" | "warning" | "error";
-
-export interface HealthIssue {
-  code: string;
-  severity: HealthSeverity;
-  message: string;
-  hint: string;
-}
-
-export interface SyncHealthReport {
-  checked_at: string;
-  status: HealthSeverity;
-  extraction_mode: string;
-  tier_mode: string;
-  account_synced: boolean;
-  posts_synced: number;
-  external_posts_matched: number;
-  backfill_posts_added: number;
-  issues: HealthIssue[];
-}
-
-export interface SyncOptions {
-  backfill_days?: number;
-  handle_override?: string | null;
-  max_posts?: number | null;
-}
-
-export interface SyncReport {
-  health: SyncHealthReport;
-  used_dedicated_tab: boolean;
-  stopped_early: boolean;
-  duration_ms: number;
+export interface SyncStatus {
+  last_update_at: string | null;
+  /** Set while X itself needs the user: logged_out, challenge, locked or suspended. */
+  blocked: string | null;
 }
 
 export interface BuilderRouteStatus {
@@ -197,6 +169,11 @@ export interface ActivitySummary {
   drafted_ogc: number;
   published_ogc: number;
   engagement_actions: number;
+  likes_given: number;
+  bookmarks_saved: number;
+  reposts_made: number;
+  follows_made: number;
+  quotes_made: number;
   synced_post_snapshots: number;
   synced_account_snapshots: number;
   unsynced_published_posts: number;
@@ -207,7 +184,7 @@ export interface DashboardSnapshot {
   layouts: DashboardLayout[];
   widgets: EvaluatedWidget[];
   schedule: ScheduleSummary;
-  last_health: SyncHealthReport | null;
+  sync_status: SyncStatus;
   builder_route: BuilderRouteStatus;
   window_days: number;
   activity_summary?: ActivitySummary;

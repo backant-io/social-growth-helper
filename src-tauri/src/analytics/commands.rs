@@ -10,14 +10,12 @@ use super::csv::to_csv;
 use super::dashboard::{
     self, DashboardLayout, DashboardWidget, EvaluatedWidget, WidgetPositionUpdate,
 };
-use super::health::{load_last_health, SyncHealthReport};
-use super::ingest::{self, SyncOptions, SyncReport};
+use super::health::{load_status, SyncStatus};
 use super::sandbox::{execute_widget, WidgetQueryResult};
 use super::schedule::{compute_schedule, now_unix_secs, ScheduleSummary};
 use super::spec::{parse_untrusted_spec_json, WidgetPosition, WidgetSpec};
 use super::views::{list_view_schemas, ViewSchemaInfo};
 use crate::error::AppResult;
-use crate::onboarding;
 use crate::state::AppState;
 use serde::Serialize;
 use tauri::State;
@@ -32,6 +30,11 @@ pub struct ActivitySummary {
     pub drafted_ogc: usize,
     pub published_ogc: usize,
     pub engagement_actions: usize,
+    pub likes_given: usize,
+    pub bookmarks_saved: usize,
+    pub reposts_made: usize,
+    pub follows_made: usize,
+    pub quotes_made: usize,
     pub synced_post_snapshots: usize,
     pub synced_account_snapshots: usize,
     pub unsynced_published_posts: usize,
@@ -43,7 +46,7 @@ pub struct DashboardSnapshot {
     pub layouts: Vec<DashboardLayout>,
     pub widgets: Vec<EvaluatedWidget>,
     pub schedule: ScheduleSummary,
-    pub last_health: Option<SyncHealthReport>,
+    pub sync_status: SyncStatus,
     pub builder_route: BuilderRouteStatus,
     pub window_days: u32,
     pub activity_summary: ActivitySummary,
@@ -52,6 +55,15 @@ pub struct DashboardSnapshot {
 pub fn compute_activity_summary(conn: &rusqlite::Connection, profile_id: &str) -> AppResult<ActivitySummary> {
     let count_one = |sql: &str| -> AppResult<usize> {
         let n: i64 = conn.query_row(sql, [profile_id], |r| r.get(0))?;
+        Ok(n.max(0) as usize)
+    };
+
+    let count_action = |action: &str| -> AppResult<usize> {
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM action_events WHERE profile_id = ?1 AND ok = 1 AND action = ?2",
+            rusqlite::params![profile_id, action],
+            |r| r.get(0),
+        )?;
         Ok(n.max(0) as usize)
     };
 
@@ -78,8 +90,13 @@ pub fn compute_activity_summary(conn: &rusqlite::Connection, profile_id: &str) -
             "SELECT COUNT(*) FROM ogc_drafts WHERE profile_id = ?1 AND status = 'published'",
         )?,
         engagement_actions: count_one(
-            "SELECT COUNT(*) FROM action_events WHERE profile_id = ?1 AND ok = 1",
+            "SELECT COUNT(*) FROM action_events WHERE profile_id = ?1 AND ok = 1 AND action IN ('like','bookmark','repost','follow','quote')",
         )?,
+        likes_given: count_action("like")?,
+        bookmarks_saved: count_action("bookmark")?,
+        reposts_made: count_action("repost")?,
+        follows_made: count_action("follow")?,
+        quotes_made: count_action("quote")?,
         synced_post_snapshots: count_one(
             "SELECT COUNT(DISTINCT platform_post_id) FROM analytics_snapshots
              WHERE profile_id = ?1 AND scope = 'post' AND platform_post_id IS NOT NULL",
@@ -105,7 +122,7 @@ pub fn analytics_get_dashboard(
     let eff_window = window_days.unwrap_or(30).clamp(1, 365);
     let widgets = dashboard::evaluate_layout(&conn, &state.profile_id, &active_layout.id, Some(eff_window))?;
     let schedule = compute_schedule(&conn, &state.profile_id, now_unix_secs())?;
-    let last_health = load_last_health(&conn)?;
+    let sync_status = load_status(&conn);
     let builder_route = get_builder_route_status(&conn)?;
     let activity_summary = compute_activity_summary(&conn, &state.profile_id)?;
 
@@ -114,29 +131,11 @@ pub fn analytics_get_dashboard(
         layouts,
         widgets,
         schedule,
-        last_health,
+        sync_status,
         builder_route,
         window_days: eff_window,
         activity_summary,
     })
-}
-
-#[tauri::command]
-pub async fn analytics_sync_stats(
-    state: State<'_, AppState>,
-    options: Option<SyncOptions>,
-) -> AppResult<SyncReport> {
-    {
-        let conn = state.db.lock().unwrap();
-        onboarding::require_acknowledged(&conn)?;
-    }
-    let opts = options.unwrap_or_default();
-    if state.browser.is_running().await {
-        ingest::sync_stats(&state.db, &state.profile_id, state.browser.as_ref(), &state.jobs, opts).await
-    } else {
-        crate::commands::ensure_publish_browser_ready(&state).await?;
-        ingest::sync_stats(&state.db, &state.profile_id, state.publish_browser.as_ref(), &state.jobs, opts).await
-    }
 }
 
 #[tauri::command]

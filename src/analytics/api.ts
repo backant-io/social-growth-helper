@@ -8,9 +8,7 @@ import type {
   DashboardWidget,
   EvaluatedWidget,
   RepromptResult,
-  SyncHealthReport,
-  SyncOptions,
-  SyncReport,
+  SyncStatus,
   ViewSchemaInfo,
   WidgetPosition,
   WidgetPositionUpdate,
@@ -243,7 +241,7 @@ const SAMPLE_POSTS: PreviewPostRow[] = [
 interface PreviewStore {
   layouts: DashboardLayout[];
   widgetsByLayout: Record<string, DashboardWidget[]>;
-  lastHealth: SyncHealthReport | null;
+  syncStatus: SyncStatus;
 }
 
 const ALLOWED_VIEWS: AllowedView[] = [
@@ -523,17 +521,7 @@ function seedPreviewStore(): PreviewStore {
   return {
     layouts: [layout],
     widgetsByLayout: { [layoutId]: widgets },
-    lastHealth: {
-      checked_at: now,
-      status: "ok",
-      extraction_mode: "graphql",
-      tier_mode: "premium",
-      account_synced: true,
-      posts_synced: SAMPLE_POSTS.length,
-      external_posts_matched: 1,
-      backfill_posts_added: 0,
-      issues: [],
-    },
+    syncStatus: { last_update_at: now, blocked: null },
   };
 }
 
@@ -900,7 +888,7 @@ export const analyticsApi = {
           },
         ],
       },
-      last_health: store.lastHealth,
+      sync_status: store.syncStatus ?? { last_update_at: null, blocked: null },
       builder_route: {
         configured: false,
         provider_type: null,
@@ -918,30 +906,16 @@ export const analyticsApi = {
         drafted_ogc: 3,
         published_ogc: SAMPLE_POSTS.filter((p) => p.draft_kind === "ogc").length,
         engagement_actions: 14,
+        likes_given: 9,
+        bookmarks_saved: 3,
+        reposts_made: 1,
+        follows_made: 1,
+        quotes_made: 0,
         synced_post_snapshots: SAMPLE_POSTS.length,
         synced_account_snapshots: 3,
         unsynced_published_posts: 0,
       },
     };
-  },
-
-  async syncStats(options?: SyncOptions): Promise<SyncReport> {
-    if (inTauri()) return invokeCmd("analytics_sync_stats", { options: options ?? {} });
-    const store = loadStore();
-    const health: SyncHealthReport = {
-      checked_at: new Date().toISOString(),
-      status: "ok",
-      extraction_mode: "graphql",
-      tier_mode: "premium",
-      account_synced: true,
-      posts_synced: SAMPLE_POSTS.length,
-      external_posts_matched: 1,
-      backfill_posts_added: options?.backfill_days ? 3 : 0,
-      issues: [],
-    };
-    store.lastHealth = health;
-    saveStore(store);
-    return { health, used_dedicated_tab: true, stopped_early: false, duration_ms: 420 };
   },
 
   async listViews(): Promise<ViewSchemaInfo[]> {

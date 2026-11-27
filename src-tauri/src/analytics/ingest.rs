@@ -1,44 +1,20 @@
-//! Analytics ingestor orchestrating X analytics sync via BrowserDriver hooks (ANL-01..ANL-06, ANL-12, ANL-16, ANL-17, BRW-13).
+//! Writes what the background worker reads from X into `analytics_snapshots`.
+//!
+//! No page is loaded here: the worker hands over a capture and this module validates it, stores it, matches it to
+//! a tracked draft (or marks it `external`) and schedules the next checkpoint. Public counters only; nothing in
+//! this path depends on X Premium analytics or any GraphQL operation name.
 
-use super::extract::{
-    parse_account_overview, parse_post_metrics, parse_profile_timeline, PostMetrics,
-    ACCOUNT_ANALYTICS_DOM_JS, ACCOUNT_ANALYTICS_URL, ACCOUNT_GQL_FILTERS, POST_ANALYTICS_DOM_JS,
-    POST_GQL_FILTERS, PROFILE_GQL_FILTERS, PROFILE_TIMELINE_DOM_JS,
-};
-use super::health::{check_post_metrics_drift, empty_ok_report, save_last_health, HealthIssue, HealthSeverity, SyncHealthReport};
-use super::schedule::{compute_schedule, hours_since, now_unix_secs};
+use super::extract::{parse_profile_timeline, PostMetrics};
+use super::health;
+use super::pacing;
+use super::schedule::{hours_since, parse_rfc3339_unix, TrackedPostSchedule};
 use crate::browser::service::BrowserService;
 use crate::browser::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserError};
-use crate::error::{AppError, AppResult};
-use crate::lifecycle::JobRegistry;
-use crate::util::{new_id, now_rfc3339};
+use crate::error::AppResult;
+use crate::util::{format_unix, new_id, now_rfc3339};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::sync::Mutex;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SyncOptions {
-    /// When > 0, visits profile Posts & Replies tabs to backfill own posts from the last N days (ANL-16, ANL-17).
-    #[serde(default)]
-    pub backfill_days: u32,
-    /// Optional explicit X handle override when the profile row does not yet store one.
-    #[serde(default)]
-    pub handle_override: Option<String>,
-    /// Max tracked posts to visit per sync pass (keeps sync responsive).
-    #[serde(default)]
-    pub max_posts: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncReport {
-    pub health: SyncHealthReport,
-    pub used_dedicated_tab: bool,
-    pub stopped_early: bool,
-    pub duration_ms: u64,
-}
-
-/// Narrow async boundary so AnalyticsIngestor talks only to the BrowserDriver hook (or a test double).
+/// Narrow async boundary so the worker talks only to the browser driver hook (or a test double).
 #[async_trait::async_trait]
 pub trait AnalyticsPageFetcher: Send + Sync {
     async fn fetch_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError>;
@@ -79,18 +55,6 @@ fn store_account_snapshot(
     Ok(())
 }
 
-fn prior_post_impressions(conn: &Connection, profile_id: &str, platform_post_id: &str) -> AppResult<Option<i64>> {
-    Ok(conn
-        .query_row(
-            "SELECT impressions FROM analytics_snapshots
-             WHERE profile_id = ?1 AND scope = 'post' AND platform_post_id = ?2 AND impressions IS NOT NULL
-             ORDER BY captured_at DESC LIMIT 1",
-            params![profile_id, platform_post_id],
-            |r| r.get(0),
-        )
-        .optional()?)
-}
-
 fn store_post_snapshot(
     conn: &Connection,
     profile_id: &str,
@@ -98,11 +62,7 @@ fn store_post_snapshot(
     draft_kind: &str,
     draft_id: Option<&str>,
     age_hours: Option<f64>,
-    issues: &mut Vec<HealthIssue>,
 ) -> AppResult<()> {
-    let prior = prior_post_impressions(conn, profile_id, &m.platform_post_id)?;
-    check_post_metrics_drift(&m.platform_post_id, m.impressions, m.engagement_rate, prior, issues);
-
     let mut raw = m.raw_json.clone();
     if let Some(obj) = raw.as_object_mut() {
         if let Some(t) = &m.text {
@@ -206,14 +166,14 @@ fn match_draft_for_post(
     Ok(("external".into(), None))
 }
 
-fn profile_handle(conn: &Connection, profile_id: &str) -> AppResult<Option<String>> {
+pub fn profile_handle(conn: &Connection, profile_id: &str) -> AppResult<Option<String>> {
     let h: Option<String> = conn
         .query_row("SELECT handle FROM profiles WHERE id = ?1", [profile_id], |r| r.get(0))
         .optional()?;
     Ok(h.map(|s| s.trim().trim_start_matches('@').to_string()).filter(|s| !s.is_empty()))
 }
 
-fn update_profile_handle_if_empty(conn: &Connection, profile_id: &str, handle: &str) {
+pub fn update_profile_handle_if_empty(conn: &Connection, profile_id: &str, handle: &str) {
     let clean = handle.trim().trim_start_matches('@');
     if !clean.is_empty() {
         let _ = conn.execute(
@@ -223,337 +183,101 @@ fn update_profile_handle_if_empty(conn: &Connection, profile_id: &str, handle: &
     }
 }
 
-/// Runs a complete analytics sync pass using the browser driver hook (ANL-01..ANL-06, ANL-12, ANL-16, ANL-17).
-pub async fn sync_stats(
-    db: &Mutex<Connection>,
-    profile_id: &str,
-    fetcher: &dyn AnalyticsPageFetcher,
-    jobs: &JobRegistry,
-    opts: SyncOptions,
-) -> AppResult<SyncReport> {
-    let _job_guard = jobs.register("Analytics sync");
-    let started = std::time::Instant::now();
-    let now_unix = now_unix_secs();
-
-    let mut health = empty_ok_report("graphql", "premium");
-    let mut used_dedicated_tab = false;
-    let mut stopped_early = false;
-
-    // 1. Account overview capture (`x.com/i/account_analytics`)
-    let acc_cap = fetcher
-        .fetch_page(AnalyticsPageRequest {
-            url: ACCOUNT_ANALYTICS_URL.to_string(),
-            network_url_filters: ACCOUNT_GQL_FILTERS.iter().map(|s| s.to_string()).collect(),
-            dom_script: ACCOUNT_ANALYTICS_DOM_JS.to_string(),
-            settle_ms: 2500,
-        })
-        .await
-        .map_err(AppError::Browser)?;
-    used_dedicated_tab |= acc_cap.used_dedicated_tab;
-
-    let account = parse_account_overview(&acc_cap.network_responses, &acc_cap.dom_result);
-    if account.is_logged_out {
-        health.issues.push(HealthIssue {
-            code: "logged_out".into(),
-            severity: HealthSeverity::Error,
-            message: "X session is logged out; analytics sync halted.".into(),
-            hint: "Open the X window from Settings and sign in to X, then run Sync Stats again.".into(),
-        });
-        health.recompute_status();
-        let conn = db.lock().unwrap();
-        let _ = save_last_health(&conn, &health);
-        return Ok(SyncReport {
-            health,
-            used_dedicated_tab,
-            stopped_early: true,
-            duration_ms: started.elapsed().as_millis() as u64,
-        });
+/// Counters X could never show: negative, not finite, or more engagements than views.
+pub fn metrics_are_sane(m: &PostMetrics) -> bool {
+    let counters = [m.impressions, m.likes, m.replies, m.reposts, m.bookmarks, m.profile_visits, m.link_clicks];
+    if counters.iter().flatten().any(|v| *v < 0) {
+        return false;
     }
-
-    let mut detected_handle = opts
-        .handle_override
-        .clone()
-        .map(|h| h.trim().trim_start_matches('@').to_string())
-        .filter(|h| !h.is_empty())
-        .or_else(|| account.handle.clone());
-
-    {
-        let conn = db.lock().unwrap();
-        if let Some(h) = &detected_handle {
-            update_profile_handle_if_empty(&conn, profile_id, h);
-        } else {
-            detected_handle = profile_handle(&conn, profile_id)?;
-        }
+    if m.engagement_rate.is_some_and(|r| !r.is_finite() || !(0.0..=100.0).contains(&r)) {
+        return false;
     }
-
-    let mut non_premium_mode = false;
-    match account.source.as_str() {
-        "graphql" => {
-            health.extraction_mode = "graphql".into();
-            health.tier_mode = "premium".into();
-            health.account_synced = true;
-            let conn = db.lock().unwrap();
-            store_account_snapshot(
-                &conn,
-                profile_id,
-                account.impressions,
-                account.engagement_rate,
-                account.profile_visits,
-                account.followers_total,
-                &account.raw_json,
-            )?;
-        }
-        "dom_fallback" => {
-            health.extraction_mode = "dom_fallback".into();
-            health.tier_mode = "premium".into();
-            health.account_synced = true;
-            health.issues.push(HealthIssue {
-                code: "account_dom_fallback".into(),
-                severity: HealthSeverity::Warning,
-                message: "AccountOverviewQuery GraphQL was not captured; fell back to DOM extraction.".into(),
-                hint: "Metrics were still captured. If values look incomplete, check X analytics page layout.".into(),
-            });
-            let conn = db.lock().unwrap();
-            store_account_snapshot(
-                &conn,
-                profile_id,
-                account.impressions,
-                account.engagement_rate,
-                account.profile_visits,
-                account.followers_total,
-                &account.raw_json,
-            )?;
-        }
-        "non_premium_upsell" => {
-            non_premium_mode = true;
-            health.extraction_mode = "public_counters".into();
-            health.tier_mode = "non_premium_fallback".into();
-            health.issues.push(HealthIssue {
-                code: "non_premium_fallback".into(),
-                severity: HealthSeverity::Warning,
-                message: "X account_analytics requires X Premium; switched to public profile & post counters (ANL-06).".into(),
-                hint: "Dashboard metrics will populate from public view counts and engagement counters.".into(),
-            });
-        }
-        _ => {
-            health.extraction_mode = "empty".into();
-            health.issues.push(HealthIssue {
-                code: "account_extraction_empty".into(),
-                severity: HealthSeverity::Warning,
-                message: "Could not extract account overview numbers from X analytics.".into(),
-                hint: "X may have updated its analytics DOM or the page was still loading.".into(),
-            });
-        }
+    match m.impressions {
+        Some(imp) if imp > 0 => [m.likes, m.replies, m.reposts, m.bookmarks].iter().flatten().sum::<i64>() <= imp,
+        _ => true,
     }
+}
 
-    // 2. Per-post metric ingest for tracked posts prioritized by time-series schedule (ANL-03, ANL-05)
-    let schedule = {
-        let conn = db.lock().unwrap();
-        compute_schedule(&conn, profile_id, now_unix)?
-    };
-    let max_posts = opts.max_posts.unwrap_or(25).clamp(1, 100);
-    let mut synced_post_ids: HashSet<String> = HashSet::new();
+fn round_age(hours: f64) -> f64 {
+    (hours * 10.0).round() / 10.0
+}
 
-    for item in schedule.items.iter().take(max_posts) {
-        if jobs.stop_requested() {
-            stopped_early = true;
-            break;
-        }
-        let target_url = if let Some(u) = &item.published_url {
-            if non_premium_mode {
-                u.trim_end_matches('/').to_string()
-            } else {
-                format!("{}/analytics", u.trim_end_matches('/'))
-            }
-        } else if let Some(h) = &detected_handle {
-            if non_premium_mode {
-                format!("https://x.com/{h}/status/{}", item.platform_post_id)
-            } else {
-                format!("https://x.com/{h}/status/{}/analytics", item.platform_post_id)
-            }
-        } else {
-            format!("https://x.com/i/web/status/{}", item.platform_post_id)
-        };
+/// Stores one post snapshot for a tracked draft and schedules its next checkpoint. Returns false (and stores
+/// nothing) for metrics that fail the sanity check.
+pub fn ingest_post_metrics(conn: &Connection, profile_id: &str, item: &TrackedPostSchedule, m: &PostMetrics, now: i64) -> AppResult<bool> {
+    if !metrics_are_sane(m) {
+        return Ok(false);
+    }
+    let age = round_age(hours_since(&item.published_at, now));
+    store_post_snapshot(conn, profile_id, m, &item.draft_kind, Some(&item.draft_id), Some(age))?;
+    pacing::mark_synced(conn, profile_id, &item.platform_post_id, age, now)?;
+    let _ = crate::formats::winrate::recompute_personal_win_rates(conn, profile_id);
+    health::mark_updated(conn)?;
+    Ok(true)
+}
 
-        let capture = match fetcher
-            .fetch_page(AnalyticsPageRequest {
-                url: target_url,
-                network_url_filters: POST_GQL_FILTERS.iter().map(|s| s.to_string()).collect(),
-                dom_script: POST_ANALYTICS_DOM_JS.to_string(),
-                settle_ms: 1800,
-            })
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                health.issues.push(HealthIssue {
-                    code: "post_fetch_failed".into(),
-                    severity: HealthSeverity::Warning,
-                    message: format!("Failed to capture post {}: {e}", item.platform_post_id),
-                    hint: "Will retry on the next sync pass.".into(),
-                });
-                continue;
-            }
-        };
-        used_dedicated_tab |= capture.used_dedicated_tab;
+fn has_recent_snapshot(conn: &Connection, profile_id: &str, post_id: &str, since_unix: i64) -> AppResult<bool> {
+    let hit: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM analytics_snapshots WHERE profile_id = ?1 AND scope = 'post' AND platform_post_id = ?2 AND captured_at >= ?3 LIMIT 1",
+            params![profile_id, post_id, format_unix(since_unix)],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(hit.is_some())
+}
 
-        let metrics = parse_post_metrics(&item.platform_post_id, &capture.network_responses, &capture.dom_result);
-        if metrics.source == "empty" {
-            health.issues.push(HealthIssue {
-                code: "post_metrics_empty".into(),
-                severity: HealthSeverity::Warning,
-                message: format!("No metrics found for post {}.", item.platform_post_id),
-                hint: "Post may have been deleted or X selectors drifted.".into(),
-            });
+/// Stores follower count and the public counters of recent own posts from a profile page (`/handle` or
+/// `/handle/with_replies`). Posts seen in the last three hours are not stored again. Returns how many post
+/// snapshots were written.
+pub fn ingest_profile_page(conn: &Connection, profile_id: &str, dom: &serde_json::Value, now: i64, window_days: i64) -> AppResult<usize> {
+    let timeline = parse_profile_timeline(dom);
+    if let Some(h) = &timeline.handle {
+        update_profile_handle_if_empty(conn, profile_id, h);
+    }
+    let mut stored = 0;
+    if timeline.followers_total.is_some() {
+        store_account_snapshot(conn, profile_id, None, None, None, timeline.followers_total, &serde_json::json!({ "source": "profile_header" }))?;
+        stored += 1;
+    }
+    let cutoff = now - window_days * 86_400;
+    for post in timeline.posts {
+        if post.posted_at.as_deref().and_then(parse_rfc3339_unix).is_some_and(|ts| ts < cutoff) {
             continue;
         }
-
-        let age = hours_since(&item.published_at, now_unix);
-        let conn = db.lock().unwrap();
-        store_post_snapshot(
-            &conn,
-            profile_id,
-            &metrics,
-            &item.draft_kind,
-            Some(&item.draft_id),
-            Some((age * 10.0).round() / 10.0),
-            &mut health.issues,
-        )?;
-        health.posts_synced += 1;
-        synced_post_ids.insert(item.platform_post_id.clone());
-    }
-
-    // 3. Profile timeline pass for non-Premium fallback (ANL-06), historical backfill (ANL-16),
-    // external posts (ANL-17), or when account overview / per-post sync returned nothing yet.
-    let run_profile_pass = !stopped_early
-        && (non_premium_mode
-            || opts.backfill_days > 0
-            || account.source == "empty"
-            || health.posts_synced == 0);
-    if run_profile_pass {
-        if let Some(handle) = detected_handle {
-            let cutoff_secs = now_unix - (opts.backfill_days.max(30) as i64) * 86_400;
-            let tabs = [
-                format!("https://x.com/{handle}"),
-                format!("https://x.com/{handle}/with_replies"),
-            ];
-            let mut followers_recorded = health.account_synced;
-
-            for tab_url in tabs {
-                if jobs.stop_requested() {
-                    stopped_early = true;
-                    break;
-                }
-                let Ok(cap) = fetcher
-                    .fetch_page(AnalyticsPageRequest {
-                        url: tab_url,
-                        network_url_filters: PROFILE_GQL_FILTERS.iter().map(|s| s.to_string()).collect(),
-                        dom_script: PROFILE_TIMELINE_DOM_JS.to_string(),
-                        settle_ms: 2000,
-                    })
-                    .await
-                else {
-                    continue;
-                };
-                used_dedicated_tab |= cap.used_dedicated_tab;
-                let timeline = parse_profile_timeline(&cap.dom_result);
-
-                let conn = db.lock().unwrap();
-                if !followers_recorded && timeline.followers_total.is_some() {
-                    store_account_snapshot(
-                        &conn,
-                        profile_id,
-                        None,
-                        None,
-                        None,
-                        timeline.followers_total,
-                        &serde_json::json!({ "source": "non_premium_profile_header" }),
-                    )?;
-                    health.account_synced = true;
-                    followers_recorded = true;
-                }
-
-                for post in timeline.posts {
-                    if synced_post_ids.contains(&post.platform_post_id) {
-                        continue;
-                    }
-                    if let Some(posted_at) = &post.posted_at {
-                        if let Some(ts) = super::schedule::parse_rfc3339_unix(posted_at) {
-                            if ts < cutoff_secs {
-                                continue;
-                            }
-                        }
-                    }
-
-                    let (kind, draft_id) =
-                        match_draft_for_post(&conn, profile_id, &post.platform_post_id, post.text.as_deref())?;
-                    let age = post.posted_at.as_deref().map(|p| (hours_since(p, now_unix) * 10.0).round() / 10.0);
-                    store_post_snapshot(&conn, profile_id, &post, &kind, draft_id.as_deref(), age, &mut health.issues)?;
-                    synced_post_ids.insert(post.platform_post_id.clone());
-                    health.posts_synced += 1;
-                    if kind == "external" {
-                        health.external_posts_matched += 1;
-                    }
-                    if opts.backfill_days > 0 {
-                        health.backfill_posts_added += 1;
-                    }
-                }
-            }
-        } else if opts.backfill_days > 0 || (!health.account_synced && health.posts_synced == 0) {
-            health.issues.push(HealthIssue {
-                code: "missing_handle_for_backfill".into(),
-                severity: HealthSeverity::Warning,
-                message: "Could not detect your X handle to pull profile posts.".into(),
-                hint: "Open the X window, sign in to your account, then run Sync stats or Backfill 30 days.".into(),
-            });
+        if !metrics_are_sane(&post) || has_recent_snapshot(conn, profile_id, &post.platform_post_id, now - 3 * 3600)? {
+            continue;
         }
+        let (kind, draft_id) = match_draft_for_post(conn, profile_id, &post.platform_post_id, post.text.as_deref())?;
+        let age = post.posted_at.as_deref().map(|p| round_age(hours_since(p, now)));
+        store_post_snapshot(conn, profile_id, &post, &kind, draft_id.as_deref(), age)?;
+        if draft_id.is_some() {
+            if let Some(age) = age {
+                pacing::mark_synced(conn, profile_id, &post.platform_post_id, age, now)?;
+            }
+        }
+        stored += 1;
     }
-
-    health.recompute_status();
-    {
-        let conn = db.lock().unwrap();
-        let _ = crate::formats::winrate::recompute_personal_win_rates(&conn, profile_id);
-        save_last_health(&conn, &health)?;
+    if stored > 0 {
+        let _ = crate::formats::winrate::recompute_personal_win_rates(conn, profile_id);
+        health::mark_updated(conn)?;
     }
-
-    Ok(SyncReport {
-        health,
-        used_dedicated_tab,
-        stopped_early,
-        duration_ms: started.elapsed().as_millis() as u64,
-    })
+    Ok(stored)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser::CapturedNetworkResponse;
+    use crate::analytics::schedule::{compute_schedule, now_unix_secs};
     use crate::storage::{open, repo};
-    use crate::util::format_unix;
     use serde_json::json;
-    use std::collections::HashMap;
     use tempfile::tempdir;
 
-    struct ScriptedFetcher {
-        pages: HashMap<String, AnalyticsPageCapture>,
-    }
-
-    #[async_trait::async_trait]
-    impl AnalyticsPageFetcher for ScriptedFetcher {
-        async fn fetch_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
-            self.pages
-                .get(&req.url)
-                .cloned()
-                .ok_or_else(|| BrowserError::Other(format!("unexpected url {}", req.url)))
-        }
-    }
-
-    fn setup_db_with_draft() -> (tempfile::TempDir, Mutex<Connection>, String) {
+    fn setup() -> (tempfile::TempDir, Connection, String) {
         let dir = tempdir().unwrap();
         let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
         let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
-        let published_at = format_unix(now_unix_secs() - 24 * 3600);
-        conn.execute("UPDATE profiles SET handle = 'pavel' WHERE id = ?1", [&pid]).unwrap();
+        let published_at = format_unix(now_unix_secs() - 2 * 3600);
         conn.execute(
             "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_followers, text, feed_source, posted_at, first_seen_at, metrics_at_capture_json)
              VALUES ('op1', ?1, 'src1', 'naval', 200000, 'Build leverage', 'for_you', ?2, ?2, '{}')",
@@ -566,196 +290,78 @@ mod tests {
             params![pid, published_at],
         )
         .unwrap();
-        (dir, Mutex::new(conn), pid)
+        (dir, conn, pid)
     }
 
-    #[tokio::test]
-    async fn syncs_account_graphql_tracked_posts_and_backfills_external_posts() {
-        let (_d, db, pid) = setup_db_with_draft();
-        let recent = format_unix(now_unix_secs() - 3 * 86_400);
-        let mut pages = HashMap::new();
-        pages.insert(
-            ACCOUNT_ANALYTICS_URL.into(),
-            AnalyticsPageCapture {
-                final_url: ACCOUNT_ANALYTICS_URL.into(),
-                used_dedicated_tab: true,
-                network_responses: vec![CapturedNetworkResponse {
-                    url: "https://x.com/i/api/graphql/hash1/AccountOverviewQuery".into(),
-                    status: 200,
-                    body: json!({"data": {"impressions": 84200, "engagement_rate": 4.7, "profile_visits": 920, "followers_total": 4510}}).to_string(),
-                }],
-                dom_result: json!({ "handle": "pavel", "loggedOut": false, "isPremiumUpsell": false }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel/status/9001/analytics".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel/status/9001/analytics".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![CapturedNetworkResponse {
-                    url: "https://x.com/i/api/graphql/hash2/TweetActivityQuery".into(),
-                    status: 200,
-                    body: json!({"data": {"Impressions": 5400, "Likes": 140, "Replies": 12, "Reposts": 8, "Bookmarks": 22}}).to_string(),
-                }],
-                dom_result: json!({}),
-            },
-        );
-        let too_old = format_unix(now_unix_secs() - 45 * 86_400);
-        pages.insert(
-            "https://x.com/pavel".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({
-                    "handle": "pavel",
-                    "followersText": "4,510 Followers",
-                    "posts": [
-                        { "id": "9001", "text": "sharp reply", "postedAt": recent, "views": "5.4K Views", "likes": "140 Likes" },
-                        { "id": "9999", "text": "Posted manually from phone", "postedAt": recent, "views": "1.1K Views", "likes": "25 Likes", "replies": "3 Replies" },
-                        { "id": "7777", "text": "Older than 30d window", "postedAt": too_old, "views": "300 Views", "likes": "5 Likes" }
-                    ]
-                }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel/with_replies".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel/with_replies".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "posts": [] }),
-            },
-        );
-
-        let fetcher = ScriptedFetcher { pages };
-        let jobs = JobRegistry::new();
-        let report = sync_stats(
-            &db,
-            &pid,
-            &fetcher,
-            &jobs,
-            SyncOptions { backfill_days: 30, ..Default::default() },
-        )
-        .await
-        .unwrap();
-
-        assert!(report.used_dedicated_tab);
-        assert_eq!(report.health.status, HealthSeverity::Ok);
-        assert!(report.health.account_synced);
-        assert_eq!(report.health.posts_synced, 2);
-        assert_eq!(report.health.external_posts_matched, 1);
-
-        let conn = db.lock().unwrap();
-        let ext_kind: String = conn
-            .query_row("SELECT draft_kind FROM analytics_snapshots WHERE platform_post_id = '9999'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(ext_kind, "external");
-        let old_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM analytics_snapshots WHERE platform_post_id = '7777'", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(old_count, 0, "posts older than the 30-day backfill window must be skipped");
-        assert!(jobs.active().is_empty(), "job guard must be released after sync");
+    fn metrics(imp: Option<i64>, likes: i64) -> PostMetrics {
+        PostMetrics {
+            platform_post_id: "9001".into(),
+            impressions: imp,
+            likes: Some(likes),
+            replies: Some(1),
+            source: "dom_fallback".into(),
+            raw_json: json!({}),
+            ..Default::default()
+        }
     }
 
-    #[tokio::test]
-    async fn handles_non_premium_fallback_gracefully() {
-        let (_d, db, pid) = setup_db_with_draft();
-        let recent = format_unix(now_unix_secs() - 3600);
-        let mut pages = HashMap::new();
-        pages.insert(
-            ACCOUNT_ANALYTICS_URL.into(),
-            AnalyticsPageCapture {
-                final_url: ACCOUNT_ANALYTICS_URL.into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "loggedOut": false, "isPremiumUpsell": true, "metricCards": {} }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel/status/9001".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel/status/9001".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "impressions": "920 Views", "likes": "22 Likes", "replies": "4 Replies" }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "followersText": "1.5K Followers", "posts": [{ "id": "8888", "text": "Hi", "postedAt": recent, "views": "400 Views", "likes": "10 Likes" }] }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel/with_replies".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel/with_replies".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "posts": [] }),
-            },
-        );
+    #[test]
+    fn stores_a_post_snapshot_and_schedules_the_next_checkpoint() {
+        let (_d, conn, pid) = setup();
+        let now = now_unix_secs();
+        let item = compute_schedule(&conn, &pid, now).unwrap().items.remove(0);
+        assert!(ingest_post_metrics(&conn, &pid, &item, &metrics(Some(900), 22), now).unwrap());
 
-        let report = sync_stats(&db, &pid, &ScriptedFetcher { pages }, &JobRegistry::new(), SyncOptions::default())
-            .await
+        let (likes, kind, age): (i64, String, f64) = conn
+            .query_row("SELECT likes, draft_kind, age_hours FROM analytics_snapshots WHERE platform_post_id = '9001'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
             .unwrap();
-        assert_eq!(report.health.tier_mode, "non_premium_fallback");
-        assert!(report.health.account_synced);
-        assert_eq!(report.health.posts_synced, 2);
-        assert!(report.health.issues.iter().any(|i| i.code == "non_premium_fallback"));
+        assert_eq!((likes, kind.as_str()), (22, "reply"));
+        assert!((age - 2.0).abs() < 0.2);
+        let st = pacing::load_state(&conn, &pid, "9001").unwrap().unwrap();
+        assert!(st.next_due_at > now + 3 * 3600, "next look is the 6h checkpoint");
+        assert!(health::load_status(&conn).last_update_at.is_some());
     }
 
-    #[tokio::test]
-    async fn empty_account_overview_falls_back_to_profile_timeline_pass() {
-        let dir = tempdir().unwrap();
-        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
-        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
-        conn.execute("UPDATE profiles SET handle = 'pavel' WHERE id = ?1", [&pid]).unwrap();
-        let db = Mutex::new(conn);
-        let recent = format_unix(now_unix_secs() - 3600);
+    #[test]
+    fn rejects_impossible_numbers_instead_of_storing_them() {
+        let (_d, conn, pid) = setup();
+        let now = now_unix_secs();
+        let item = compute_schedule(&conn, &pid, now).unwrap().items.remove(0);
+        assert!(!ingest_post_metrics(&conn, &pid, &item, &metrics(Some(-5), 1), now).unwrap());
+        assert!(!ingest_post_metrics(&conn, &pid, &item, &metrics(Some(10), 500), now).unwrap(), "more likes than views");
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM analytics_snapshots", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+        assert!(pacing::load_state(&conn, &pid, "9001").unwrap().is_none());
+    }
 
-        let mut pages = HashMap::new();
-        pages.insert(
-            ACCOUNT_ANALYTICS_URL.into(),
-            AnalyticsPageCapture {
-                final_url: ACCOUNT_ANALYTICS_URL.into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "loggedOut": false, "isPremiumUpsell": false, "metricCards": {} }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({
-                    "handle": "pavel",
-                    "followersText": "2.4K Followers",
-                    "posts": [{ "id": "5555", "text": "Fresh post", "postedAt": recent, "views": "1.2K Views", "likes": "34 Likes" }]
-                }),
-            },
-        );
-        pages.insert(
-            "https://x.com/pavel/with_replies".into(),
-            AnalyticsPageCapture {
-                final_url: "https://x.com/pavel/with_replies".into(),
-                used_dedicated_tab: true,
-                network_responses: vec![],
-                dom_result: json!({ "handle": "pavel", "posts": [] }),
-            },
-        );
+    #[test]
+    fn profile_page_stores_followers_matches_drafts_and_flags_external_posts() {
+        let (_d, conn, pid) = setup();
+        let now = now_unix_secs();
+        let recent = format_unix(now - 3600);
+        let old = format_unix(now - 45 * 86_400);
+        let dom = json!({
+            "handle": "pavel",
+            "followersText": "4,510 Followers",
+            "posts": [
+                { "id": "9001", "text": "sharp reply", "postedAt": recent, "views": "5.4K Views", "likes": "140 Likes" },
+                { "id": "9999", "text": "Posted manually from phone", "postedAt": recent, "views": "1.1K Views", "likes": "25 Likes" },
+                { "id": "7777", "text": "Too old", "postedAt": old, "views": "300 Views", "likes": "5 Likes" }
+            ]
+        });
+        assert_eq!(ingest_profile_page(&conn, &pid, &dom, now, 30).unwrap(), 3, "followers plus two recent posts");
 
-        // Even with default SyncOptions (backfill_days = 0), empty account extraction must still run the profile pass.
-        let report = sync_stats(&db, &pid, &ScriptedFetcher { pages }, &JobRegistry::new(), SyncOptions::default())
-            .await
-            .unwrap();
-        assert!(report.health.account_synced);
-        assert_eq!(report.health.posts_synced, 1);
+        let ext: String = conn.query_row("SELECT draft_kind FROM analytics_snapshots WHERE platform_post_id = '9999'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ext, "external");
+        let old_n: i64 = conn.query_row("SELECT COUNT(*) FROM analytics_snapshots WHERE platform_post_id = '7777'", [], |r| r.get(0)).unwrap();
+        assert_eq!(old_n, 0);
+        let followers: i64 = conn.query_row("SELECT followers_total FROM analytics_snapshots WHERE scope = 'account'", [], |r| r.get(0)).unwrap();
+        assert_eq!(followers, 4510);
+        let handle: String = conn.query_row("SELECT handle FROM profiles WHERE id = ?1", [&pid], |r| r.get(0)).unwrap();
+        assert_eq!(handle, "pavel");
+        assert!(pacing::load_state(&conn, &pid, "9001").unwrap().is_some(), "a tracked post seen on the profile is not refetched right away");
+        assert!(pacing::load_state(&conn, &pid, "9999").unwrap().is_none());
+
+        assert_eq!(ingest_profile_page(&conn, &pid, &dom, now + 600, 30).unwrap(), 1, "posts seen within three hours are not stored twice");
     }
 }
