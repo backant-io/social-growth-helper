@@ -520,7 +520,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             }
             let drop = {
                 let db = env.db.lock().unwrap();
-                classify(&post, &cfg, &|pid| repo::has_evaluation(&db, env.profile_id, pid))
+                classify(&post, &cfg, &|pid| repo::has_evaluation(&db, env.profile_id, pid) || repo::already_engaged(&db, env.profile_id, pid))
             };
             if let Some(d) = drop {
                 filtered.record(d);
@@ -949,6 +949,26 @@ mod tests {
         let sid2 = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
         let s2 = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid2, &p).await;
         assert_eq!(s2.scored, 0, "already evaluated posts are not scored twice");
+    }
+
+    #[tokio::test]
+    async fn posts_we_already_replied_to_are_not_scored_or_queued() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(3, 0));
+        let b = browser(&mock).await;
+        let f = fixture();
+        crate::publish::repo::record_event(&f.db.lock().unwrap(), &f.profile, "1001", "reply", "publish", true).unwrap();
+        let p = params(100, None);
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!((s.filtered.seen, s.scored, s.queued), (1, 2, 2));
+        let db = f.db.lock().unwrap();
+        let mut ids: Vec<String> = repo::queue(&db, &f.profile, 0.0, crate::scout::model::parse_rfc3339_unix(&crate::util::now_rfc3339()).unwrap(), 50)
+            .unwrap()
+            .into_iter()
+            .map(|q| q.post.platform_post_id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["1000", "1002"]);
     }
 
     #[tokio::test]

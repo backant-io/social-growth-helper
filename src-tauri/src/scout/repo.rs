@@ -160,6 +160,25 @@ pub fn has_evaluation(conn: &Connection, profile_id: &str, platform_post_id: &st
     .unwrap_or(false)
 }
 
+/// SQL predicate (over `observed_posts o`) true when we already replied to or quoted the post: an executed
+/// reply/quote action event, or a published draft whose bundle carried a reply/quote. Durable across sessions.
+const ENGAGED_PREDICATE: &str = "(
+    EXISTS (SELECT 1 FROM action_events ae
+            WHERE ae.profile_id = o.profile_id AND ae.platform_post_id = o.platform_post_id AND ae.ok = 1 AND ae.action IN ('reply', 'quote'))
+    OR EXISTS (SELECT 1 FROM reply_drafts pd
+               WHERE pd.observed_post_id = o.id AND pd.status = 'published'
+                 AND (pd.actions_json LIKE '%\"reply\"%' OR pd.actions_json LIKE '%\"quote\"%'))
+)";
+
+/// True when we already replied to or quoted this post, so Scout must never surface it again.
+pub fn already_engaged(conn: &Connection, profile_id: &str, platform_post_id: &str) -> bool {
+    let sql = format!(
+        "SELECT EXISTS (SELECT 1 FROM action_events WHERE profile_id = ?1 AND platform_post_id = ?2 AND ok = 1 AND action IN ('reply', 'quote'))
+             OR EXISTS (SELECT 1 FROM observed_posts o WHERE o.profile_id = ?1 AND o.platform_post_id = ?2 AND {ENGAGED_PREDICATE})"
+    );
+    conn.query_row(&sql, params![profile_id, platform_post_id], |r| r.get::<_, bool>(0)).unwrap_or(false)
+}
+
 /// Active rubric text and version: the learned rubric when Phase 4 has produced one, else version 0.
 pub fn active_rubric(conn: &Connection, profile_id: &str) -> AppResult<Option<(i64, String)>> {
     Ok(conn
@@ -305,7 +324,7 @@ pub struct QueueItem {
 /// Queue entries at or above `threshold`, newest-best first. Entries older than 24 hours expire (SCT-16).
 pub fn queue(conn: &Connection, profile_id: &str, threshold: f64, now_unix: i64, limit: i64) -> AppResult<Vec<QueueItem>> {
     let cutoff = format_unix(now_unix - QUEUE_TTL_SECS);
-    let mut st = conn.prepare(
+    let sql = format!(
         "SELECT e.id, e.session_id, e.potential_score, e.angle_summary, e.reasoning, e.model_used, e.status, e.created_at,
                 o.id, o.platform_post_id, o.author_handle, o.text, o.has_media, o.metrics_at_capture_json, o.posted_at,
                 e.outlier_score, e.breakout_flags_json, o.author_followers, o.author_verified, o.media_json,
@@ -319,8 +338,10 @@ pub fn queue(conn: &Connection, profile_id: &str, threshold: f64, now_unix: i64,
              ORDER BY d2.created_at DESC LIMIT 1
          )
          WHERE o.profile_id = ?1 AND e.status IN ('queued', 'drafted') AND e.potential_score >= ?2 AND e.created_at >= ?3
-         ORDER BY e.potential_score DESC, e.created_at DESC LIMIT ?4",
-    )?;
+           AND NOT {ENGAGED_PREDICATE}
+         ORDER BY e.potential_score DESC, e.created_at DESC LIMIT ?4"
+    );
+    let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(params![profile_id, threshold, cutoff, limit], |r| {
         let (handle, pid): (String, String) = (r.get(10)?, r.get(9)?);
         let metrics: String = r.get(13)?;
@@ -475,6 +496,69 @@ mod tests {
         assert!(has_evaluation(&conn, &profile, "9"));
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM scout_evaluations", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    fn queued_ids(conn: &Connection, profile: &str) -> Vec<String> {
+        let now = crate::scout::model::parse_rfc3339_unix(&now_rfc3339()).unwrap();
+        queue(conn, profile, 0.0, now, 50).unwrap().into_iter().map(|q| q.post.platform_post_id).collect()
+    }
+
+    #[test]
+    fn replied_posts_never_reappear_in_the_queue_but_open_ones_do() {
+        let (conn, profile) = db();
+        let open = post(&conn, &profile, "10", "a", "open");
+        evaluation(&conn, &open, 80.0);
+
+        let via_draft = post(&conn, &profile, "11", "b", "replied via draft");
+        let e = evaluation(&conn, &via_draft, 90.0);
+        let d = crate::drafts::repo::create(&conn, &profile, &via_draft, Some(&e)).unwrap();
+        conn.execute("UPDATE reply_drafts SET status = 'published', actions_json = '[\"like\",\"reply\"]' WHERE id = ?1", [&d]).unwrap();
+
+        let via_event = post(&conn, &profile, "12", "c", "replied via event");
+        evaluation(&conn, &via_event, 85.0);
+        crate::publish::repo::record_event(&conn, &profile, "12", "reply", "publish", true).unwrap();
+
+        let quoted = post(&conn, &profile, "13", "d", "quoted");
+        evaluation(&conn, &quoted, 70.0);
+        crate::publish::repo::record_event(&conn, &profile, "13", "quote", "action_click", true).unwrap();
+
+        let failed = post(&conn, &profile, "14", "e", "failed reply attempt");
+        evaluation(&conn, &failed, 60.0);
+        crate::publish::repo::record_event(&conn, &profile, "14", "reply", "publish", false).unwrap();
+
+        let mut ids = queued_ids(&conn, &profile);
+        ids.sort();
+        assert_eq!(ids, vec!["10", "14"]);
+    }
+
+    #[test]
+    fn already_engaged_covers_events_and_published_drafts_only_for_reply_or_quote() {
+        let (conn, profile) = db();
+        assert!(!already_engaged(&conn, &profile, "20"));
+        crate::publish::repo::record_event(&conn, &profile, "20", "like", "action_click", true).unwrap();
+        assert!(!already_engaged(&conn, &profile, "20"), "a like is not a reply");
+        crate::publish::repo::record_event(&conn, &profile, "20", "reply", "publish", false).unwrap();
+        assert!(!already_engaged(&conn, &profile, "20"), "a failed reply does not count");
+        crate::publish::repo::record_event(&conn, &profile, "20", "reply", "publish", true).unwrap();
+        assert!(already_engaged(&conn, &profile, "20"));
+
+        let o = post(&conn, &profile, "21", "a", "t");
+        assert!(!already_engaged(&conn, &profile, "21"));
+        let d = crate::drafts::repo::create(&conn, &profile, &o, None).unwrap();
+        conn.execute("UPDATE reply_drafts SET status = 'published', actions_json = '[\"quote\"]' WHERE id = ?1", [&d]).unwrap();
+        assert!(already_engaged(&conn, &profile, "21"));
+        assert!(!already_engaged(&conn, "other-profile", "21"));
+    }
+
+    #[test]
+    fn publishing_marks_every_evaluation_of_the_post_acted() {
+        let (conn, profile) = db();
+        let o = post(&conn, &profile, "30", "a", "t");
+        let e = evaluation(&conn, &o, 80.0);
+        let d = crate::drafts::repo::create(&conn, &profile, &o, None).unwrap();
+        crate::publish::repo::mark_published(&conn, &d, Some("999"), None).unwrap();
+        let st: String = conn.query_row("SELECT status FROM scout_evaluations WHERE id = ?1", [&e], |r| r.get(0)).unwrap();
+        assert_eq!(st, "acted");
     }
 
     #[test]

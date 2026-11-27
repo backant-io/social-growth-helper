@@ -62,7 +62,10 @@ pub fn mark_published(conn: &Connection, draft_id: &str, post_id: Option<&str>, 
         params![draft_id, now_rfc3339(), post_id, url],
     )?;
     conn.execute(
-        "UPDATE scout_evaluations SET status = 'acted' WHERE id = (SELECT evaluation_id FROM reply_drafts WHERE id = ?1)",
+        "UPDATE scout_evaluations SET status = 'acted'
+         WHERE status IN ('queued', 'drafted')
+           AND (id = (SELECT evaluation_id FROM reply_drafts WHERE id = ?1)
+                OR observed_post_id = (SELECT observed_post_id FROM reply_drafts WHERE id = ?1))",
         [draft_id],
     )?;
     Ok(())
