@@ -4,7 +4,7 @@
 //! `Runtime.evaluate` inside a dedicated isolated world created with `Page.createIsolatedWorld`.
 
 use super::cdp::CleanCdpSession;
-use super::launcher::{self, StaleRecord};
+use super::launcher::{self, SpawnedChrome, StaleRecord};
 use super::{
     AnalyticsPageCapture, AnalyticsPageRequest, BrowserDriver, BrowserError, CapturedNetworkResponse,
     ChromeLaunchConfig, WindowBounds,
@@ -12,7 +12,6 @@ use super::{
 use base64::Engine;
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::process::Child;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -32,7 +31,7 @@ struct Live {
 #[derive(Default)]
 pub struct ChromeCdpDriver {
     live: Option<Live>,
-    child: StdMutex<Option<Child>>,
+    child: StdMutex<Option<SpawnedChrome>>,
     world: StdMutex<Option<i64>>,
 }
 
@@ -139,7 +138,7 @@ impl ChromeCdpDriver {
         w["windowId"].as_i64().ok_or_else(|| BrowserError::Other("no windowId".into()))
     }
 
-    fn take_child(&self) -> Option<Child> {
+    fn take_child(&self) -> Option<SpawnedChrome> {
         self.child.lock().unwrap().take()
     }
 

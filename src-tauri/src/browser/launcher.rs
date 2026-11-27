@@ -2,9 +2,10 @@
 
 use super::{BrowserError, ChromeLaunchConfig};
 use serde::{Deserialize, Serialize};
+use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::Duration;
 
 /// Flag prefixes that must never appear on the Chrome command line. Their absence keeps
@@ -49,15 +50,295 @@ pub fn build_chrome_args(cfg: &ChromeLaunchConfig, debug_port: u16) -> Vec<Strin
     ]
 }
 
+/// Handle to a spawned Chrome process.
+///
+/// On macOS this wraps a direct `posix_spawnp` PID launched with TCC responsibility disclaimed
+/// (`responsibility_spawnattrs_setdisclaim`), so macOS attributes Chrome's own bundle/TCC checks
+/// (such as App Management `kTCCServiceSystemPolicyAppBundles`) to Chrome instead of this app.
+#[cfg(target_os = "macos")]
+pub struct SpawnedChrome {
+    pid: libc::pid_t,
+    status: Option<ExitStatus>,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub struct SpawnedChrome(std::process::Child);
+
+#[cfg(target_os = "macos")]
+impl SpawnedChrome {
+    pub fn id(&self) -> u32 {
+        self.pid as u32
+    }
+
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(status) = self.status {
+            return Ok(Some(status));
+        }
+        let mut raw: libc::c_int = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(self.pid, &mut raw, libc::WNOHANG) };
+            if rc == 0 {
+                return Ok(None);
+            }
+            if rc == self.pid {
+                let status = ExitStatus::from_raw(raw);
+                self.status = Some(status);
+                return Ok(Some(status));
+            }
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+    }
+
+    pub fn kill(&mut self) -> io::Result<()> {
+        if self.status.is_some() {
+            return Ok(());
+        }
+        let rc = unsafe { libc::kill(self.pid, libc::SIGKILL) };
+        if rc == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ESRCH) {
+            return Ok(());
+        }
+        Err(err)
+    }
+
+    pub fn wait(&mut self) -> io::Result<ExitStatus> {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(status) = self.status {
+            return Ok(status);
+        }
+        let mut raw: libc::c_int = 0;
+        loop {
+            let rc = unsafe { libc::waitpid(self.pid, &mut raw, 0) };
+            if rc == self.pid {
+                let status = ExitStatus::from_raw(raw);
+                self.status = Some(status);
+                return Ok(status);
+            }
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(err);
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl SpawnedChrome {
+    pub fn id(&self) -> u32 {
+        self.0.id()
+    }
+
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.0.try_wait()
+    }
+
+    pub fn kill(&mut self) -> io::Result<()> {
+        self.0.kill()
+    }
+
+    pub fn wait(&mut self) -> io::Result<ExitStatus> {
+        self.0.wait()
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::SpawnedChrome;
+    use std::ffi::{CString, OsStr};
+    use std::io;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    struct SpawnAttr(libc::posix_spawnattr_t);
+
+    impl SpawnAttr {
+        fn new() -> io::Result<Self> {
+            let mut raw: libc::posix_spawnattr_t = std::ptr::null_mut();
+            let rc = unsafe { libc::posix_spawnattr_init(&mut raw) };
+            if rc != 0 {
+                return Err(io::Error::from_raw_os_error(rc));
+            }
+            Ok(Self(raw))
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut libc::posix_spawnattr_t {
+            &mut self.0
+        }
+
+        fn as_ptr(&self) -> *const libc::posix_spawnattr_t {
+            &self.0
+        }
+    }
+
+    impl Drop for SpawnAttr {
+        fn drop(&mut self) {
+            unsafe {
+                libc::posix_spawnattr_destroy(&mut self.0);
+            }
+        }
+    }
+
+    struct FileActions(libc::posix_spawn_file_actions_t);
+
+    impl FileActions {
+        fn new() -> io::Result<Self> {
+            let mut raw: libc::posix_spawn_file_actions_t = std::ptr::null_mut();
+            let rc = unsafe { libc::posix_spawn_file_actions_init(&mut raw) };
+            if rc != 0 {
+                return Err(io::Error::from_raw_os_error(rc));
+            }
+            Ok(Self(raw))
+        }
+
+        fn as_mut_ptr(&mut self) -> *mut libc::posix_spawn_file_actions_t {
+            &mut self.0
+        }
+
+        fn as_ptr(&self) -> *const libc::posix_spawn_file_actions_t {
+            &self.0
+        }
+    }
+
+    impl Drop for FileActions {
+        fn drop(&mut self) {
+            unsafe {
+                libc::posix_spawn_file_actions_destroy(&mut self.0);
+            }
+        }
+    }
+
+    fn os_to_cstring(s: &OsStr) -> io::Result<CString> {
+        CString::new(s.as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "argument contains interior NUL"))
+    }
+
+    pub(super) fn disclaim_responsibility(attr: *mut libc::posix_spawnattr_t) -> Result<(), String> {
+        type DisclaimFn = unsafe extern "C" fn(*mut libc::posix_spawnattr_t, libc::c_int) -> libc::c_int;
+        let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"responsibility_spawnattrs_setdisclaim".as_ptr()) };
+        if sym.is_null() {
+            return Err("responsibility_spawnattrs_setdisclaim symbol not found".to_string());
+        }
+        let f: DisclaimFn = unsafe { std::mem::transmute(sym) };
+        let rc = unsafe { f(attr, 1) };
+        if rc != 0 {
+            return Err(format!("responsibility_spawnattrs_setdisclaim failed with status {rc}"));
+        }
+        Ok(())
+    }
+
+    pub(super) fn spawn_disclaimed(program: &Path, args: &[String]) -> io::Result<SpawnedChrome> {
+        let c_program = os_to_cstring(program.as_os_str())?;
+        let mut argv: Vec<CString> = Vec::with_capacity(args.len() + 1);
+        argv.push(c_program.clone());
+        for arg in args {
+            argv.push(os_to_cstring(OsStr::new(arg))?);
+        }
+        let argv_ptrs: Vec<*mut libc::c_char> = argv
+            .iter()
+            .map(|s| s.as_ptr() as *mut libc::c_char)
+            .chain(std::iter::once(std::ptr::null_mut()))
+            .collect();
+
+        let envp: Vec<CString> = std::env::vars_os()
+            .filter_map(|(k, v)| {
+                let mut entry = Vec::with_capacity(k.len() + 1 + v.len());
+                entry.extend_from_slice(k.as_bytes());
+                entry.push(b'=');
+                entry.extend_from_slice(v.as_bytes());
+                CString::new(entry).ok()
+            })
+            .collect();
+        let envp_ptrs: Vec<*mut libc::c_char> = envp
+            .iter()
+            .map(|s| s.as_ptr() as *mut libc::c_char)
+            .chain(std::iter::once(std::ptr::null_mut()))
+            .collect();
+
+        let mut attr = SpawnAttr::new()?;
+        let flags = (libc::POSIX_SPAWN_CLOEXEC_DEFAULT | libc::POSIX_SPAWN_SETSIGDEF | libc::POSIX_SPAWN_SETSIGMASK) as libc::c_short;
+        let rc = unsafe { libc::posix_spawnattr_setflags(attr.as_mut_ptr(), flags) };
+        if rc != 0 {
+            return Err(io::Error::from_raw_os_error(rc));
+        }
+
+        let mut empty_mask: libc::sigset_t = 0;
+        unsafe { libc::sigemptyset(&mut empty_mask) };
+        let rc = unsafe { libc::posix_spawnattr_setsigmask(attr.as_mut_ptr(), &empty_mask) };
+        if rc != 0 {
+            return Err(io::Error::from_raw_os_error(rc));
+        }
+
+        let mut sigdef: libc::sigset_t = 0;
+        unsafe {
+            libc::sigemptyset(&mut sigdef);
+            libc::sigaddset(&mut sigdef, libc::SIGPIPE);
+        }
+        let rc = unsafe { libc::posix_spawnattr_setsigdefault(attr.as_mut_ptr(), &sigdef) };
+        if rc != 0 {
+            return Err(io::Error::from_raw_os_error(rc));
+        }
+
+        if let Err(err) = disclaim_responsibility(attr.as_mut_ptr()) {
+            log::warn!("unable to disclaim macOS TCC responsibility for Chrome: {err}");
+        }
+
+        let mut actions = FileActions::new()?;
+        for (fd, oflag) in [(0, libc::O_RDONLY), (1, libc::O_WRONLY), (2, libc::O_WRONLY)] {
+            let rc = unsafe {
+                libc::posix_spawn_file_actions_addopen(actions.as_mut_ptr(), fd, c"/dev/null".as_ptr(), oflag, 0)
+            };
+            if rc != 0 {
+                return Err(io::Error::from_raw_os_error(rc));
+            }
+        }
+
+        let mut pid: libc::pid_t = 0;
+        let rc = unsafe {
+            libc::posix_spawnp(
+                &mut pid,
+                c_program.as_ptr(),
+                actions.as_ptr(),
+                attr.as_ptr(),
+                argv_ptrs.as_ptr(),
+                envp_ptrs.as_ptr(),
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::from_raw_os_error(rc));
+        }
+        Ok(SpawnedChrome { pid, status: None })
+    }
+}
+
 /// Spawns genuine Chrome with zero automation flags.
-pub fn spawn_clean_chrome(cfg: &ChromeLaunchConfig, debug_port: u16) -> Result<Child, BrowserError> {
+pub fn spawn_clean_chrome(cfg: &ChromeLaunchConfig, debug_port: u16) -> Result<SpawnedChrome, BrowserError> {
     std::fs::create_dir_all(&cfg.profile_dir)?;
-    Ok(Command::new(&cfg.binary_path)
-        .args(build_chrome_args(cfg, debug_port))
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?)
+    let args = build_chrome_args(cfg, debug_port);
+    #[cfg(target_os = "macos")]
+    {
+        Ok(macos::spawn_disclaimed(&cfg.binary_path, &args)?)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(SpawnedChrome(
+            Command::new(&cfg.binary_path)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+        ))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -231,6 +512,7 @@ mod tests {
     #[cfg(unix)]
     mod unix {
         use super::*;
+        use std::process::Child;
 
         fn spawn_marker(profile: &Path) -> Child {
             // Use the POSIX `read` builtin with a piped stdin rather than `sleep`: on macOS,
@@ -293,6 +575,57 @@ mod tests {
         async fn no_record_means_nothing_to_do() {
             let dir = tempfile::tempdir().unwrap();
             assert_eq!(reclaim_stale_chrome(&dir.path().join("p")).await, ReclaimOutcome::NothingToReclaim);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    mod macos_tests {
+        use super::*;
+
+        #[test]
+        fn responsibility_disclaim_succeeds_on_macos() {
+            let mut raw: libc::posix_spawnattr_t = std::ptr::null_mut();
+            assert_eq!(unsafe { libc::posix_spawnattr_init(&mut raw) }, 0);
+            let res = macos::disclaim_responsibility(&mut raw);
+            unsafe { libc::posix_spawnattr_destroy(&mut raw) };
+            assert!(res.is_ok(), "expected macOS disclaim symbol to succeed: {res:?}");
+        }
+
+        #[test]
+        fn disclaimed_spawn_passes_args_and_handles_lifecycle() {
+            let dir = tempfile::tempdir().unwrap();
+            let marker_file = dir.path().join("args.txt");
+            let script = format!("printf '%s|%s' \"$1\" \"$2\" > \"{}\"", marker_file.display());
+            let mut child = macos::spawn_disclaimed(
+                Path::new("/bin/sh"),
+                &["-c".into(), script, "arg0".into(), "first".into(), "second".into()],
+            )
+            .unwrap();
+            assert!(child.id() > 0);
+            let status = child.wait().unwrap();
+            assert!(status.success(), "expected clean exit: {status}");
+            assert_eq!(child.try_wait().unwrap(), Some(status), "cached exit status must be idempotent");
+            assert_eq!(child.wait().unwrap(), status);
+            child.kill().unwrap();
+            assert_eq!(std::fs::read_to_string(&marker_file).unwrap(), "first|second");
+        }
+
+        #[test]
+        fn disclaimed_spawn_try_wait_and_kill_running_process() {
+            let mut child = macos::spawn_disclaimed(Path::new("/bin/sleep"), &["30".into()]).unwrap();
+            assert!(child.try_wait().unwrap().is_none(), "running process should not have exited yet");
+            child.kill().unwrap();
+            let status = child.wait().unwrap();
+            assert!(!status.success(), "killed process must not report success");
+            assert_eq!(child.try_wait().unwrap(), Some(status));
+        }
+
+        #[test]
+        fn disclaimed_spawn_missing_binary_errors() {
+            let err = macos::spawn_disclaimed(Path::new("/definitely/missing/chrome-bin"), &[])
+                .err()
+                .expect("missing binary should fail");
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
         }
     }
 }
