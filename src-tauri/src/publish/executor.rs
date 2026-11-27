@@ -318,7 +318,8 @@ fn record_top_level(env: &PublishEnv<'_>, approval_ref: &str, draft_id: &str, ou
         ComposeOutcome::Published { url } => {
             let _ = drafts::mark_published(&db, env.profile_id, draft_id, url.as_deref());
             let _ = drafts::write_audit(&db, env.profile_id, draft_id, approval_ref, true, None, None, None);
-            JobResult { ok: true, message: None, published_post_id: None }
+            let published_post_id = url.as_deref().and_then(drafts::extract_status_id_from_url);
+            JobResult { ok: true, message: None, published_post_id }
         }
         ComposeOutcome::Failed { message } => {
             let _ = drafts::mark_failed(&db, env.profile_id, draft_id, message, false);

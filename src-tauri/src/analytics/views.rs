@@ -204,5 +204,5 @@ pub fn ensure_views(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-const VIEWS_SQL: &str = include_str!("../storage/migrations/0005_phase4_analytics_views.sql");
+const VIEWS_SQL: &str = include_str!("../storage/migrations/0010_analytics_live_views.sql");
 

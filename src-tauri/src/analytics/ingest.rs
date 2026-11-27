@@ -423,8 +423,13 @@ pub async fn sync_stats(
         synced_post_ids.insert(item.platform_post_id.clone());
     }
 
-    // 3. Profile timeline pass for non-Premium fallback (ANL-06), historical backfill (ANL-16), and external posts (ANL-17)
-    let run_profile_pass = !stopped_early && (non_premium_mode || opts.backfill_days > 0);
+    // 3. Profile timeline pass for non-Premium fallback (ANL-06), historical backfill (ANL-16),
+    // external posts (ANL-17), or when account overview / per-post sync returned nothing yet.
+    let run_profile_pass = !stopped_early
+        && (non_premium_mode
+            || opts.backfill_days > 0
+            || account.source == "empty"
+            || health.posts_synced == 0);
     if run_profile_pass {
         if let Some(handle) = detected_handle {
             let cutoff_secs = now_unix - (opts.backfill_days.max(30) as i64) * 86_400;
@@ -494,12 +499,12 @@ pub async fn sync_stats(
                     }
                 }
             }
-        } else if opts.backfill_days > 0 {
+        } else if opts.backfill_days > 0 || (!health.account_synced && health.posts_synced == 0) {
             health.issues.push(HealthIssue {
                 code: "missing_handle_for_backfill".into(),
                 severity: HealthSeverity::Warning,
-                message: "Could not detect your X handle for 30-day historical backfill.".into(),
-                hint: "Ensure you are logged into X in the browser window or pass your handle.".into(),
+                message: "Could not detect your X handle to pull profile posts.".into(),
+                hint: "Open the X window, sign in to your account, then run Sync stats or Backfill 30 days.".into(),
             });
         }
     }
@@ -702,5 +707,55 @@ mod tests {
         assert!(report.health.account_synced);
         assert_eq!(report.health.posts_synced, 2);
         assert!(report.health.issues.iter().any(|i| i.code == "non_premium_fallback"));
+    }
+
+    #[tokio::test]
+    async fn empty_account_overview_falls_back_to_profile_timeline_pass() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+        conn.execute("UPDATE profiles SET handle = 'pavel' WHERE id = ?1", [&pid]).unwrap();
+        let db = Mutex::new(conn);
+        let recent = format_unix(now_unix_secs() - 3600);
+
+        let mut pages = HashMap::new();
+        pages.insert(
+            ACCOUNT_ANALYTICS_URL.into(),
+            AnalyticsPageCapture {
+                final_url: ACCOUNT_ANALYTICS_URL.into(),
+                used_dedicated_tab: true,
+                network_responses: vec![],
+                dom_result: json!({ "handle": "pavel", "loggedOut": false, "isPremiumUpsell": false, "metricCards": {} }),
+            },
+        );
+        pages.insert(
+            "https://x.com/pavel".into(),
+            AnalyticsPageCapture {
+                final_url: "https://x.com/pavel".into(),
+                used_dedicated_tab: true,
+                network_responses: vec![],
+                dom_result: json!({
+                    "handle": "pavel",
+                    "followersText": "2.4K Followers",
+                    "posts": [{ "id": "5555", "text": "Fresh post", "postedAt": recent, "views": "1.2K Views", "likes": "34 Likes" }]
+                }),
+            },
+        );
+        pages.insert(
+            "https://x.com/pavel/with_replies".into(),
+            AnalyticsPageCapture {
+                final_url: "https://x.com/pavel/with_replies".into(),
+                used_dedicated_tab: true,
+                network_responses: vec![],
+                dom_result: json!({ "handle": "pavel", "posts": [] }),
+            },
+        );
+
+        // Even with default SyncOptions (backfill_days = 0), empty account extraction must still run the profile pass.
+        let report = sync_stats(&db, &pid, &ScriptedFetcher { pages }, &JobRegistry::new(), SyncOptions::default())
+            .await
+            .unwrap();
+        assert!(report.health.account_synced);
+        assert_eq!(report.health.posts_synced, 1);
     }
 }

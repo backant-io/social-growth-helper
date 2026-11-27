@@ -139,28 +139,54 @@ pub fn compute_schedule(conn: &Connection, profile_id: &str, now_unix: i64) -> A
         let mut stmt = conn.prepare(
             "SELECT published_post_id, COALESCE(draft_kind, 'reply'), id, published_url, COALESCE(published_at, created_at)
              FROM reply_drafts
-             WHERE profile_id = ?1 AND status = 'published' AND published_post_id IS NOT NULL",
+             WHERE profile_id = ?1 AND status = 'published' AND (published_post_id IS NOT NULL OR published_url IS NOT NULL)",
         )?;
         let rows = stmt
             .query_map([profile_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        tracked.extend(rows);
+        for (pid, kind, id, url, published_at) in rows {
+            let resolved_id = pid
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| url.as_deref().and_then(crate::creator::drafts::extract_status_id_from_url));
+            if let Some(post_id) = resolved_id {
+                tracked.push((post_id, kind, id, url, published_at));
+            }
+        }
     }
 
     {
         let mut stmt = conn.prepare(
             "SELECT published_post_id, 'ogc', id, published_url, COALESCE(published_at, created_at)
              FROM ogc_drafts
-             WHERE profile_id = ?1 AND status = 'published' AND published_post_id IS NOT NULL",
+             WHERE profile_id = ?1 AND status = 'published' AND (published_post_id IS NOT NULL OR published_url IS NOT NULL)",
         )?;
         let rows = stmt
             .query_map([profile_id], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, String>(4)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        tracked.extend(rows);
+        for (pid, kind, id, url, published_at) in rows {
+            let resolved_id = pid
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| url.as_deref().and_then(crate::creator::drafts::extract_status_id_from_url));
+            if let Some(post_id) = resolved_id {
+                tracked.push((post_id, kind, id, url, published_at));
+            }
+        }
     }
 
     let mut items = Vec::with_capacity(tracked.len());

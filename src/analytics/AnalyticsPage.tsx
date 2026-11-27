@@ -1,19 +1,102 @@
-import { useCallback, useEffect, useState } from "react";
-import { btn, btnPrimary, EmptyBlock, Notice, Page, PageHeader } from "../components/ui";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { btn, btnGhost, btnPrimary, EmptyBlock, muted, Notice, Page, PageHeader } from "../components/ui";
+import { listen } from "../lib/api";
+import type { SectionId } from "../lib/types";
 import { analyticsApi } from "./api";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
 import { RepromptBuilderModal } from "./RepromptBuilderModal";
 import { SyncHealthBanner } from "./SyncHealthBanner";
-import type { DashboardSnapshot, DashboardWidget, WidgetPositionUpdate, WidgetSpec } from "./types";
+import type {
+  ActivitySummary,
+  DashboardSnapshot,
+  DashboardWidget,
+  WidgetPositionUpdate,
+  WidgetSpec,
+} from "./types";
 import { WidgetCard } from "./WidgetCard";
 
+interface AnalyticsPageProps {
+  onNavigate?: (section: SectionId) => void;
+}
 
-export function AnalyticsPage() {
+export function hasPerformanceData(snapshot: DashboardSnapshot): boolean {
+  const a = snapshot.activity_summary;
+  if (a) {
+    if (
+      a.synced_post_snapshots > 0 ||
+      a.synced_account_snapshots > 0 ||
+      a.published_replies > 0 ||
+      a.published_ogc > 0
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return snapshot.widgets.some((item) => {
+    if (!item.data || item.data.rows.length === 0) return false;
+    if (item.widget.spec.chart_type !== "kpi") return true;
+    const row = item.data.rows[0];
+    return Object.values(row).some((v) => typeof v === "number" && v !== 0);
+  });
+}
+
+function hasLocalActivity(a?: ActivitySummary): boolean {
+  if (!a) return false;
+  return (
+    a.scouted_posts > 0 ||
+    a.evaluated_posts > 0 ||
+    a.drafted_replies > 0 ||
+    a.drafted_ogc > 0 ||
+    a.engagement_actions > 0
+  );
+}
+
+function CollectedActivityStrip({ activity }: { activity: ActivitySummary }) {
+  const items = [
+    { label: "Scouted posts", value: activity.scouted_posts },
+    { label: "Evaluated", value: activity.evaluated_posts },
+    { label: "Queued", value: activity.queued_posts },
+    { label: "Reply drafts", value: activity.drafted_replies },
+    { label: "Creator drafts", value: activity.drafted_ogc },
+    { label: "Actions", value: activity.engagement_actions },
+  ];
+
+  return (
+    <section
+      aria-label="Activity collected in this app"
+      className="space-y-3 border-t border-zinc-200 pt-5 dark:border-zinc-800"
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="eyebrow">Activity collected in this app</h2>
+        <span className={`text-xs ${muted}`}>
+          Live counts from your local database before your first post performance sync
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        {items.map((stat) => (
+          <div
+            key={stat.label}
+            className="border-t border-zinc-200 pt-3 dark:border-zinc-800"
+          >
+            <div className="eyebrow">{stat.label}</div>
+            <div className="mt-1 font-mono text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+              {stat.value.toLocaleString()}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
   const [windowDays, setWindowDays] = useState<number>(30);
   const [customizeMode, setCustomizeMode] = useState(false);
+  const [showEmptyWidgets, setShowEmptyWidgets] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncNote, setSyncNote] = useState<string | null>(null);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dragOverWidgetId, setDragOverWidgetId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,12 +105,25 @@ export function AnalyticsPage() {
     widget: null,
   });
 
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const loadDashboard = useCallback(async (days: number) => {
+    const reqId = ++requestIdRef.current;
     setError(null);
     try {
       const next = await analyticsApi.getDashboard(days);
+      if (!mountedRef.current || reqId !== requestIdRef.current) return;
       setSnapshot(next);
     } catch (e) {
+      if (!mountedRef.current || reqId !== requestIdRef.current) return;
       setError((e as Error).message);
     }
   }, []);
@@ -36,22 +132,50 @@ export function AnalyticsPage() {
     void loadDashboard(windowDays);
   }, [loadDashboard, windowDays]);
 
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+    void listen("publish:update", () => {
+      if (active) void loadDashboard(windowDays);
+    }).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [loadDashboard, windowDays]);
+
   const handleSync = useCallback(
     async (backfillDays?: number) => {
       setSyncing(true);
       setError(null);
+      setSyncNote(null);
       try {
-        await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
+        const report = await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
         await loadDashboard(windowDays);
+        if (!mountedRef.current) return;
+        const { posts_synced, account_synced, issues } = report.health;
+        if (issues.length === 0) {
+          if (posts_synced > 0 || account_synced) {
+            const parts: string[] = [];
+            if (posts_synced > 0) parts.push(`${posts_synced} post${posts_synced === 1 ? "" : "s"}`);
+            if (account_synced) parts.push("account overview");
+            setSyncNote(`Synced ${parts.join(" and ")} from X.`);
+          } else {
+            setSyncNote("Sync finished, but no posts or account stats were returned from X yet.");
+          }
+        }
       } catch (e) {
+        if (!mountedRef.current) return;
         setError((e as Error).message);
       } finally {
-        setSyncing(false);
+        if (mountedRef.current) setSyncing(false);
       }
     },
     [loadDashboard, windowDays],
   );
-
 
   async function handleAcceptWidget(spec: WidgetSpec, sourcePrompt: string) {
     if (!snapshot) return;
@@ -66,6 +190,7 @@ export function AnalyticsPage() {
     } else {
       await analyticsApi.addWidget(snapshot.active_layout.id, spec, undefined, sourcePrompt);
     }
+    setShowEmptyWidgets(true);
     await loadDashboard(windowDays);
   }
 
@@ -151,11 +276,16 @@ export function AnalyticsPage() {
   if (!snapshot) {
     return (
       <Page wide>
-        <PageHeader title="Analytics" />
+        <PageHeader title="Analytics" description="How your posts and replies are doing." />
         {error ? (
-          <Notice tone="error">{error}</Notice>
+          <div className="space-y-3">
+            <Notice tone="error">{error}</Notice>
+            <button type="button" onClick={() => void loadDashboard(windowDays)} className={btn}>
+              Retry
+            </button>
+          </div>
         ) : (
-          <div className="grid grid-cols-12 gap-5">
+          <div className="grid grid-cols-12 gap-5" role="status" aria-label="Loading analytics dashboard">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <div
                 key={i}
@@ -167,6 +297,10 @@ export function AnalyticsPage() {
       </Page>
     );
   }
+
+  const hasData = hasPerformanceData(snapshot);
+  const localActivity = hasLocalActivity(snapshot.activity_summary);
+  const showGettingStarted = !hasData && !customizeMode && !showEmptyWidgets;
 
   return (
     <Page wide>
@@ -199,25 +333,87 @@ export function AnalyticsPage() {
       <SyncHealthBanner
         health={snapshot.last_health}
         schedule={snapshot.schedule}
+        activity={snapshot.activity_summary}
         syncing={syncing}
         onSyncDue={() => void handleSync(undefined)}
+        onBackfill30d={() => void handleSync(30)}
       />
 
       {customizeMode && (
         <Notice tone="info">Drag cards to reorder or resize. Changes save as you go.</Notice>
       )}
 
+      {syncNote && <Notice tone="ok">{syncNote}</Notice>}
+
       {error && <Notice tone="error">{error}</Notice>}
 
-      {snapshot.widgets.length === 0 ? (
+      {showGettingStarted ? (
+        <div className="space-y-6">
+          {localActivity && snapshot.activity_summary && (
+            <CollectedActivityStrip activity={snapshot.activity_summary} />
+          )}
+
+          <EmptyBlock
+            title="No post performance data yet"
+            action={
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <button
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => void handleSync(30)}
+                  className={btnPrimary}
+                >
+                  {syncing ? "Syncing..." : "Backfill 30 days from X"}
+                </button>
+                <button
+                  type="button"
+                  disabled={syncing}
+                  onClick={() => void handleSync(undefined)}
+                  className={btn}
+                >
+                  Sync stats
+                </button>
+                {onNavigate && (
+                  <>
+                    <button type="button" onClick={() => onNavigate("scout")} className={btnGhost}>
+                      Open Scout
+                    </button>
+                    <button type="button" onClick={() => onNavigate("creator")} className={btnGhost}>
+                      Open Creator
+                    </button>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowEmptyWidgets(true)}
+                  className={btnGhost}
+                >
+                  Show starter widgets
+                </button>
+              </div>
+            }
+          >
+            Analytics populates automatically as soon as you publish a reply from Scout or a post from
+            Creator, or import your recent X posts with a 30-day backfill.
+          </EmptyBlock>
+        </div>
+      ) : snapshot.widgets.length === 0 ? (
         <EmptyBlock
           title="No widgets yet"
           action={
             <>
-              <button type="button" onClick={() => setBuilderTarget({ open: true, widget: null })} className={btnPrimary}>
+              <button
+                type="button"
+                onClick={() => setBuilderTarget({ open: true, widget: null })}
+                className={btnPrimary}
+              >
                 Add a widget
               </button>
-              <button type="button" onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())} className={btn}>
+              <button
+                type="button"
+                onClick={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
+                className={btn}
+              >
                 Restore starter layout
               </button>
             </>
@@ -226,30 +422,45 @@ export function AnalyticsPage() {
           Add a widget to see your numbers here.
         </EmptyBlock>
       ) : (
-        <div className="grid grid-cols-12 gap-5">
-          {snapshot.widgets.map((item, idx) => (
-            <WidgetCard
-              key={item.widget.id}
-              item={item}
-              customizeMode={customizeMode}
-              isDragging={draggedWidgetId === item.widget.id}
-              isDropTarget={dragOverWidgetId === item.widget.id && draggedWidgetId !== item.widget.id}
-              canMoveUp={idx > 0}
-              canMoveDown={idx < snapshot.widgets.length - 1}
-              onReprompt={() => setBuilderTarget({ open: true, widget: item.widget })}
-              onExportCsv={() => void handleExportCsv(item.widget)}
-              onRemove={() => void handleRemoveWidget(item.widget.id)}
-              onMove={(delta) => void handleMoveWidget(idx, delta)}
-              onResize={(w, h) => void handleResizeWidget(item.widget, w, h)}
-              onDragStart={() => setDraggedWidgetId(item.widget.id)}
-              onDragOver={() => setDragOverWidgetId(item.widget.id)}
-              onDrop={() => void handleDropWidget(item.widget.id)}
-              onDragEnd={() => {
-                setDraggedWidgetId(null);
-                setDragOverWidgetId(null);
-              }}
-            />
-          ))}
+        <div className="space-y-4">
+          {!hasData && showEmptyWidgets && !customizeMode && (
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
+              <span>Previewing starter layout with no post data yet.</span>
+              <button
+                type="button"
+                onClick={() => setShowEmptyWidgets(false)}
+                className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
+              >
+                Back to setup guide
+              </button>
+            </div>
+          )}
+
+          <div className="grid grid-cols-12 gap-5">
+            {snapshot.widgets.map((item, idx) => (
+              <WidgetCard
+                key={item.widget.id}
+                item={item}
+                customizeMode={customizeMode}
+                isDragging={draggedWidgetId === item.widget.id}
+                isDropTarget={dragOverWidgetId === item.widget.id && draggedWidgetId !== item.widget.id}
+                canMoveUp={idx > 0}
+                canMoveDown={idx < snapshot.widgets.length - 1}
+                onReprompt={() => setBuilderTarget({ open: true, widget: item.widget })}
+                onExportCsv={() => void handleExportCsv(item.widget)}
+                onRemove={() => void handleRemoveWidget(item.widget.id)}
+                onMove={(delta) => void handleMoveWidget(idx, delta)}
+                onResize={(w, h) => void handleResizeWidget(item.widget, w, h)}
+                onDragStart={() => setDraggedWidgetId(item.widget.id)}
+                onDragOver={() => setDragOverWidgetId(item.widget.id)}
+                onDrop={() => void handleDropWidget(item.widget.id)}
+                onDragEnd={() => {
+                  setDraggedWidgetId(null);
+                  setDragOverWidgetId(null);
+                }}
+              />
+            ))}
+          </div>
         </div>
       )}
 

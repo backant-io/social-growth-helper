@@ -279,10 +279,18 @@ pub fn recent_published_texts(conn: &Connection, profile_id: &str, limit: i64) -
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// Extracts a numeric X status ID from a post URL like `https://x.com/handle/status/1234567890?s=20`.
+pub fn extract_status_id_from_url(url: &str) -> Option<String> {
+    let (_, rest) = url.split_once("/status/")?;
+    let id: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if id.is_empty() { None } else { Some(id) }
+}
+
 pub fn mark_published(conn: &Connection, profile_id: &str, id: &str, url: Option<&str>) -> AppResult<()> {
+    let post_id = url.and_then(extract_status_id_from_url);
     conn.execute(
-        "UPDATE ogc_drafts SET status='published', published_at=?1, published_url=?2, error_message=NULL WHERE id=?3 AND profile_id=?4",
-        params![now_rfc3339(), url, id, profile_id],
+        "UPDATE ogc_drafts SET status='published', published_at=?1, published_url=?2, published_post_id=COALESCE(?3, published_post_id), error_message=NULL WHERE id=?4 AND profile_id=?5",
+        params![now_rfc3339(), url, post_id, id, profile_id],
     )?;
     Ok(())
 }
@@ -383,7 +391,11 @@ mod tests {
         let a = claim(&conn, &pid, &d.id, "hello", 280).unwrap();
         mark_failed(&conn, &pid, a.draft_id(), "composer never appeared", false).unwrap();
         let a2 = claim(&conn, &pid, &d.id, "hello", 280).unwrap();
-        mark_published(&conn, &pid, a2.draft_id(), Some("https://x.com/a/status/1")).unwrap();
+        mark_published(&conn, &pid, a2.draft_id(), Some("https://x.com/a/status/12345?s=20")).unwrap();
+        let post_id: Option<String> = conn
+            .query_row("SELECT published_post_id FROM ogc_drafts WHERE id=?1", [&d.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(post_id.as_deref(), Some("12345"));
         assert!(claim(&conn, &pid, &d.id, "hello", 280).is_err());
         assert!(discard(&conn, &pid, &d.id).is_err());
     }

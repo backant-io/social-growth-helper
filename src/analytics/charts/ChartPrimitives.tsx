@@ -177,7 +177,7 @@ function BarChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult })
   if (data.rows.length === 0) return <EmptyChart />;
   const xField = pickField(spec.options.x_field, data.columns, 0);
   const yField = pickField(spec.options.y_field, data.columns, 1);
-  const extraMetrics = data.columns.filter((c) => c !== xField && c !== yField).slice(0, 2);
+  const extraMetrics = data.columns.filter((c) => c !== xField && c !== yField).slice(0, 3);
 
   const items = data.rows.map((r) => ({
     label: String(r[xField] ?? "Unknown"),
@@ -342,7 +342,15 @@ function HeatmapChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResul
                     }
                     title={cell ? `${y} × ${x}: ${formatCompact(cell.value)}${cell.posts ? ` (${cell.posts} posts)` : ""}` : "No posts"}
                   >
-                    {cell ? formatCompact(cell.value) : <span className="text-zinc-300 dark:text-zinc-700">—</span>}
+                    {cell ? (
+                      cell.value === 0 && (cell.posts ?? 0) > 0 ? (
+                        `${cell.posts}p`
+                      ) : (
+                        formatCompact(cell.value)
+                      )
+                    ) : (
+                      <span className="text-zinc-300 dark:text-zinc-700">—</span>
+                    )}
                   </td>
                 );
               })}

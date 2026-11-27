@@ -188,6 +188,20 @@ export interface RepromptResult {
   summary: string;
 }
 
+export interface ActivitySummary {
+  scouted_posts: number;
+  evaluated_posts: number;
+  queued_posts: number;
+  drafted_replies: number;
+  published_replies: number;
+  drafted_ogc: number;
+  published_ogc: number;
+  engagement_actions: number;
+  synced_post_snapshots: number;
+  synced_account_snapshots: number;
+  unsynced_published_posts: number;
+}
+
 export interface DashboardSnapshot {
   active_layout: DashboardLayout;
   layouts: DashboardLayout[];
@@ -196,6 +210,7 @@ export interface DashboardSnapshot {
   last_health: SyncHealthReport | null;
   builder_route: BuilderRouteStatus;
   window_days: number;
+  activity_summary?: ActivitySummary;
 }
 
 export interface ViewSchemaInfo {

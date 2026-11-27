@@ -58,42 +58,56 @@ pub fn ensure_active_layout(conn: &Connection, profile_id: &str) -> AppResult<Da
 }
 
 fn create_starter_layout(conn: &Connection, profile_id: &str, activate: bool) -> AppResult<DashboardLayout> {
-    let next_ver = next_version_for_name(conn, profile_id, STARTER_NAME)?;
-    let id = new_id();
-    let now = now_rfc3339();
-    if activate {
+    conn.execute_batch("SAVEPOINT sgh_create_starter")?;
+    let res = (|| -> AppResult<DashboardLayout> {
+        let next_ver = next_version_for_name(conn, profile_id, STARTER_NAME)?;
+        let id = new_id();
+        let now = now_rfc3339();
+        if activate {
+            conn.execute(
+                "UPDATE dashboard_layouts SET is_active = 0 WHERE profile_id = ?1",
+                [profile_id],
+            )?;
+        }
         conn.execute(
-            "UPDATE dashboard_layouts SET is_active = 0 WHERE profile_id = ?1",
-            [profile_id],
+            "INSERT INTO dashboard_layouts (id, profile_id, name, version, is_active, is_starter, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+            params![id, profile_id, STARTER_NAME, next_ver, if activate { 1 } else { 0 }, now],
         )?;
-    }
-    conn.execute(
-        "INSERT INTO dashboard_layouts (id, profile_id, name, version, is_active, is_starter, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
-        params![id, profile_id, STARTER_NAME, next_ver, if activate { 1 } else { 0 }, now],
-    )?;
 
-    for w in starter_widgets() {
-        let spec_json = serde_json::to_string(&w.spec)
-            .map_err(|e| AppError::Other(format!("serializing starter spec: {e}")))?;
-        let pos_json = serde_json::to_string(&w.position.normalized())
-            .map_err(|e| AppError::Other(format!("serializing starter position: {e}")))?;
-        conn.execute(
-            "INSERT INTO dashboard_widgets (id, layout_id, title, spec_json, position_json, source_prompt, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
-            params![new_id(), id, w.title, spec_json, pos_json, now],
-        )?;
-    }
+        for w in starter_widgets() {
+            let spec_json = serde_json::to_string(&w.spec)
+                .map_err(|e| AppError::Other(format!("serializing starter spec: {e}")))?;
+            let pos_json = serde_json::to_string(&w.position.normalized())
+                .map_err(|e| AppError::Other(format!("serializing starter position: {e}")))?;
+            conn.execute(
+                "INSERT INTO dashboard_widgets (id, layout_id, title, spec_json, position_json, source_prompt, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                params![new_id(), id, w.title, spec_json, pos_json, now],
+            )?;
+        }
 
-    Ok(DashboardLayout {
-        id,
-        profile_id: profile_id.to_string(),
-        name: STARTER_NAME.to_string(),
-        version: next_ver,
-        is_active: activate,
-        is_starter: true,
-        created_at: now,
-    })
+        Ok(DashboardLayout {
+            id,
+            profile_id: profile_id.to_string(),
+            name: STARTER_NAME.to_string(),
+            version: next_ver,
+            is_active: activate,
+            is_starter: true,
+            created_at: now,
+        })
+    })();
+
+    match res {
+        Ok(layout) => {
+            conn.execute_batch("RELEASE SAVEPOINT sgh_create_starter")?;
+            Ok(layout)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK TO SAVEPOINT sgh_create_starter; RELEASE SAVEPOINT sgh_create_starter;");
+            Err(e)
+        }
+    }
 }
 
 fn next_version_for_name(conn: &Connection, profile_id: &str, name: &str) -> AppResult<u32> {
@@ -202,22 +216,86 @@ pub fn evaluate_layout(
     layout_id: &str,
     window_override_days: Option<u32>,
 ) -> AppResult<Vec<EvaluatedWidget>> {
-    let widgets = list_widgets(conn, layout_id)?;
-    let mut out = Vec::with_capacity(widgets.len());
-    for widget in widgets {
-        match execute_widget(conn, profile_id, &widget.spec, window_override_days) {
-            Ok(data) => out.push(EvaluatedWidget {
-                widget,
-                data: Some(data),
-                error: None,
-            }),
-            Err(e) => out.push(EvaluatedWidget {
-                widget,
-                data: None,
-                error: Some(e.to_string()),
-            }),
+    let mut stmt = conn.prepare(
+        "SELECT id, layout_id, title, spec_json, position_json, source_prompt, created_at
+         FROM dashboard_widgets WHERE layout_id = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let raw_rows = stmt
+        .query_map([layout_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, Option<String>>(5)?,
+                r.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut out = Vec::with_capacity(raw_rows.len());
+    for (id, layout_id, title, spec_json, pos_json, source_prompt, created_at) in raw_rows {
+        let position: WidgetPosition = serde_json::from_str(&pos_json)
+            .unwrap_or(WidgetPosition { x: 0, y: 0, w: 6, h: 2 });
+        match serde_json::from_str::<WidgetSpec>(&spec_json) {
+            Ok(spec) => {
+                let widget = DashboardWidget {
+                    id,
+                    layout_id,
+                    title,
+                    spec,
+                    position,
+                    source_prompt,
+                    created_at,
+                };
+                match execute_widget(conn, profile_id, &widget.spec, window_override_days) {
+                    Ok(data) => out.push(EvaluatedWidget {
+                        widget,
+                        data: Some(data),
+                        error: None,
+                    }),
+                    Err(e) => out.push(EvaluatedWidget {
+                        widget,
+                        data: None,
+                        error: Some(e.to_string()),
+                    }),
+                }
+            }
+            Err(e) => {
+                // Isolate a corrupt widget spec rather than failing the whole dashboard load.
+                let fallback_spec = WidgetSpec {
+                    title: title.clone(),
+                    view: super::spec::AllowedView::VAnalyticsPostPerformance,
+                    chart_type: super::spec::ChartType::Table,
+                    group_by: vec![],
+                    metrics: vec![],
+                    select_columns: vec![],
+                    filters: vec![],
+                    sort: None,
+                    limit: 10,
+                    window_days: window_override_days.unwrap_or(30),
+                    options: Default::default(),
+                };
+                out.push(EvaluatedWidget {
+                    widget: DashboardWidget {
+                        id,
+                        layout_id,
+                        title,
+                        spec: fallback_spec,
+                        position,
+                        source_prompt,
+                        created_at,
+                    },
+                    data: None,
+                    error: Some(format!("Corrupt widget specification (remove or reprompt this card): {e}")),
+                });
+            }
         }
     }
+
+    out.sort_by_key(|item| (item.widget.position.y, item.widget.position.x));
     Ok(out)
 }
 
@@ -542,5 +620,129 @@ mod tests {
         assert_eq!(list_widgets(&conn, &v2.id).unwrap().len(), starter_count);
         delete_layout(&conn, &pid, &dup.id).unwrap();
         assert!(list_layouts(&conn, &pid).unwrap().iter().all(|l| l.id != dup.id));
+    }
+
+    #[test]
+    fn published_drafts_populate_starter_widgets_before_first_sync() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+        let now = now_rfc3339();
+
+        // Seed scouted post, published reply draft, viral format, and published OGC draft — ZERO analytics_snapshots!
+        conn.execute(
+            "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_followers, text, feed_source, posted_at, first_seen_at, metrics_at_capture_json)
+             VALUES ('op1', ?1, 'src1', 'levelsio', 150000, 'Build in public', 'for_you', ?2, ?2, '{}')",
+            params![pid, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reply_drafts (id, profile_id, observed_post_id, initial_text, edited_text, edit_distance, model_used, style_guide_version, draft_kind, actions_json, status, published_at, published_post_id, published_url, created_at)
+             VALUES ('rd1', ?1, 'op1', 'initial', 'published reply text', 7, 'claude-sonnet-4', 1, 'reply', '[\"like\",\"reply\"]', 'published', ?2, '90001', 'https://x.com/pavel/status/90001', ?2)",
+            params![pid, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO viral_formats (id, profile_id, name, archetype, structural_pattern, hook_formula, slot_schema_json, detected_at, updated_at)
+             VALUES ('vf1', ?1, 'Contrarian Truth', 'contrarian_take', 'p', 'h', '[]', ?2, ?2)",
+            params![pid, now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ogc_drafts (id, profile_id, viral_format_id, topic_seed, initial_text, edited_text, edit_distance, model_used, status, created_at)
+             VALUES ('og1', ?1, 'vf1', 'local-first', 'init', 'published ogc text', 4, 'grok-3', 'publishing', ?2)",
+            params![pid, now],
+        )
+        .unwrap();
+        crate::creator::drafts::mark_published(&conn, &pid, "og1", Some("https://x.com/pavel/status/90002?s=20"))
+            .unwrap();
+
+        let layout = ensure_active_layout(&conn, &pid).unwrap();
+        let evaluated = evaluate_layout(&conn, &pid, &layout.id, Some(30)).unwrap();
+        let by_title = |title: &str| {
+            evaluated
+                .iter()
+                .find(|w| w.widget.title == title)
+                .unwrap_or_else(|| panic!("missing widget {title}"))
+        };
+
+        let replies_kpi = by_title("Replies Published").data.as_ref().unwrap();
+        assert_eq!(replies_kpi.rows[0]["reply_count"], serde_json::json!(1));
+
+        let ogc_kpi = by_title("OGC Published").data.as_ref().unwrap();
+        assert_eq!(ogc_kpi.rows[0]["ogc_count"], serde_json::json!(1));
+
+        let by_model = by_title("Claude vs Grok Performance").data.as_ref().unwrap();
+        assert_eq!(by_model.row_count, 2, "both Claude and Grok published drafts should appear");
+
+        let by_format = by_title("OGC Performance by Viral Format").data.as_ref().unwrap();
+        assert_eq!(by_format.row_count, 1);
+        assert_eq!(by_format.rows[0]["viral_format_name"], serde_json::json!("Contrarian Truth"));
+        assert_eq!(by_format.rows[0]["posts"], serde_json::json!(1));
+
+        let winners = by_title("Winners & Flops Gallery").data.as_ref().unwrap();
+        assert_eq!(winners.row_count, 0, "unsynced drafts must not be falsely ranked as flops");
+
+        // Schedule must track both the reply and the OGC post (using status ID extracted from published_url).
+        let sched = crate::analytics::schedule::compute_schedule(&conn, &pid, crate::analytics::schedule::now_unix_secs())
+            .unwrap();
+        assert_eq!(sched.tracked_posts, 2);
+        assert!(sched.items.iter().any(|i| i.platform_post_id == "90002" && i.draft_kind == "ogc"));
+
+        // Activity summary reflects local + unsynced counts accurately.
+        let summary = crate::analytics::commands::compute_activity_summary(&conn, &pid).unwrap();
+        assert_eq!(summary.scouted_posts, 1);
+        assert_eq!(summary.published_replies, 1);
+        assert_eq!(summary.published_ogc, 1);
+        assert_eq!(summary.synced_post_snapshots, 0);
+        assert_eq!(summary.unsynced_published_posts, 2);
+
+        // Once a snapshot arrives for the reply, counts do not double and AVG is not diluted by the unsynced OGC post.
+        conn.execute(
+            "INSERT INTO analytics_snapshots (id, profile_id, scope, platform_post_id, draft_kind, draft_id, captured_at, age_hours, impressions, likes, replies, reposts, bookmarks, engagement_rate)
+             VALUES ('s1', ?1, 'post', '90001', 'reply', 'rd1', ?2, 1.0, 2500, 50, 5, 2, 10, 2.68)",
+            params![pid, now],
+        )
+        .unwrap();
+
+        let after_sync = evaluate_layout(&conn, &pid, &layout.id, Some(30)).unwrap();
+        let find_after = |title: &str| after_sync.iter().find(|w| w.widget.title == title).unwrap();
+        assert_eq!(find_after("Replies Published").data.as_ref().unwrap().rows[0]["reply_count"], serde_json::json!(1));
+        assert_eq!(find_after("Impressions").data.as_ref().unwrap().rows[0]["total_impressions"], serde_json::json!(2500));
+        assert_eq!(
+            find_after("Avg Impressions / Reply").data.as_ref().unwrap().rows[0]["avg_reply_impressions"],
+            serde_json::json!(2500.0)
+        );
+        let summary_after = crate::analytics::commands::compute_activity_summary(&conn, &pid).unwrap();
+        assert_eq!(summary_after.synced_post_snapshots, 1);
+        assert_eq!(summary_after.unsynced_published_posts, 1);
+    }
+
+    #[test]
+    fn corrupt_widget_spec_is_isolated_without_breaking_dashboard() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+        let layout = ensure_active_layout(&conn, &pid).unwrap();
+
+        let first_id: String = conn
+            .query_row(
+                "SELECT id FROM dashboard_widgets WHERE layout_id = ?1 LIMIT 1",
+                [&layout.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE dashboard_widgets SET spec_json = '{not valid json' WHERE id = ?1",
+            [&first_id],
+        )
+        .unwrap();
+
+        let evaluated = evaluate_layout(&conn, &pid, &layout.id, Some(30)).unwrap();
+        assert_eq!(evaluated.len(), starter_widgets().len());
+        let broken = evaluated.iter().find(|w| w.widget.id == first_id).unwrap();
+        assert!(broken.error.as_deref().unwrap_or("").contains("Corrupt widget specification"));
+        let healthy = evaluated.iter().filter(|w| w.widget.id != first_id).collect::<Vec<_>>();
+        assert!(healthy.iter().all(|w| w.error.is_none() && w.data.is_some()));
     }
 }
