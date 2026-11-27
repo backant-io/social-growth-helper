@@ -218,3 +218,23 @@ export function filterCommands(commands: PaletteCommand[], query: string): Palet
   const parts = q.split(/\s+/);
   return commands.filter((c) => parts.every((p) => c.label.toLowerCase().includes(p)));
 }
+
+export interface SessionCounts {
+  found: number;
+  goal: number;
+}
+
+/**
+ * Header counts for the live Scout session only. The queue holds every open post across sessions,
+ * so it is filtered to `sessionId`; progress from a different session is ignored. A fresh session reports 0.
+ */
+export function sessionCounts(
+  progress: { session_id: string; queued: number; target?: number | null } | null,
+  queue: ReadonlyArray<{ session_id: string | null }>,
+  sessionId: string | null,
+  sessionTarget: number,
+): SessionCounts {
+  const live = progress && sessionId && progress.session_id === sessionId ? progress : null;
+  const found = live ? live.queued : sessionId ? queue.filter((q) => q.session_id === sessionId).length : 0;
+  return { found, goal: live?.target ?? sessionTarget };
+}

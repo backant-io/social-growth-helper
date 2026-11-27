@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, bundleForMode, modeOfBundle, repostMenuOptions, publishLine, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, bundleForMode, modeOfBundle, repostMenuOptions, publishLine, relativeTime, scoreLine, sessionCounts, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -135,5 +135,30 @@ describe("publishLine", () => {
   it("never tells the user to go check X", () => {
     const all = [publishLine("published"), publishLine("publishing"), publishLine("unconfirmed"), publishLine("failed", "x")];
     for (const l of all) expect(`${l?.text} ${l?.action}`).not.toMatch(/check (x|your)|profile|look at/i);
+  });
+});
+
+describe("sessionCounts", () => {
+  const old = [{ session_id: "old" }, { session_id: "old" }];
+  const prog = (session_id: string, queued: number, target: number | null = 5) => ({ session_id, queued, target });
+
+  it("starts a fresh session at 0 even when earlier sessions left open posts", () => {
+    expect(sessionCounts(null, old, "new", 1)).toEqual({ found: 0, goal: 1 });
+  });
+
+  it("counts only queue items from the current session when progress is not yet available", () => {
+    expect(sessionCounts(null, [...old, { session_id: "new" }], "new", 5)).toEqual({ found: 1, goal: 5 });
+  });
+
+  it("reports live progress for the current session", () => {
+    expect(sessionCounts(prog("new", 3), old, "new", 20)).toEqual({ found: 3, goal: 5 });
+  });
+
+  it("ignores stale progress from another session", () => {
+    expect(sessionCounts(prog("old", 4, 10), old, "new", 5)).toEqual({ found: 0, goal: 5 });
+  });
+
+  it("reports 0 when no session is active", () => {
+    expect(sessionCounts(null, old, null, 5)).toEqual({ found: 0, goal: 5 });
   });
 });

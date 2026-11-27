@@ -5,7 +5,7 @@ import { XPostCard } from "../components/XPostCard";
 import { EmptyBlock, LoadingBlock, Modal, Page, PageHeader, Segmented } from "../components/ui";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
-import { scoreLine, type ComposeMode, type RepostChoice } from "./logic";
+import { scoreLine, sessionCounts, type ComposeMode, type RepostChoice } from "./logic";
 import { ReplyBox } from "./ReplyBox";
 import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams } from "./types";
 import { ReplyVoicePanel } from "./ReplyVoicePanel";
@@ -51,6 +51,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const remembered = useRef(false);
   const stoppingRef = useRef(false);
   const reloadSeq = useRef(0);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionTarget, setSessionTarget] = useState(20);
 
   const refreshQueue = useCallback(() => void p3.scoutQueue().then(setQueue).catch(() => undefined), []);
 
@@ -59,7 +61,12 @@ export function ScoutPage({ onGoToSettings }: Props) {
     const [status, q, comp] = await Promise.all([p3.scoutStatus(), p3.scoutQueue(), p3.completionStatus()]);
     if (seq !== reloadSeq.current) return;
     setRunning(status.running);
-    if (!status.running) {
+    setSessionId(status.running ? status.session_id : null);
+    if (status.running) {
+      const n = status.last_params?.stop_after_queued;
+      if (n) setSessionTarget(n);
+    } else {
+      setProgress(null);
       setPaused(false);
       setStopping(false);
       stoppingRef.current = false;
@@ -81,6 +88,7 @@ export function ScoutPage({ onGoToSettings }: Props) {
     const offs = [
       listen<ScoutProgress>("scout:progress", (p) => {
         if (stoppingRef.current) return;
+        setSessionId((cur) => cur ?? p.session_id);
         setProgress(p);
         setPaused(false);
         refreshQueue();
@@ -90,6 +98,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
         stoppingRef.current = false;
         setStopping(false);
         setRunning(false);
+        setSessionId(null);
+        setProgress(null);
         setPaused(false);
         void reload();
       }),
@@ -108,11 +118,13 @@ export function ScoutPage({ onGoToSettings }: Props) {
     setBusy(true);
     try {
       const n = Math.max(1, Math.min(500, Math.round(target) || 1));
-      await p3.scoutStart({ feed_source: feed, max_duration_sec: SESSION_SECONDS, max_posts: postsBudget(n), stop_after_queued: n, threshold });
+      const id = await p3.scoutStart({ feed_source: feed, max_duration_sec: SESSION_SECONDS, max_posts: postsBudget(n), stop_after_queued: n, threshold });
       reloadSeq.current += 1;
       stoppingRef.current = false;
       setStopping(false);
       setProgress(null);
+      setSessionId(id);
+      setSessionTarget(n);
       setRunning(true);
       setSetup(false);
     } catch (e) {
@@ -131,6 +143,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
       await p3.scoutStop();
       reloadSeq.current += 1;
       setRunning(false);
+      setSessionId(null);
+      setProgress(null);
       setPaused(false);
       await reload();
     } catch (e) {
@@ -180,8 +194,7 @@ export function ScoutPage({ onGoToSettings }: Props) {
     else return false;
   });
 
-  const found = progress?.queued ?? queue.length;
-  const goal = progress?.target ?? target;
+  const { found, goal } = sessionCounts(progress, queue, sessionId, sessionTarget);
 
   return (
     <Page>
@@ -211,8 +224,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
 
       {running && (
         <p aria-live="polite" className="text-sm font-medium tabular-nums">
-          {found} of {goal} posts found
-          {progress && <span className={`ml-2 font-normal ${muted}`}>{progress.scanned} read</span>}
+          {found} of {goal} posts found this session
+          <span className={`ml-2 font-normal ${muted}`}>{progress?.session_id === sessionId ? progress.scanned : 0} read</span>
         </p>
       )}
 
