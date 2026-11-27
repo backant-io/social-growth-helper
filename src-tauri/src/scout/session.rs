@@ -11,7 +11,7 @@ use crate::drafts::repo as draft_repo;
 use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::{BrowserService, X_FOLLOWING_URL, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
-use crate::control::{EventSink, KillSwitch};
+use crate::control::{EventSink, KillSwitch, StopSignal};
 use crate::formats::detect::{PostMetrics, ViralThresholds};
 use crate::formats::pipeline::{self, PostInput, PostSource};
 use crate::selectors;
@@ -53,7 +53,7 @@ pub struct ScoutEnv<'a> {
     pub kill: &'a KillSwitch,
     pub sink: &'a dyn EventSink,
     pub profile_id: &'a str,
-    pub stop: &'a AtomicBool,
+    pub stop: &'a StopSignal,
     /// Set by the user (tray, UI) to hold the session without ending it.
     pub pause: &'a AtomicBool,
     /// Where post thumbnails are kept for the retention window; `None` keeps them in memory only.
@@ -64,6 +64,41 @@ pub struct ScoutEnv<'a> {
     pub pause_ms: (u64, u64),
     /// Reopens the X window if it vanishes; `None` only waits for it to come back.
     pub relaunch: Option<&'a dyn BrowserRelauncher>,
+}
+
+impl ScoutEnv<'_> {
+    fn should_stop(&self) -> bool {
+        self.kill.is_engaged() || self.stop.is_stopped()
+    }
+
+    async fn cancelled(&self) {
+        tokio::select! {
+            biased;
+            _ = self.stop.cancelled() => {}
+            _ = self.kill.engaged() => {}
+        }
+    }
+
+    /// Runs `fut` unless stop or the kill switch fires first. Returns `None` if cancelled.
+    async fn cancellable<F: std::future::Future>(&self, fut: F) -> Option<F::Output> {
+        if self.should_stop() {
+            return None;
+        }
+        tokio::select! {
+            biased;
+            _ = self.cancelled() => None,
+            out = fut => Some(out),
+        }
+    }
+
+    /// Sleeps for `total`, waking immediately if stop or the kill switch fires.
+    /// Returns `true` if the full duration elapsed, `false` if cancelled.
+    async fn sleep(&self, total: Duration) -> bool {
+        if total.is_zero() {
+            return !self.should_stop();
+        }
+        self.cancellable(tokio::time::sleep(total)).await.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,17 +156,24 @@ fn jitter(range: (u64, u64)) -> u64 {
     range.0 + nanos % (range.1 - range.0 + 1)
 }
 
-async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], prefs: &crate::storage::repo::Preferences, heuristic_count: &mut i64, model_name: &mut String) -> Vec<(Candidate, Score, String)> {
+async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], prefs: &crate::storage::repo::Preferences, heuristic_count: &mut i64, model_name: &mut String) -> Option<Vec<(Candidate, Score, String)>> {
+    if env.should_stop() {
+        return None;
+    }
     let ids: Vec<String> = batch.iter().filter_map(|c| c.post.id.clone()).collect();
     let mut model = String::from("heuristic");
     let mut by_id: Vec<Score> = vec![];
     if env.completion.is_configured(TaskSlot::PostScoring) {
         let (system, user) = build_scoring_prompt(rubric, batch);
         let req = CompletionRequest::new(TaskSlot::PostScoring, system, user, true).with_slots(super::score::scoring_slots(rubric, batch)).with_images(super::score::batch_images(batch));
-        if let Ok(c) = env.completion.complete(req).await {
+        let res = env.cancellable(env.completion.complete(req)).await?;
+        if let Ok(c) = res {
             by_id = parse_scores(&c.text, &ids);
             model = c.model;
         }
+    }
+    if env.should_stop() {
+        return None;
     }
     let mut out = vec![];
     for c in batch {
@@ -148,7 +190,7 @@ async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], pref
         }
         out.push((c.clone(), apply_outlier_and_preferences(s, c, prefs), m));
     }
-    out
+    Some(out)
 }
 
 async fn user_idle_ms(env: &ScoutEnv<'_>) -> u64 {
@@ -165,22 +207,30 @@ async fn wait_until_clear(env: &ScoutEnv<'_>, session_id: &str, paused_total: &m
     let began = Instant::now();
     let mut announced = false;
     loop {
-        if env.kill.is_engaged() || env.stop.load(Ordering::SeqCst) {
+        if env.should_stop() {
             break;
         }
         let manual = env.pause.load(Ordering::SeqCst);
-        if !manual && user_idle_ms(env).await >= USER_IDLE_MS {
-            break;
+        if !manual {
+            match env.cancellable(user_idle_ms(env)).await {
+                None => break,
+                Some(ms) if ms >= USER_IDLE_MS => break,
+                Some(_) => {}
+            }
         }
         if !announced {
             announced = true;
             env.sink.emit("scout:paused", json!({ "session_id": session_id, "reason": if manual { "manual" } else { "user_activity" } }));
         }
-        env.kill.sleep(Duration::from_millis(env.idle_poll_ms), env.stop).await;
+        if !env.sleep(Duration::from_millis(env.idle_poll_ms)).await {
+            break;
+        }
     }
     if announced {
         *paused_total += began.elapsed();
-        env.sink.emit("scout:resumed", json!({ "session_id": session_id }));
+        if !env.should_stop() {
+            env.sink.emit("scout:resumed", json!({ "session_id": session_id }));
+        }
     }
 }
 
@@ -231,14 +281,19 @@ async fn attach_thumbnails(env: &ScoutEnv<'_>, candidates: &mut [Candidate], bud
         return;
     }
     for c in candidates.iter_mut() {
-        if *budget == 0 {
+        if *budget == 0 || env.should_stop() {
             return;
         }
         let Some(url) = c.post.image_urls.first().filter(|u| selectors::is_image_url(u)).cloned() else { continue };
         *budget -= 1;
-        let b64 = {
-            let d = env.browser.lock().await;
-            d.eval_json(&selectors::thumbnail_js(&url)).await.ok().and_then(|v| v.as_str().map(str::to_string)).filter(|s| !s.is_empty())
+        let Some(b64) = env
+            .cancellable(async {
+                let d = env.browser.lock().await;
+                d.eval_json(&selectors::thumbnail_js(&url)).await.ok().and_then(|v| v.as_str().map(str::to_string)).filter(|s| !s.is_empty())
+            })
+            .await
+        else {
+            return;
         };
         let Some(b64) = b64 else { continue };
         if let (Some(dir), Some(id)) = (env.thumbs_dir.as_ref(), c.post.id.as_deref()) {
@@ -257,13 +312,29 @@ fn record_activity(env: &ScoutEnv<'_>, kind: &str, title: &str, detail: Option<&
     crate::activity::record(&db, env.profile_id, kind, title, detail, ok, None);
 }
 
+/// CDP `Input.dispatchMouseEvent` timeouts happen when the managed Chrome window loses focus
+/// or is occluded (macOS pauses compositor ACKs). Never end Scout over these: keep backing off
+/// and retrying until focus returns, the user stops Scout, or the window is closed on purpose.
+fn is_transient_input_timeout(err: &str) -> bool {
+    let lower = err.to_ascii_lowercase();
+    lower.contains("input.dispatchmouseevent") && lower.contains("timed out")
+}
+
 /// Handles a transient browser error: logs it, waits with growing delays, reopens the window if it is gone, reloads
 /// the feed page, and tells the caller to carry on. Returns `false` only when the error is not recoverable
 /// (retries used up, or the window cannot be reopened). The session is never finished by a single error.
 async fn soft_fail(env: &ScoutEnv<'_>, session_id: &str, strikes: &mut u32, what: &str, err: &str, target: &str, following_in_play: bool) -> bool {
-    *strikes += 1;
+    if env.should_stop() {
+        return true;
+    }
+    let transient_timeout = is_transient_input_timeout(err);
+    *strikes = strikes.saturating_add(1);
     let attempt = *strikes;
-    log::warn!("scout {session_id}: could not {what} ({err}); attempt {attempt} of {MAX_SOFT_ERRORS}");
+    if transient_timeout {
+        log::warn!("scout {session_id}: transient focus/input timeout while trying to {what} ({err}); backing off (attempt {attempt})");
+    } else {
+        log::warn!("scout {session_id}: could not {what} ({err}); attempt {attempt} of {MAX_SOFT_ERRORS}");
+    }
     if attempt == 1 {
         record_activity(env, "scout", "Scout hit a browser hiccup and is retrying", Some(&format!("Could not {what}: {err}")), None);
     }
@@ -273,7 +344,7 @@ async fn soft_fail(env: &ScoutEnv<'_>, session_id: &str, strikes: &mut u32, what
         env.sink.emit("scout:error", json!({ "message": format!("Scout stopped: {why}") }));
         record_activity(env, "error", "Scout could not recover from a browser error", Some(why), Some(false));
     };
-    if attempt > MAX_SOFT_ERRORS {
+    if !transient_timeout && attempt > MAX_SOFT_ERRORS {
         give_up(&format!("could not {what} after {MAX_SOFT_ERRORS} retries ({err})"));
         if !env.browser.is_running().await {
             report_halt(env.sink, BrowserState::Crashed, "scout");
@@ -283,20 +354,34 @@ async fn soft_fail(env: &ScoutEnv<'_>, session_id: &str, strikes: &mut u32, what
 
     let base_ms: u64 = if env.pause_ms.1 == 0 { 1 } else { 1500 };
     let delay = (base_ms << (attempt - 1).min(5)).min(20_000);
-    if !env.kill.sleep(Duration::from_millis(delay), env.stop).await {
+    if !env.sleep(Duration::from_millis(delay)).await {
         return true;
     }
-    if !env.browser.is_running().await {
+    let Some(running) = env.cancellable(env.browser.is_running()).await else {
+        return true;
+    };
+    let mut relaunched = false;
+    if !running {
         let Some(relaunch) = env.relaunch else { return true };
-        if let Err(why) = relaunch.relaunch().await {
+        let Some(res) = env.cancellable(relaunch.relaunch()).await else {
+            return true;
+        };
+        if let Err(why) = res {
             give_up(&why);
             report_halt(env.sink, BrowserState::Crashed, "scout");
             return false;
         }
+        relaunched = true;
     }
-    let d = env.browser.lock().await;
-    if d.is_running() {
-        let _ = visit(&*d, target, following_in_play).await;
+    if !transient_timeout || relaunched {
+        let _ = env
+            .cancellable(async {
+                let d = env.browser.lock().await;
+                if d.is_running() {
+                    let _ = visit(&*d, target, following_in_play).await;
+                }
+            })
+            .await;
     }
     true
 }
@@ -334,14 +419,19 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     let mut reloaded_this_target = false;
     let mut paused_total = Duration::ZERO;
     let mut thumb_budget = MAX_THUMBS_PER_SESSION;
+    let initial_url = targets.first().map(String::as_str).unwrap_or(X_HOME_URL);
+    if env
+        .cancellable(async {
+            let d = env.browser.lock().await;
+            if d.is_running() {
+                let _ = visit(&*d, initial_url, following_in_play).await;
+            }
+        })
+        .await
+        .is_some()
+        && env.pause_ms.1 > 0
     {
-        let d = env.browser.lock().await;
-        if d.is_running() {
-            let _ = visit(&*d, targets.first().map(String::as_str).unwrap_or(X_HOME_URL), following_in_play).await;
-        }
-    }
-    if env.pause_ms.1 > 0 {
-        env.kill.sleep(Duration::from_millis(2500), env.stop).await;
+        env.sleep(Duration::from_millis(2500)).await;
     }
 
     let reason: String = 'main: loop {
@@ -349,7 +439,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         if env.kill.is_engaged() {
             break "killed".into();
         }
-        if env.stop.load(Ordering::SeqCst) {
+        if env.stop.is_stopped() {
             break "stopped".into();
         }
         if started.elapsed().saturating_sub(paused_total) >= max_duration {
@@ -362,16 +452,21 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             break "queue_goal".into();
         }
 
-        let read: Result<FeedRead, String> = {
-            let d = env.browser.lock().await;
-            if !d.is_running() {
-                Err("the browser window is not open".into())
-            } else {
-                match d.eval_json(&selectors::extract_feed_js()).await {
-                    Ok(v) => serde_json::from_value(v).map_err(|e| format!("unexpected page data: {e}")),
-                    Err(e) => Err(e.to_string()),
+        let Some(read) = env
+            .cancellable(async {
+                let d = env.browser.lock().await;
+                if !d.is_running() {
+                    Err("the browser window is not open".into())
+                } else {
+                    match d.eval_json(&selectors::extract_feed_js()).await {
+                        Ok(v) => serde_json::from_value::<FeedRead>(v).map_err(|e| format!("unexpected page data: {e}")),
+                        Err(e) => Err(e.to_string()),
+                    }
                 }
-            }
+            })
+            .await
+        else {
+            continue 'main;
         };
         let read = match read {
             Ok(r) => r,
@@ -446,12 +541,20 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, author_followers, outlier, image: None });
         }
         attach_thumbnails(env, &mut candidates, &mut thumb_budget).await;
+        if env.should_stop() {
+            continue 'main;
+        }
 
         for batch in candidates.chunks(BATCH_SIZE) {
-            if env.kill.is_engaged() || env.stop.load(Ordering::SeqCst) {
+            if env.should_stop() {
                 continue 'main;
             }
-            let results = score_batch(env, &rubric, batch, &prefs, &mut heuristic_scored, &mut model_name).await;
+            let Some(results) = score_batch(env, &rubric, batch, &prefs, &mut heuristic_scored, &mut model_name).await else {
+                continue 'main;
+            };
+            if env.should_stop() {
+                continue 'main;
+            }
             let mut to_draft: Vec<(String, String, String)> = vec![];
             {
                 let db = env.db.lock().unwrap();
@@ -479,8 +582,8 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             }
             if env.completion.is_configured(TaskSlot::ReplyDrafting) && !to_draft.is_empty() {
                 for (eval_id, angle, reasoning) in to_draft {
-                    if env.kill.is_engaged() || env.stop.load(Ordering::SeqCst) {
-                        break;
+                    if env.should_stop() {
+                        continue 'main;
                     }
                     let prep = {
                         let db = env.db.lock().unwrap();
@@ -507,12 +610,18 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                         context: context.as_deref(),
                         why_working: (!reasoning.trim().is_empty()).then_some(reasoning.as_str()),
                     };
-                    if let Ok(gen) = draft_gen::generate(&*env.completion, &req).await {
+                    let Some(res) = env.cancellable(draft_gen::generate(&*env.completion, &req)).await else {
+                        continue 'main;
+                    };
+                    if let Ok(gen) = res {
                         let db = env.db.lock().unwrap();
                         let _ = draft_repo::add_variants(&db, &draft_id, &gen.variants, &gen.model);
                     }
                 }
             }
+        }
+        if env.should_stop() {
+            continue 'main;
         }
 
         let scanned = seen_in_session.len() as i64;
@@ -526,15 +635,23 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         );
 
         if new_ids == 0 {
-            empty_scrolls += 1;
+            // Only count an empty scroll when the previous iteration actually scrolled.
+            if soft_errors == 0 {
+                empty_scrolls += 1;
+            }
         } else {
             empty_scrolls = 0;
         }
         if empty_scrolls == RELOAD_AFTER_EMPTY_SCROLLS && !reloaded_this_target {
             reloaded_this_target = true;
-            let visited = {
-                let d = env.browser.lock().await;
-                visit(&*d, &targets[target_idx], following_in_play).await
+            let Some(visited) = env
+                .cancellable(async {
+                    let d = env.browser.lock().await;
+                    visit(&*d, &targets[target_idx], following_in_play).await
+                })
+                .await
+            else {
+                continue 'main;
             };
             if let Err(e) = visited {
                 if soft_fail(env, session_id, &mut soft_errors, "reload the feed", &e.to_string(), &targets[target_idx], following_in_play).await {
@@ -542,7 +659,9 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                 }
                 break 'main "browser_error".into();
             }
-            env.kill.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0)), env.stop).await;
+            if !env.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0))).await {
+                continue 'main;
+            }
             continue;
         }
         let quota_met = queued_quota.is_some_and(|q| queued - target_queued_start >= q);
@@ -555,9 +674,14 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             (target_new, empty_scrolls) = (0, 0);
             target_queued_start = queued;
             reloaded_this_target = false;
-            let visited = {
-                let d = env.browser.lock().await;
-                visit(&*d, &targets[target_idx], following_in_play).await
+            let Some(visited) = env
+                .cancellable(async {
+                    let d = env.browser.lock().await;
+                    visit(&*d, &targets[target_idx], following_in_play).await
+                })
+                .await
+            else {
+                continue 'main;
             };
             if let Err(e) = visited {
                 if soft_fail(env, session_id, &mut soft_errors, "open the next feed", &e.to_string(), &targets[target_idx], following_in_play).await {
@@ -565,21 +689,31 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                 }
                 break 'main "browser_error".into();
             }
-            env.kill.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0)), env.stop).await;
+            if !env.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0))).await {
+                continue 'main;
+            }
             continue;
         }
 
-        let scrolled = {
-            let d = env.browser.lock().await;
-            let stalled = empty_scrolls.min(6) as f64;
-            let delta = 700.0 + jitter((0, 400)) as f64 + stalled * 350.0;
-            if empty_scrolls > 0 {
-                let _ = d.eval_json(&selectors::retry_feed_js()).await;
-            }
-            let _ = d.eval_json(&selectors::set_busy_js(true)).await;
-            let scrolled = d.wheel_scroll(640.0, 500.0, delta).await;
-            let _ = d.eval_json(&selectors::set_busy_js(false)).await;
-            scrolled
+        if env.should_stop() {
+            continue 'main;
+        }
+        let Some(scrolled) = env
+            .cancellable(async {
+                let d = env.browser.lock().await;
+                let stalled = empty_scrolls.min(6) as f64;
+                let delta = 700.0 + jitter((0, 400)) as f64 + stalled * 350.0;
+                if empty_scrolls > 0 {
+                    let _ = d.eval_json(&selectors::retry_feed_js()).await;
+                }
+                let _ = d.eval_json(&selectors::set_busy_js(true)).await;
+                let scrolled = d.wheel_scroll(640.0, 500.0, delta).await;
+                let _ = d.eval_json(&selectors::set_busy_js(false)).await;
+                scrolled
+            })
+            .await
+        else {
+            continue 'main;
         };
         if let Err(e) = scrolled {
             if soft_fail(env, session_id, &mut soft_errors, "scroll the feed", &e.to_string(), &targets[target_idx], following_in_play).await {
@@ -591,11 +725,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             log::info!("scout {session_id}: recovered from a browser error and kept scrolling");
             soft_errors = 0;
         }
-        if !env.kill.sleep(Duration::from_millis(jitter(env.pause_ms)), env.stop).await {
+        if !env.sleep(Duration::from_millis(jitter(env.pause_ms))).await {
             continue;
         }
-        if empty_scrolls > 0 && env.pause_ms.1 > 0 {
-            env.kill.sleep(Duration::from_millis(1200 * u64::from(empty_scrolls.min(4))), env.stop).await;
+        if empty_scrolls > 0 && env.pause_ms.1 > 0 && !env.sleep(Duration::from_millis(1200 * u64::from(empty_scrolls.min(4)))).await {
+            continue;
         }
     };
 
@@ -606,7 +740,6 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         let _ = repo::update_progress(&db, session_id, scanned, queued);
         let _ = repo::finish_session(&db, session_id, &reason, &serde_json::to_string(&summary).unwrap_or_default());
     }
-    env.sink.emit("scout:finished", json!({ "session_id": session_id, "summary": summary }));
     record_activity(
         env,
         "scout",
@@ -614,6 +747,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         Some(&format!("{scanned} scanned, {scored} scored, {queued} queued, {format_candidates} viral format candidates")),
         Some(!matches!(reason.as_str(), "browser_error" | "logged_out" | "challenge" | "suspended" | "locked")),
     );
+    env.sink.emit("scout:finished", json!({ "session_id": session_id, "summary": summary }));
     summary
 }
 
@@ -655,13 +789,13 @@ mod tests {
         profile: String,
         kill: KillSwitch,
         sink: CollectSink,
-        stop: AtomicBool,
+        stop: StopSignal,
         pause: AtomicBool,
     }
 
     fn fixture() -> Fixture {
         let (conn, profile) = db();
-        Fixture { db: Mutex::new(conn), profile, kill: KillSwitch::default(), sink: CollectSink::default(), stop: AtomicBool::new(false), pause: AtomicBool::new(false) }
+        Fixture { db: Mutex::new(conn), profile, kill: KillSwitch::default(), sink: CollectSink::default(), stop: StopSignal::new(), pause: AtomicBool::new(false) }
     }
 
     fn env<'a>(f: &'a Fixture, b: &'a BrowserService, p: Arc<dyn CompletionProvider>) -> ScoutEnv<'a> {
@@ -1114,5 +1248,218 @@ mod tests {
         assert!(ev.iter().any(|(e, v)| e == "scout:error" && v["message"].as_str().unwrap().contains("retries")));
         drop(ev);
         assert!(activity_titles(&f).iter().any(|(t, ok)| t == "Scout finished (browser_error)" && *ok == Some(false)));
+    }
+
+    struct BlockingProvider {
+        block_slot: TaskSlot,
+        entered: Arc<tokio::sync::Notify>,
+        scoring_response: Option<String>,
+        draft_calls: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait::async_trait]
+    impl CompletionProvider for BlockingProvider {
+        fn is_configured(&self, _task: TaskSlot) -> bool {
+            true
+        }
+        async fn complete(&self, req: CompletionRequest) -> Result<crate::completion::Completion, crate::completion::CompletionError> {
+            if req.task == TaskSlot::ReplyDrafting {
+                self.draft_calls.fetch_add(1, Ordering::SeqCst);
+            }
+            if req.task == self.block_slot {
+                self.entered.notify_one();
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                return Ok(crate::completion::Completion { text: "{}".into(), model: "slow".into() });
+            }
+            Ok(crate::completion::Completion {
+                text: self.scoring_response.clone().unwrap_or_else(|| "{}".into()),
+                model: "scripted".into(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_in_flight_scoring_immediately_without_scrolling() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(3, 0));
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(BlockingProvider {
+            block_slot: TaskSlot::PostScoring,
+            entered: entered.clone(),
+            scoring_response: None,
+            draft_calls: Arc::default(),
+        });
+        let e = env(&f, &b, provider);
+        let t = Instant::now();
+        let run = run_session(&e, &sid, &p);
+        let trigger = async {
+            entered.notified().await;
+            f.stop.stop();
+        };
+        let (s, _) = tokio::join!(run, trigger);
+        assert!(t.elapsed() < Duration::from_secs(1), "Stop must interrupt in-flight scoring immediately");
+        assert_eq!((s.reason.as_str(), s.scored, s.queued), ("stopped", 0, 0));
+        assert!(!mock.calls().iter().any(|c| c.starts_with("wheel ")), "must not scroll after Stop");
+        assert_eq!(f.sink.0.lock().unwrap().last().unwrap().0, "scout:finished");
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_in_flight_reply_drafting_immediately_without_scrolling() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(3, 0));
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let draft_calls = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let provider = Arc::new(BlockingProvider {
+            block_slot: TaskSlot::ReplyDrafting,
+            entered: entered.clone(),
+            scoring_response: Some(
+                r#"{"scores":[{"id":"1000","score":92,"angle":"a","reasoning":"r"},{"id":"1001","score":91,"angle":"a","reasoning":"r"}]}"#
+                    .into(),
+            ),
+            draft_calls: draft_calls.clone(),
+        });
+        let e = env(&f, &b, provider);
+        let t = Instant::now();
+        let run = run_session(&e, &sid, &p);
+        let trigger = async {
+            entered.notified().await;
+            f.stop.stop();
+        };
+        let (s, _) = tokio::join!(run, trigger);
+        assert!(t.elapsed() < Duration::from_secs(1), "Stop must interrupt in-flight drafting immediately");
+        assert_eq!(s.reason, "stopped");
+        assert_eq!(draft_calls.load(Ordering::SeqCst), 1, "must not start drafting remaining posts after Stop");
+        assert!(!mock.calls().iter().any(|c| c.starts_with("wheel ")), "must not scroll after Stop during drafting");
+        let ev = f.sink.0.lock().unwrap();
+        assert!(!ev.iter().any(|(name, _)| name == "scout:progress"), "must not emit progress after Stop");
+        assert_eq!(ev.last().unwrap().0, "scout:finished");
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_while_paused_without_resuming_or_scrolling() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(5, 0));
+        let b = browser(&mock).await;
+        let f = fixture();
+        f.pause.store(true, Ordering::SeqCst);
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let mut e = env(&f, &b, Arc::new(UnconfiguredProvider));
+        e.idle_poll_ms = 30_000;
+        let t = Instant::now();
+        let run = run_session(&e, &sid, &p);
+        let trigger = async {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            f.stop.stop();
+        };
+        let (s, _) = tokio::join!(run, trigger);
+        assert!(t.elapsed() < Duration::from_secs(1));
+        assert_eq!((s.reason.as_str(), s.scanned), ("stopped", 0));
+        assert!(!mock.calls().iter().any(|c| c.starts_with("wheel ")));
+        let ev = f.sink.0.lock().unwrap();
+        assert!(!ev.iter().any(|(name, _)| name == "scout:resumed"));
+        assert_eq!(ev.last().unwrap().0, "scout:finished");
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_during_initial_settle_before_reading_feed() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(5, 0));
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let mut e = env(&f, &b, Arc::new(UnconfiguredProvider));
+        e.pause_ms = (20_000, 20_000);
+        let t = Instant::now();
+        let run = run_session(&e, &sid, &p);
+        let trigger = async {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            f.stop.stop();
+        };
+        let (s, _) = tokio::join!(run, trigger);
+        assert!(t.elapsed() < Duration::from_secs(1));
+        assert_eq!((s.reason.as_str(), s.scanned), ("stopped", 0));
+        assert!(!mock.calls().iter().any(|c| c.contains("posts.push") || c.starts_with("wheel ")));
+    }
+
+    #[tokio::test]
+    async fn input_dispatch_mouse_event_timeouts_do_not_end_scout_session() {
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        // Exceed both MAX_SOFT_ERRORS (8) and EXHAUSTED_AFTER_EMPTY_SCROLLS (14) to prove
+        // focus-loss scroll timeouts never terminate Scout as browser_error or feed_exhausted.
+        let timeouts = EXHAUSTED_AFTER_EMPTY_SCROLLS + 2;
+        let mock = MockDriver::new().with_eval_fn(move |js| {
+            if js.contains("posts.push") {
+                let n = reads.fetch_add(1, Ordering::SeqCst);
+                // While scrolling times out, the same 3 posts remain on screen; once scrolling
+                // recovers after `timeouts` attempts, new posts scroll into view.
+                let page = if n <= timeouts { 0 } else { (n - timeouts) as usize };
+                return feed(3, page * 3);
+            }
+            json!(null)
+        });
+        mock.fail_next_wheels_with_timeout(timeouts);
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(100, Some(9));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!(s.reason, "queue_goal", "repeated CDP Input.dispatchMouseEvent timeouts must not end Scout");
+        let ev = f.sink.0.lock().unwrap();
+        assert_eq!(ev.iter().filter(|(e, _)| e == "scout:warning").count() as u32, timeouts);
+        assert!(!ev.iter().any(|(e, _)| e == "scout:error"));
+        // Only the initial navigation happened; focus timeouts must not reload the feed to the top.
+        assert_eq!(mock.calls().iter().filter(|c| c.starts_with("navigate ")).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn input_dispatch_mouse_event_timeouts_still_stop_immediately_on_user_stop() {
+        let mock = MockDriver::new().with_eval_fn(|_| feed(3, 0));
+        mock.fail_next_wheels_with_timeout(100);
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let e = env(&f, &b, Arc::new(UnconfiguredProvider));
+        let t = Instant::now();
+        let run = run_session(&e, &sid, &p);
+        let trigger = async {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            f.stop.stop();
+        };
+        let (s, _) = tokio::join!(run, trigger);
+        assert!(t.elapsed() < Duration::from_secs(1));
+        assert_eq!(s.reason, "stopped");
+    }
+
+    #[tokio::test]
+    async fn input_dispatch_mouse_event_timeouts_stop_when_window_closed_on_purpose() {
+        let mock = MockDriver::new();
+        let m = mock.clone();
+        let reads = std::sync::atomic::AtomicU32::new(0);
+        let mock = mock.with_eval_fn(move |js| {
+            if js.contains(".busy = true") && reads.load(Ordering::SeqCst) >= 1 {
+                m.crash();
+            } else if js.contains("posts.push") {
+                reads.fetch_add(1, Ordering::SeqCst);
+            }
+            feed(3, 0)
+        });
+        mock.fail_next_wheels_with_timeout(5);
+        let svc = Arc::new(browser(&mock).await);
+        let times = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let reopen = Reopen { svc: svc.clone(), times: times.clone(), on_purpose: true };
+        let f = fixture();
+        let p = params(100, Some(20));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let e = ScoutEnv { relaunch: Some(&reopen), ..env(&f, &svc, Arc::new(UnconfiguredProvider)) };
+        let s = run_session(&e, &sid, &p).await;
+        assert_eq!(s.reason, "browser_error");
+        assert_eq!(times.load(Ordering::SeqCst), 1);
     }
 }

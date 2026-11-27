@@ -12,6 +12,7 @@ pub struct MockDriver {
     eval_fn: Option<EvalFn>,
     eval_fail: Option<Arc<dyn Fn(&str) -> bool + Send + Sync>>,
     wheel_failures: Arc<Mutex<u32>>,
+    wheel_timeout_failures: Arc<Mutex<u32>>,
     screenshot: Arc<Mutex<Vec<u8>>>,
     pub bounds: Arc<Mutex<WindowBounds>>,
     pub cookies: Arc<Mutex<Vec<Value>>>,
@@ -29,6 +30,7 @@ impl MockDriver {
             eval_fn: None,
             eval_fail: None,
             wheel_failures: Arc::default(),
+            wheel_timeout_failures: Arc::default(),
             screenshot: Arc::new(Mutex::new(vec![0x89, 0x50])),
             bounds: Arc::new(Mutex::new(WindowBounds { left: 0, top: 0, width: 560, height: 900 })),
             cookies: Arc::default(),
@@ -55,6 +57,11 @@ impl MockDriver {
     /// The next `n` wheel scrolls fail.
     pub fn fail_next_wheels(&self, n: u32) {
         *self.wheel_failures.lock().unwrap() = n;
+    }
+
+    /// The next `n` wheel scrolls fail with a CDP `Input.dispatchMouseEvent` timeout (unfocused window).
+    pub fn fail_next_wheels_with_timeout(&self, n: u32) {
+        *self.wheel_timeout_failures.lock().unwrap() = n;
     }
 
     /// Simulates Chrome disappearing: the driver stops reporting itself as running.
@@ -126,6 +133,13 @@ impl BrowserDriver for MockDriver {
     }
     async fn wheel_scroll(&self, _x: f64, _y: f64, delta_y: f64) -> Result<(), BrowserError> {
         self.record(format!("wheel {delta_y}"));
+        {
+            let mut timeouts = self.wheel_timeout_failures.lock().unwrap();
+            if *timeouts > 0 {
+                *timeouts -= 1;
+                return Err(BrowserError::Timeout("CDP Input.dispatchMouseEvent".into()));
+            }
+        }
         let mut left = self.wheel_failures.lock().unwrap();
         if *left > 0 {
             *left -= 1;

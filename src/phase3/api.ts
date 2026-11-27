@@ -175,9 +175,11 @@ export const p3 = {
     mem.running = true;
     return "s-live";
   },
-  async scoutStop(): Promise<void> {
+  async scoutStop(): Promise<boolean> {
     if (inTauri()) return call("scout_stop");
+    const wasRunning = mem.running;
     mem.running = false;
+    return wasRunning;
   },
   async scoutPause(paused: boolean): Promise<boolean> {
     if (inTauri()) return call("scout_pause", { paused });

@@ -1,5 +1,6 @@
 use super::repo::{self, QueueItem, SessionParams, SessionView};
 use super::session::{run_session, ScoutEnv};
+use crate::control::{EventSink, StopSignal};
 use crate::error::{AppError, AppResult};
 use crate::onboarding::require_acknowledged;
 use crate::phase3::{Phase3, RunningScout, TauriSink};
@@ -7,7 +8,9 @@ use crate::state::AppState;
 use serde::Serialize;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
+use tokio::sync::watch;
 
 #[derive(Serialize)]
 pub struct ScoutStatus {
@@ -45,8 +48,9 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         return Err(AppError::Validation("Add accounts to your watchlist in Settings first.".into()));
     }
     crate::commands::ensure_x_browser_open(&app, &state).await?;
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = Arc::new(StopSignal::new());
     let pause = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = watch::channel(false);
     let session_id = {
         let mut slot = p3.scout.lock().unwrap();
         if slot.is_some() {
@@ -56,7 +60,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         let id = repo::create_session(&db, &state.profile_id, &params)?;
         let _ = repo::save_last_params(&db, &params);
         state.browser_health.abort();
-        *slot = Some(RunningScout { session_id: id.clone(), stop: stop.clone(), pause: pause.clone() });
+        *slot = Some(RunningScout { session_id: id.clone(), stop: stop.clone(), pause: pause.clone(), done: done_rx });
         id
     };
     let handle = app.clone();
@@ -64,7 +68,13 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<AppState>();
         let p3 = handle.state::<Phase3>();
-        let sink = TauriSink(handle.clone());
+        let guard = Arc::new(ScoutSlotGuard {
+            app: handle.clone(),
+            session_id: sid.clone(),
+            params: params.clone(),
+            done_tx,
+        });
+        let sink = ScoutEventSink { inner: TauriSink(handle.clone()), guard: guard.clone() };
         let relauncher = AppRelauncher(handle.clone());
         let _job = state.jobs.register("Scout session");
         let env = ScoutEnv {
@@ -82,19 +92,91 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
             relaunch: Some(&relauncher),
         };
         run_session(&env, &sid, &params).await;
-        state.browser_health.attach_scout_params(params.clone());
-        *p3.scout.lock().unwrap() = None;
-        crate::tray::refresh_all(&handle);
+        if guard.release() {
+            crate::tray::refresh_all(&handle);
+        }
     });
     crate::tray::refresh_all(&app);
     Ok(session_id)
 }
 
-#[tauri::command]
-pub fn scout_stop(p3: State<'_, Phase3>) {
-    if let Some(s) = p3.scout.lock().unwrap().as_ref() {
-        s.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+struct ScoutSlotGuard {
+    app: AppHandle,
+    session_id: String,
+    params: SessionParams,
+    done_tx: watch::Sender<bool>,
+}
+
+impl ScoutSlotGuard {
+    fn release(&self) -> bool {
+        let p3 = self.app.state::<Phase3>();
+        let cleared = clear_running_scout(&p3, &self.session_id);
+        if cleared {
+            self.app.state::<AppState>().browser_health.attach_scout_params(self.params.clone());
+        }
+        let _ = self.done_tx.send_replace(true);
+        cleared
     }
+}
+
+impl Drop for ScoutSlotGuard {
+    fn drop(&mut self) {
+        if self.release() {
+            crate::tray::refresh_all(&self.app);
+        }
+    }
+}
+
+/// Clears the active scout slot before `scout:finished` reaches the webview or tray so a
+/// `scout_status` refresh triggered by `scout:finished` always observes the session as idle.
+struct ScoutEventSink {
+    inner: TauriSink,
+    guard: Arc<ScoutSlotGuard>,
+}
+
+impl EventSink for ScoutEventSink {
+    fn emit(&self, event: &str, payload: serde_json::Value) {
+        if event == "scout:finished" {
+            self.guard.release();
+        }
+        self.inner.emit(event, payload);
+    }
+}
+
+/// Clears `p3.scout` only when it still holds `session_id`, so a finishing task never clears a newer session.
+pub fn clear_running_scout(p3: &Phase3, session_id: &str) -> bool {
+    let mut slot = p3.scout.lock().unwrap();
+    if slot.as_ref().is_some_and(|s| s.session_id == session_id) {
+        *slot = None;
+        true
+    } else {
+        false
+    }
+}
+
+/// Signals the active scout session (if any) to cancel immediately and returns its completion receiver.
+pub fn request_scout_stop(p3: &Phase3) -> Option<watch::Receiver<bool>> {
+    p3.scout.lock().unwrap().as_ref().map(|s| {
+        s.stop.stop();
+        s.done.clone()
+    })
+}
+
+/// Signals the active scout session to stop and waits up to `timeout` for cleanup to finish.
+pub async fn wait_for_scout_stop(p3: &Phase3, timeout: Duration) -> bool {
+    let Some(mut done) = request_scout_stop(p3) else {
+        return false;
+    };
+    let _ = tokio::time::timeout(timeout, done.wait_for(|&finished| finished)).await;
+    true
+}
+
+#[tauri::command]
+pub async fn scout_stop(app: AppHandle) -> AppResult<bool> {
+    let p3 = app.state::<Phase3>();
+    let stopped = wait_for_scout_stop(&p3, Duration::from_secs(5)).await;
+    crate::tray::refresh_all(&app);
+    Ok(stopped)
 }
 
 /// Holds or continues the running session without ending it (SCT-14, tray).
@@ -147,5 +229,54 @@ impl super::session::BrowserRelauncher for AppRelauncher {
             return Err("the X window was closed on purpose".into());
         }
         crate::commands::ensure_x_browser_open(&self.0, &state).await.map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn wait_for_scout_stop_signals_and_waits_for_slot_release() {
+        let p3 = Arc::new(Phase3::new(false));
+        assert!(!wait_for_scout_stop(&p3, Duration::from_millis(50)).await, "stopping when idle returns false");
+
+        let stop = Arc::new(StopSignal::new());
+        let (done_tx, done_rx) = watch::channel(false);
+        *p3.scout.lock().unwrap() = Some(RunningScout {
+            session_id: "s1".into(),
+            stop: stop.clone(),
+            pause: Arc::new(AtomicBool::new(false)),
+            done: done_rx,
+        });
+
+        let p3_bg = p3.clone();
+        let stop_bg = stop.clone();
+        tokio::spawn(async move {
+            stop_bg.cancelled().await;
+            assert!(clear_running_scout(&p3_bg, "s1"));
+            let _ = done_tx.send_replace(true);
+        });
+
+        let stopped = wait_for_scout_stop(&p3, Duration::from_secs(2)).await;
+        assert!(stopped);
+        assert!(stop.is_stopped());
+        assert!(p3.scout.lock().unwrap().is_none(), "slot is already cleared when stop returns");
+    }
+
+    #[test]
+    fn clear_running_scout_only_clears_matching_session() {
+        let p3 = Phase3::new(false);
+        let (_tx, rx) = watch::channel(false);
+        *p3.scout.lock().unwrap() = Some(RunningScout {
+            session_id: "s2".into(),
+            stop: Arc::new(StopSignal::new()),
+            pause: Arc::new(AtomicBool::new(false)),
+            done: rx,
+        });
+        assert!(!clear_running_scout(&p3, "s1"), "stale session must not clear a newer session");
+        assert_eq!(p3.scout.lock().unwrap().as_ref().map(|s| s.session_id.as_str()), Some("s2"));
+        assert!(clear_running_scout(&p3, "s2"));
+        assert!(p3.scout.lock().unwrap().is_none());
     }
 }

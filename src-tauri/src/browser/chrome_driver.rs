@@ -19,6 +19,7 @@ use std::time::Duration;
 const ENDPOINT_WAIT: Duration = Duration::from_secs(25);
 const TARGET_WAIT: Duration = Duration::from_secs(15);
 const CLOSE_WAIT: Duration = Duration::from_secs(10);
+const WHEEL_TIMEOUT: Duration = Duration::from_secs(5);
 const WORLD_NAME: &str = "sgh-isolated";
 
 struct Live {
@@ -55,6 +56,33 @@ impl ChromeCdpDriver {
     async fn page_call(&self, method: &str, params: Value) -> Result<Value, BrowserError> {
         let l = self.live()?;
         l.session.send(method, params, Some(&l.page_session)).await
+    }
+
+    async fn page_call_with_timeout(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, BrowserError> {
+        let l = self.live()?;
+        l.session.send_with_timeout(method, params, Some(&l.page_session), timeout).await
+    }
+
+    async fn wheel_scroll_with_timeout(&self, x: f64, y: f64, delta_y: f64, timeout: Duration) -> Result<(), BrowserError> {
+        match self
+            .page_call_with_timeout(
+                "Input.dispatchMouseEvent",
+                json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta_y }),
+                timeout,
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(BrowserError::Timeout(_)) => {
+                // Occluded/unfocused macOS windows pause compositor ACKs for Input.dispatchMouseEvent;
+                // scrolling via the isolated world still advances X's virtualized timeline.
+                let dy = if delta_y.is_finite() { delta_y } else { 0.0 };
+                log::debug!("CDP Input.dispatchMouseEvent timed out; falling back to window.scrollBy({dy})");
+                self.eval_json(&format!("window.scrollBy(0, {dy}); true")).await?;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn create_world(&self) -> Result<i64, BrowserError> {
@@ -300,12 +328,7 @@ impl BrowserDriver for ChromeCdpDriver {
     }
 
     async fn wheel_scroll(&self, x: f64, y: f64, delta_y: f64) -> Result<(), BrowserError> {
-        self.page_call(
-            "Input.dispatchMouseEvent",
-            json!({ "type": "mouseWheel", "x": x, "y": y, "deltaX": 0, "deltaY": delta_y }),
-        )
-        .await?;
-        Ok(())
+        self.wheel_scroll_with_timeout(x, y, delta_y, WHEEL_TIMEOUT).await
     }
 
     async fn insert_text(&self, text: &str) -> Result<(), BrowserError> {
@@ -845,5 +868,35 @@ mod tests {
         assert!(!m.iter().any(|x| x == "Runtime.enable"));
         // Main feed session S1 was never touched!
         assert!(sent.iter().all(|r| r.get("sessionId").and_then(Value::as_str) != Some("S1")));
+    }
+
+    #[tokio::test]
+    async fn wheel_scroll_falls_back_to_dom_scroll_on_input_timeout() {
+        let fake = test_server::spawn_maybe(|req| match req["method"].as_str().unwrap() {
+            "Input.dispatchMouseEvent" => None,
+            "Page.getFrameTree" => Some(json!({ "result": { "frameTree": { "frame": { "id": "F1" } } } })),
+            "Page.createIsolatedWorld" => Some(json!({ "result": { "executionContextId": 11 } })),
+            "Runtime.evaluate" => Some(json!({ "result": { "result": { "type": "boolean", "value": true } } })),
+            _ => Some(json!({ "result": {} })),
+        })
+        .await;
+        let session = Arc::new(CleanCdpSession::connect(&fake.url).await.unwrap());
+        let mut d = ChromeCdpDriver::new();
+        d.live = Some(Live {
+            session,
+            target_id: "T1".into(),
+            page_session: "S1".into(),
+            profile_dir: std::env::temp_dir().join("sgh-test-profile"),
+        });
+
+        d.wheel_scroll_with_timeout(640.0, 500.0, 850.0, Duration::from_millis(60)).await.unwrap();
+
+        let sent = fake.received.lock().unwrap().clone();
+        let m = methods(&fake.received);
+        assert!(m.contains(&"Input.dispatchMouseEvent".to_string()));
+        assert!(m.contains(&"Runtime.evaluate".to_string()));
+        assert!(!m.iter().any(|x| x == "Runtime.enable"));
+        let eval = sent.iter().find(|r| r["method"] == "Runtime.evaluate").unwrap();
+        assert!(eval["params"]["expression"].as_str().unwrap().contains("window.scrollBy(0, 850)"));
     }
 }

@@ -498,7 +498,8 @@ impl LlmProvider for ClaudeCliProvider {
         cmd.args(&args)
             .stdin(if vision { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = cmd.spawn().map_err(|e| {
             LlmError::new(LlmErrorKind::ProviderDown, format!("failed to spawn claude CLI: {e}"))
