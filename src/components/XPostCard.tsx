@@ -181,7 +181,7 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
                   ·
                 </span>
                 {url ? (
-                  <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Open on X" className={`shrink-0 hover:underline ${muted}`}>
+                  <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} title="Show in the X window" className={`shrink-0 hover:underline ${muted}`}>
                     {when}
                   </a>
                 ) : (
@@ -212,7 +212,7 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
                 rel="noreferrer"
                 onClick={(e) => e.stopPropagation()}
                 data-testid="view-on-x"
-                title={`Open this post on X: ${url}`}
+                title={`Show this post in the X window: ${url}`}
                 className="flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-sky-600 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
               >
                 View on X

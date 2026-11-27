@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { externalLinkTarget } from "./api";
+import { externalLinkTarget, isXPostLink } from "./api";
 
 describe("externalLinkTarget", () => {
   it("accepts new-window web links and ignores everything else", () => {
@@ -9,5 +9,16 @@ describe("externalLinkTarget", () => {
     expect(externalLinkTarget({ target: "_blank", href: "data:image/svg+xml;utf8,x" })).toBeNull();
     expect(externalLinkTarget({ target: "_blank", href: "javascript:alert(1)" })).toBeNull();
     expect(externalLinkTarget(null)).toBeNull();
+  });
+});
+
+describe("isXPostLink", () => {
+  it("recognises post permalinks only", () => {
+    expect(isXPostLink("https://x.com/naval/status/111")).toBe(true);
+    expect(isXPostLink("https://twitter.com/naval/status/111?s=20")).toBe(true);
+    expect(isXPostLink("https://x.com/i/status/111")).toBe(true);
+    expect(isXPostLink("https://x.com/naval")).toBe(false);
+    expect(isXPostLink("https://example.com/naval/status/111")).toBe(false);
+    expect(isXPostLink("https://x.com.evil.com/naval/status/111")).toBe(false);
   });
 });

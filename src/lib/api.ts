@@ -55,10 +55,41 @@ export function externalLinkTarget(a: { target?: string; href?: string } | null 
   return a.href;
 }
 
+/** True for a link to a single post on X, which the app shows in its own managed X window. */
+export function isXPostLink(url: string): boolean {
+  return /^https:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/[A-Za-z0-9_]{1,15}\/status\/\d+(?:[/?#]|$)/i.test(url);
+}
+
+/** Loads a post in the managed X window (same profile and login as Scout), starting that window when needed. */
+export async function openPostInX(url: string): Promise<void> {
+  if (!inTauri()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_post_in_x", { url });
+}
+
+function showLinkError(message: string): void {
+  const el = document.createElement("div");
+  el.setAttribute("role", "alert");
+  el.textContent = message;
+  el.className = "fixed bottom-4 left-1/2 z-50 max-w-md -translate-x-1/2 rounded-xl bg-zinc-900 px-4 py-2.5 text-sm text-white shadow-lg";
+  document.body.appendChild(el);
+  window.setTimeout(() => el.remove(), 7000);
+}
+
+function errorText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e && typeof (e as { message: unknown }).message === "string") return (e as { message: string }).message;
+  return "could not open the post";
+}
+
 /**
- * In the desktop app, sends every `target="_blank"` http(s) link to the system browser. It listens in the
- * capture phase because React components that call `stopPropagation` (post cards, reply box) would otherwise
- * swallow the click before it reached `document`. Returns a cleanup.
+ * In the desktop app, handles every `target="_blank"` http(s) link: posts on X load in the managed X window,
+ * anything else goes to the system browser. It listens in the capture phase because React components that call
+ * `stopPropagation` (post cards, reply box) would otherwise swallow the click before it reached `document`.
+ * Returns a cleanup.
  */
 export function routeExternalLinks(): () => void {
   if (!inTauri()) return () => undefined;
@@ -68,7 +99,8 @@ export function routeExternalLinks(): () => void {
     const url = externalLinkTarget(a);
     if (!url) return;
     e.preventDefault();
-    void openExternal(url).catch(() => undefined);
+    const open = isXPostLink(url) ? openPostInX : openExternal;
+    void open(url).catch((err) => showLinkError(errorText(err)));
   };
   document.addEventListener("click", onClick, true);
   return () => document.removeEventListener("click", onClick, true);
