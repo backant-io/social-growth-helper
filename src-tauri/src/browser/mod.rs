@@ -38,7 +38,7 @@ pub struct WindowBounds {
 }
 
 /// Request for read-only analytics capture on a dedicated tab with passive network sniffing (BRW-13, ANL-04).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AnalyticsPageRequest {
     pub url: String,
     /// Case-insensitive URL substrings (e.g. GraphQL operation names `AccountOverviewQuery`, `TweetActivityQuery`).
@@ -47,6 +47,13 @@ pub struct AnalyticsPageRequest {
     pub dom_script: String,
     /// Extra settle window after load so async X GraphQL analytics responses arrive.
     pub settle_ms: u64,
+    /// Optional read-only locator JS run after initial settle to find a range-selector control
+    /// (e.g. `7D` / `4W` / `30D` on X Creator Analytics). Must return `{ found, alreadySelected, x, y }`.
+    /// When `found && !alreadySelected`, the driver dispatches a real CDP click at `(x, y)` and waits
+    /// `post_click_settle_ms` before evaluating `dom_script`.
+    pub pre_click_locator_js: Option<String>,
+    /// Settle window after clicking the located control.
+    pub post_click_settle_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,6 +135,19 @@ pub trait BrowserDriver: Send + Sync {
     /// so lightweight test drivers do not need to override it.
     async fn capture_analytics_page(&self, req: AnalyticsPageRequest) -> Result<AnalyticsPageCapture, BrowserError> {
         self.navigate(&req.url).await?;
+        if let Some(locator_js) = &req.pre_click_locator_js {
+            if let Ok(loc) = self.eval_json(locator_js).await {
+                let found = loc["found"].as_bool().unwrap_or(false);
+                let already = loc["alreadySelected"].as_bool().unwrap_or(false);
+                if found && !already {
+                    if let (Some(x), Some(y)) = (loc["x"].as_f64(), loc["y"].as_f64()) {
+                        if x.is_finite() && y.is_finite() {
+                            let _ = self.click_point(x, y).await;
+                        }
+                    }
+                }
+            }
+        }
         let dom_result = self.eval_json(&req.dom_script).await?;
         let final_url = self.current_url().await.unwrap_or(req.url);
         Ok(AnalyticsPageCapture {

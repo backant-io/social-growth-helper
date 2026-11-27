@@ -7,7 +7,7 @@
 //! - Always bounds result rows (`LIMIT <= 500`).
 //! - Executes under `PRAGMA query_only = ON` so SQLite rejects any mutation even in theory.
 
-use super::spec::{validate_spec, FilterOp, SortDir, WidgetSpec};
+use super::spec::{validate_spec, AllowedView, FilterOp, SortDir, WidgetSpec};
 use super::views::view_time_column;
 use crate::error::{AppError, AppResult};
 use crate::util::format_unix;
@@ -42,6 +42,11 @@ impl Drop for QueryOnlyGuard<'_> {
     fn drop(&mut self) {
         let _ = self.conn.pragma_update(None, "query_only", "OFF");
     }
+}
+
+/// Maps a UI window selection (`window_days`) to the canonical X Creator Analytics period (`7` or `30`).
+pub fn canonical_period_days(window_days: u32) -> i64 {
+    if window_days <= 7 { 7 } else { 30 }
 }
 
 fn cutoff_rfc3339(window_days: u32) -> String {
@@ -94,7 +99,6 @@ pub fn execute_widget(
     let window_days = window_override_days
         .unwrap_or(spec.window_days)
         .clamp(1, super::spec::MAX_WINDOW_DAYS);
-    let cutoff = cutoff_rfc3339(window_days);
 
     // Ensure views exist before flipping to query_only = ON.
     super::views::ensure_views(conn)?;
@@ -118,15 +122,25 @@ pub fn execute_widget(
         }
     }
 
-    let time_col = view_time_column(spec.view);
-    let mut where_parts: Vec<String> = vec![
-        "profile_id = ?".to_string(),
-        format!("{time_col} >= ?"),
-    ];
-    let mut params: Vec<SqlValue> = vec![
-        SqlValue::Text(profile_id.to_string()),
-        SqlValue::Text(cutoff),
-    ];
+    let (mut where_parts, mut params) = if spec.view == AllowedView::VAnalyticsAccountOverview {
+        (
+            vec!["profile_id = ?".to_string(), "period_days = ?".to_string()],
+            vec![
+                SqlValue::Text(profile_id.to_string()),
+                SqlValue::Integer(canonical_period_days(window_days)),
+            ],
+        )
+    } else {
+        let time_col = view_time_column(spec.view);
+        let cutoff = cutoff_rfc3339(window_days);
+        (
+            vec!["profile_id = ?".to_string(), format!("{time_col} >= ?")],
+            vec![
+                SqlValue::Text(profile_id.to_string()),
+                SqlValue::Text(cutoff),
+            ],
+        )
+    };
 
     for f in &spec.filters {
         match f.op {

@@ -73,6 +73,16 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "analytics_background_sync",
         sql: include_str!("migrations/0012_analytics_background_sync.sql"),
     },
+    Migration {
+        version: 13,
+        name: "analytics_period_snapshots",
+        sql: include_str!("migrations/0013_analytics_period_snapshots.sql"),
+    },
+    Migration {
+        version: 14,
+        name: "analytics_period_views",
+        sql: include_str!("migrations/0014_analytics_period_views.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;
@@ -224,7 +234,7 @@ mod tests {
             "publish_audit_log", "analytics_snapshots", "learning_rubrics", "learning_insights",
             "profile_preferences", "app_acknowledgements", "scout_sessions", "dashboard_layouts",
             "dashboard_widgets", "app_settings", "learning_runs", "learning_changelog",
-            "format_candidates", "creator_watchlist", "reply_formats",
+            "format_candidates", "creator_watchlist", "reply_formats", "analytics_period_snapshots",
         ] {
             let n: i64 = conn
                 .query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1", [t], |r| r.get(0))
@@ -296,6 +306,50 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_master WHERE name='app_settings'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(has_settings, 0);
+    }
+
+    #[test]
+    fn migration_0013_upgrades_starter_kpis_without_touching_custom_widgets() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("app.db");
+        let bk = dir.path().join("backups");
+
+        {
+            let mut conn = Connection::open(&db).unwrap();
+            apply_pragmas(&conn).unwrap();
+            migrate(&mut conn, &MIGRATIONS[..12], Some(&bk)).unwrap();
+            conn.execute(
+                "INSERT INTO profiles (id, platform, handle, browser_profile_dir, created_at) VALUES ('p1','x','pavel','/tmp/p','2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO dashboard_layouts (id, profile_id, name, version, is_active, is_starter, created_at)
+                 VALUES ('lay1', 'p1', 'Starter Overview', 1, 1, 1, '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+            // Old untouched starter Impressions KPI (post sum) + a user-reprompted custom Impressions widget
+            conn.execute(
+                "INSERT INTO dashboard_widgets (id, layout_id, title, spec_json, position_json, source_prompt, created_at)
+                 VALUES
+                   ('w_starter', 'lay1', 'Impressions', '{\"title\":\"Impressions\",\"view\":\"v_analytics_post_performance\",\"chart_type\":\"kpi\",\"metrics\":[{\"column\":\"impressions\",\"agg\":\"sum\",\"alias\":\"total_impressions\"}]}', '{\"x\":0,\"y\":0,\"w\":4,\"h\":1}', NULL, '2026-01-01T00:00:00Z'),
+                   ('w_custom',  'lay1', 'Impressions', '{\"title\":\"Impressions\",\"view\":\"v_analytics_post_performance\",\"chart_type\":\"kpi\",\"metrics\":[{\"column\":\"impressions\",\"agg\":\"sum\",\"alias\":\"total_impressions\"}]}', '{\"x\":0,\"y\":1,\"w\":4,\"h\":1}', 'keep my custom post sum', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let (conn, _report) = open(&db, &bk).unwrap();
+        let starter_spec: String = conn
+            .query_row("SELECT spec_json FROM dashboard_widgets WHERE id = 'w_starter'", [], |r| r.get(0))
+            .unwrap();
+        let custom_spec: String = conn
+            .query_row("SELECT spec_json FROM dashboard_widgets WHERE id = 'w_custom'", [], |r| r.get(0))
+            .unwrap();
+        assert!(starter_spec.contains("\"view\":\"v_analytics_account_overview\""));
+        assert!(starter_spec.contains("\"agg\":\"latest\""));
+        assert!(custom_spec.contains("\"view\":\"v_analytics_post_performance\""));
     }
 
     #[test]

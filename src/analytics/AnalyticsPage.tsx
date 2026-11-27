@@ -3,6 +3,7 @@ import { btn, btnGhost, btnPrimary, EmptyBlock, muted, Notice, Page, PageHeader 
 import { listen } from "../lib/api";
 import type { SectionId } from "../lib/types";
 import { analyticsApi } from "./api";
+import { formatCompact } from "./charts/ChartPrimitives";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
 import { RepromptBuilderModal } from "./RepromptBuilderModal";
@@ -33,6 +34,7 @@ export function hasPerformanceData(snapshot: DashboardSnapshot): boolean {
     }
     return false;
   }
+  if (snapshot.period_overview) return true;
   return snapshot.widgets.some((item) => {
     if (!item.data || item.data.rows.length === 0) return false;
     if (item.widget.spec.chart_type !== "kpi") return true;
@@ -305,9 +307,24 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         onResetStarter={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
       />
 
-      <p className={`text-xs ${muted}`} role="status">
-        {syncStatusLine(snapshot.sync_status)}
-      </p>
+      <div className={`flex flex-wrap items-center justify-between gap-2 text-xs ${muted}`} role="status">
+        <span>{syncStatusLine(snapshot.sync_status)}</span>
+        {hasData && snapshot.period_overview && (
+          <span>
+            {[
+              `X Analytics ${snapshot.period_overview.period_label}`,
+              snapshot.period_overview.engagements != null
+                ? `${formatCompact(snapshot.period_overview.engagements)} engagements`
+                : null,
+              snapshot.period_overview.profile_visits != null
+                ? `${formatCompact(snapshot.period_overview.profile_visits)} profile visits`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        )}
+      </div>
 
       {customizeMode && (
         <Notice tone="info">Drag cards to reorder or resize. Changes save as you go.</Notice>

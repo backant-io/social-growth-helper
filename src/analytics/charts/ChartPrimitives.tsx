@@ -54,7 +54,7 @@ function EmptyChart({ message = "No data in this time window yet." }: { message?
 function KpiChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult }) {
   const row = data.rows[0];
   const valueField = pickField(spec.options.value_field, data.columns, data.columns.length - 1);
-  const raw = row ? row[valueField] : 0;
+  const raw = row ? row[valueField] : null;
   return (
     <div className="flex flex-col justify-between py-1">
       <div className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">

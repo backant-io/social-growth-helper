@@ -183,4 +183,29 @@ describe("Phase 4 analytics frontend", () => {
   it("exposes no manual sync or backfill in the analytics api", () => {
     expect(Object.keys(analyticsApi)).not.toContain("syncStats");
   });
+
+  it("switches 7d and 30d to show distinct X period totals and published-window post counts", async () => {
+    const d7 = await analyticsApi.getDashboard(7);
+    const d30 = await analyticsApi.getDashboard(30);
+
+    const kpiVal = (dash: DashboardSnapshot, title: string, field: string) =>
+      dash.widgets.find((w) => w.widget.title === title)?.data?.rows[0]?.[field];
+
+    expect(d7.period_overview?.period_days).toBe(7);
+    expect(d30.period_overview?.period_days).toBe(30);
+    expect(d7.period_overview?.impressions).toBe(31500);
+    expect(d30.period_overview?.impressions).toBe(142300);
+
+    expect(kpiVal(d7, "Impressions", "total_impressions")).toBe(31500);
+    expect(kpiVal(d30, "Impressions", "total_impressions")).toBe(142300);
+    expect(kpiVal(d7, "Engagement Rate", "avg_engagement_rate")).toBe(4.9);
+    expect(kpiVal(d30, "Engagement Rate", "avg_engagement_rate")).toBe(4.2);
+    expect(kpiVal(d7, "Follower Delta", "net_followers")).toBe(25);
+    expect(kpiVal(d30, "Follower Delta", "net_followers")).toBe(127);
+
+    expect(kpiVal(d7, "Replies Published", "reply_count")).toBe(3);
+    expect(kpiVal(d30, "Replies Published", "reply_count")).toBe(5);
+    expect(kpiVal(d7, "OGC Published", "ogc_count")).toBe(1);
+    expect(kpiVal(d30, "OGC Published", "ogc_count")).toBe(2);
+  });
 });

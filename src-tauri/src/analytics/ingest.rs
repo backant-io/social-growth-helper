@@ -4,9 +4,10 @@
 //! a tracked draft (or marks it `external`) and schedules the next checkpoint. Public counters only; nothing in
 //! this path depends on X Premium analytics or any GraphQL operation name.
 
-use super::extract::{parse_profile_timeline, PostMetrics};
+use super::extract::{parse_profile_timeline, AccountMetrics, PostMetrics};
 use super::health;
 use super::pacing;
+use super::sandbox::canonical_period_days;
 use super::schedule::{hours_since, parse_rfc3339_unix, TrackedPostSchedule};
 use crate::browser::service::BrowserService;
 use crate::browser::{AnalyticsPageCapture, AnalyticsPageRequest, BrowserError};
@@ -67,6 +68,9 @@ fn store_post_snapshot(
     if let Some(obj) = raw.as_object_mut() {
         if let Some(t) = &m.text {
             obj.entry("text").or_insert_with(|| serde_json::Value::String(t.clone()));
+        }
+        if let Some(p) = &m.posted_at {
+            obj.entry("postedAt").or_insert_with(|| serde_json::Value::String(p.clone()));
         }
         obj.insert("extraction_source".into(), serde_json::Value::String(m.source.clone()));
     }
@@ -196,6 +200,100 @@ pub fn metrics_are_sane(m: &PostMetrics) -> bool {
         Some(imp) if imp > 0 => [m.likes, m.replies, m.reposts, m.bookmarks].iter().flatten().sum::<i64>() <= imp,
         _ => true,
     }
+}
+
+/// Sanity check for X Creator / Premium account-period totals before storing.
+pub fn account_metrics_are_sane(m: &AccountMetrics) -> bool {
+    let non_negative = [
+        m.impressions,
+        m.engagements,
+        m.profile_visits,
+        m.followers_total,
+        m.new_follows,
+        m.unfollows,
+        m.likes,
+        m.replies,
+        m.reposts,
+        m.bookmarks,
+    ];
+    if non_negative.iter().flatten().any(|v| *v < 0) {
+        return false;
+    }
+    if m.engagement_rate.is_some_and(|r| !r.is_finite() || !(0.0..=100.0).contains(&r)) {
+        return false;
+    }
+    let has_any = m.impressions.is_some()
+        || m.engagements.is_some()
+        || m.engagement_rate.is_some()
+        || m.profile_visits.is_some()
+        || m.follower_delta.is_some()
+        || m.new_follows.is_some();
+    if !has_any {
+        return false;
+    }
+    if let (Some(imp), Some(eng)) = (m.impressions, m.engagements) {
+        if imp > 0 && eng > imp * 10 {
+            return false;
+        }
+    }
+    true
+}
+
+/// Stores one period snapshot (`7` or `30` days) from X Creator Analytics (`x.com/i/account_analytics`).
+pub fn ingest_account_period_metrics(
+    conn: &Connection,
+    profile_id: &str,
+    period_days: u32,
+    m: &AccountMetrics,
+    now: i64,
+) -> AppResult<bool> {
+    if !account_metrics_are_sane(m) {
+        return Ok(false);
+    }
+    if let Some(h) = &m.handle {
+        update_profile_handle_if_empty(conn, profile_id, h);
+    }
+    let canonical = canonical_period_days(period_days);
+    let label = m
+        .period_label
+        .clone()
+        .unwrap_or_else(|| if canonical == 7 { "7D".into() } else { "30D".into() });
+    let follower_delta = m.follower_delta.or_else(|| match (m.new_follows, m.unfollows) {
+        (Some(n), Some(u)) => Some(n - u),
+        (Some(n), None) => Some(n),
+        _ => None,
+    });
+    let captured_at = format_unix(now);
+    conn.execute(
+        "INSERT INTO analytics_period_snapshots
+         (id, profile_id, period_days, period_label, captured_at, impressions, engagements, engagement_rate,
+          profile_visits, followers_total, follower_delta, new_follows, unfollows,
+          likes, replies, reposts, bookmarks, source, raw_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+        params![
+            new_id(),
+            profile_id,
+            canonical,
+            label,
+            captured_at,
+            m.impressions,
+            m.engagements,
+            m.engagement_rate,
+            m.profile_visits,
+            m.followers_total,
+            follower_delta,
+            m.new_follows,
+            m.unfollows,
+            m.likes,
+            m.replies,
+            m.reposts,
+            m.bookmarks,
+            if m.source.is_empty() { "dom_fallback" } else { m.source.as_str() },
+            m.raw_json.to_string(),
+        ],
+    )?;
+    health::mark_updated(conn)?;
+    Ok(true)
 }
 
 fn round_age(hours: f64) -> f64 {
@@ -363,5 +461,69 @@ mod tests {
         assert!(pacing::load_state(&conn, &pid, "9999").unwrap().is_none());
 
         assert_eq!(ingest_profile_page(&conn, &pid, &dom, now + 600, 30).unwrap(), 1, "posts seen within three hours are not stored twice");
+    }
+
+    #[test]
+    fn stores_account_period_snapshots_separately_for_7d_and_30d_and_rejects_bad_values() {
+        let (_d, conn, pid) = setup();
+        let now = now_unix_secs();
+
+        let bad = AccountMetrics {
+            impressions: Some(-10),
+            ..Default::default()
+        };
+        assert!(!ingest_account_period_metrics(&conn, &pid, 7, &bad, now).unwrap());
+
+        let m7 = AccountMetrics {
+            handle: Some("pavel".into()),
+            period_days: Some(7),
+            period_label: Some("7D".into()),
+            impressions: Some(42_500),
+            engagements: Some(2_125),
+            engagement_rate: Some(5.0),
+            profile_visits: Some(610),
+            new_follows: Some(40),
+            unfollows: Some(8),
+            source: "dom_fallback".into(),
+            raw_json: json!({ "selectedRangeLabel": "7D" }),
+            ..Default::default()
+        };
+        let m30 = AccountMetrics {
+            handle: Some("pavel".into()),
+            period_days: Some(28),
+            period_label: Some("4W".into()),
+            impressions: Some(184_000),
+            engagements: Some(7_360),
+            engagement_rate: Some(4.0),
+            profile_visits: Some(2_450),
+            new_follows: Some(190),
+            unfollows: Some(35),
+            source: "dom_fallback".into(),
+            raw_json: json!({ "selectedRangeLabel": "4W" }),
+            ..Default::default()
+        };
+
+        assert!(ingest_account_period_metrics(&conn, &pid, 7, &m7, now).unwrap());
+        assert!(ingest_account_period_metrics(&conn, &pid, 30, &m30, now + 60).unwrap());
+
+        let row7: (i64, f64, i64, String) = conn
+            .query_row(
+                "SELECT impressions, engagement_rate, follower_delta, period_label
+                 FROM v_analytics_account_overview WHERE profile_id = ?1 AND period_days = 7",
+                [&pid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row7, (42_500, 5.0, 32, "7D".to_string()));
+
+        let row30: (i64, f64, i64, String) = conn
+            .query_row(
+                "SELECT impressions, engagement_rate, follower_delta, period_label
+                 FROM v_analytics_account_overview WHERE profile_id = ?1 AND period_days = 30",
+                [&pid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(row30, (184_000, 4.0, 155, "4W".to_string()));
     }
 }

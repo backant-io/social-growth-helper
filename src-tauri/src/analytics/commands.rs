@@ -11,14 +11,36 @@ use super::dashboard::{
     self, DashboardLayout, DashboardWidget, EvaluatedWidget, WidgetPositionUpdate,
 };
 use super::health::{load_status, SyncStatus};
-use super::sandbox::{execute_widget, WidgetQueryResult};
+use super::pacing;
+use super::sandbox::{canonical_period_days, execute_widget, WidgetQueryResult};
 use super::schedule::{compute_schedule, now_unix_secs, ScheduleSummary};
 use super::spec::{parse_untrusted_spec_json, WidgetPosition, WidgetSpec};
 use super::views::{list_view_schemas, ViewSchemaInfo};
 use crate::error::AppResult;
 use crate::state::AppState;
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tauri::State;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PeriodOverview {
+    pub period_days: u32,
+    pub period_label: String,
+    pub captured_at: String,
+    pub impressions: Option<i64>,
+    pub engagements: Option<i64>,
+    pub engagement_rate: Option<f64>,
+    pub profile_visits: Option<i64>,
+    pub followers_total: Option<i64>,
+    pub follower_delta: Option<i64>,
+    pub new_follows: Option<i64>,
+    pub unfollows: Option<i64>,
+    pub likes: Option<i64>,
+    pub replies: Option<i64>,
+    pub reposts: Option<i64>,
+    pub bookmarks: Option<i64>,
+    pub source: String,
+}
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ActivitySummary {
@@ -49,7 +71,48 @@ pub struct DashboardSnapshot {
     pub sync_status: SyncStatus,
     pub builder_route: BuilderRouteStatus,
     pub window_days: u32,
+    pub period_overview: Option<PeriodOverview>,
     pub activity_summary: ActivitySummary,
+}
+
+pub fn load_period_overview(
+    conn: &rusqlite::Connection,
+    profile_id: &str,
+    window_days: u32,
+) -> AppResult<Option<PeriodOverview>> {
+    super::views::ensure_views(conn)?;
+    let canon = canonical_period_days(window_days);
+    Ok(conn
+        .query_row(
+            "SELECT period_days, period_label, captured_at, impressions, engagements, engagement_rate,
+                    profile_visits, followers_total, follower_delta, new_follows, unfollows,
+                    likes, replies, reposts, bookmarks, source
+             FROM v_analytics_account_overview
+             WHERE profile_id = ?1 AND period_days = ?2
+             LIMIT 1",
+            rusqlite::params![profile_id, canon],
+            |r| {
+                Ok(PeriodOverview {
+                    period_days: r.get::<_, i64>(0)?.max(1) as u32,
+                    period_label: r.get(1)?,
+                    captured_at: r.get(2)?,
+                    impressions: r.get(3)?,
+                    engagements: r.get(4)?,
+                    engagement_rate: r.get(5)?,
+                    profile_visits: r.get(6)?,
+                    followers_total: r.get(7)?,
+                    follower_delta: r.get(8)?,
+                    new_follows: r.get(9)?,
+                    unfollows: r.get(10)?,
+                    likes: r.get(11)?,
+                    replies: r.get(12)?,
+                    reposts: r.get(13)?,
+                    bookmarks: r.get(14)?,
+                    source: r.get(15)?,
+                })
+            },
+        )
+        .optional()?)
 }
 
 pub fn compute_activity_summary(conn: &rusqlite::Connection, profile_id: &str) -> AppResult<ActivitySummary> {
@@ -102,7 +165,9 @@ pub fn compute_activity_summary(conn: &rusqlite::Connection, profile_id: &str) -
              WHERE profile_id = ?1 AND scope = 'post' AND platform_post_id IS NOT NULL",
         )?,
         synced_account_snapshots: count_one(
-            "SELECT COUNT(*) FROM analytics_snapshots WHERE profile_id = ?1 AND scope = 'account'",
+            "SELECT
+               (SELECT COUNT(*) FROM analytics_snapshots WHERE profile_id = ?1 AND scope = 'account') +
+               (SELECT COUNT(*) FROM analytics_period_snapshots WHERE profile_id = ?1)",
         )?,
         unsynced_published_posts: count_one(
             "SELECT COUNT(*) FROM v_analytics_post_performance
@@ -120,10 +185,14 @@ pub fn analytics_get_dashboard(
     let active_layout = dashboard::ensure_active_layout(&conn, &state.profile_id)?;
     let layouts = dashboard::list_layouts(&conn, &state.profile_id)?;
     let eff_window = window_days.unwrap_or(30).clamp(1, 365);
+    if let Some(days) = window_days {
+        let _ = pacing::set_preferred_window_days(&conn, days);
+    }
     let widgets = dashboard::evaluate_layout(&conn, &state.profile_id, &active_layout.id, Some(eff_window))?;
     let schedule = compute_schedule(&conn, &state.profile_id, now_unix_secs())?;
     let sync_status = load_status(&conn);
     let builder_route = get_builder_route_status(&conn)?;
+    let period_overview = load_period_overview(&conn, &state.profile_id, eff_window)?;
     let activity_summary = compute_activity_summary(&conn, &state.profile_id)?;
 
     Ok(DashboardSnapshot {
@@ -134,6 +203,7 @@ pub fn analytics_get_dashboard(
         sync_status,
         builder_route,
         window_days: eff_window,
+        period_overview,
         activity_summary,
     })
 }

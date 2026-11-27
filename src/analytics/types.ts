@@ -179,6 +179,25 @@ export interface ActivitySummary {
   unsynced_published_posts: number;
 }
 
+export interface PeriodOverview {
+  period_days: number;
+  period_label: string;
+  captured_at: string;
+  impressions: number | null;
+  engagements: number | null;
+  engagement_rate: number | null;
+  profile_visits: number | null;
+  followers_total: number | null;
+  follower_delta: number | null;
+  new_follows: number | null;
+  unfollows: number | null;
+  likes: number | null;
+  replies: number | null;
+  reposts: number | null;
+  bookmarks: number | null;
+  source: string;
+}
+
 export interface DashboardSnapshot {
   active_layout: DashboardLayout;
   layouts: DashboardLayout[];
@@ -187,6 +206,7 @@ export interface DashboardSnapshot {
   sync_status: SyncStatus;
   builder_route: BuilderRouteStatus;
   window_days: number;
+  period_overview?: PeriodOverview | null;
   activity_summary?: ActivitySummary;
 }
 

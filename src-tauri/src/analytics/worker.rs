@@ -6,10 +6,14 @@
 //! `plan` decides what to do and `execute` does it, so tests drive both without a browser. Budgets, jitter,
 //! backoff and the AI self-heal limits live in `pacing`.
 
-use super::extract::{parse_post_metrics, PROFILE_TIMELINE_DOM_JS};
+use super::extract::{
+    account_analytics_range_locator_js, parse_account_overview, parse_post_metrics,
+    ACCOUNT_ANALYTICS_DOM_JS, ACCOUNT_ANALYTICS_URL, PROFILE_TIMELINE_DOM_JS,
+};
 use super::health;
 use super::ingest::{self, AnalyticsPageFetcher};
 use super::pacing::{self, UnitKind};
+use super::sandbox::canonical_period_days;
 use super::schedule::{compute_schedule, now_unix_secs, TrackedPostSchedule};
 use super::vision_heal::{LiveHealer, PostHealer};
 use crate::browser::{AnalyticsPageCapture, AnalyticsPageRequest};
@@ -28,12 +32,15 @@ const STARTUP_GRACE_SECS: u64 = 45;
 const BUSY_POLL_SECS: u64 = 120;
 const SETTLE_POST_MS: u64 = 3500;
 const SETTLE_PROFILE_MS: u64 = 2500;
+const SETTLE_ACCOUNT_MS: u64 = 3500;
+const SETTLE_ACCOUNT_RANGE_CLICK_MS: u64 = 2500;
 const PROFILE_WINDOW_DAYS: i64 = 30;
 const LAST_SWEEP_KEY: &str = "analytics_last_sweep_at";
 const SWEEP_STAGE_KEY: &str = "analytics_sweep_stage";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Task {
+    AccountPeriod(u32),
     Post(Box<TrackedPostSchedule>),
     Profile,
     Replies,
@@ -91,7 +98,33 @@ fn pick_due_post(conn: &Connection, profile_id: &str, now: i64) -> AppResult<Opt
     Ok(None)
 }
 
-/// What the next tick should do. Profile sweeps need a known handle, which the first post visit teaches us.
+fn has_account_context(conn: &Connection, profile_id: &str, handle_known: bool) -> bool {
+    if handle_known {
+        return true;
+    }
+    let has_activity: i64 = conn
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM reply_drafts WHERE profile_id = ?1 AND status = 'published') +
+               (SELECT COUNT(*) FROM ogc_drafts WHERE profile_id = ?1 AND status = 'published') +
+               (SELECT COUNT(*) FROM analytics_snapshots WHERE profile_id = ?1) +
+               (SELECT COUNT(*) FROM analytics_period_snapshots WHERE profile_id = ?1)",
+            [profile_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    has_activity > 0
+}
+
+fn pick_due_period(conn: &Connection, now: i64) -> Option<u32> {
+    let preferred = pacing::preferred_window_days(conn);
+    let ordered = if preferred <= 7 { [7u32, 30u32] } else { [30u32, 7u32] };
+    ordered
+        .into_iter()
+        .find(|&days| pacing::period_next_due_at(conn, days) <= now)
+}
+
+/// What the next tick should do. Profile sweeps need a known handle, which the first post or account visit teaches us.
 pub fn plan(conn: &Connection, profile_id: &str, now: i64) -> AppResult<Plan> {
     if pacing::pause_until(conn).is_some_and(|until| until > now) {
         return Ok(Plan::Paused);
@@ -101,6 +134,12 @@ pub fn plan(conn: &Connection, profile_id: &str, now: i64) -> AppResult<Plan> {
         Some(Task::Replies)
     } else if handle_known && now - setting_i64(conn, LAST_SWEEP_KEY) >= pacing::SWEEP_INTERVAL_SECS {
         Some(Task::Profile)
+    } else if has_account_context(conn, profile_id, handle_known) {
+        if let Some(days) = pick_due_period(conn, now) {
+            Some(Task::AccountPeriod(days))
+        } else {
+            pick_due_post(conn, profile_id, now)?.map(|p| Task::Post(Box::new(p)))
+        }
     } else {
         pick_due_post(conn, profile_id, now)?.map(|p| Task::Post(Box::new(p)))
     };
@@ -166,10 +205,131 @@ pub async fn run_tick(env: &TickEnv<'_>, now: i64) -> TickOutcome {
 
 pub async fn execute(env: &TickEnv<'_>, task: Task, now: i64) -> TickOutcome {
     match task {
+        Task::AccountPeriod(days) => execute_account_period(env, days, now).await,
         Task::Post(item) => execute_post(env, &item, now).await,
         Task::Profile => execute_sweep(env, false, now).await,
         Task::Replies => execute_sweep(env, true, now).await,
     }
+}
+
+async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -> TickOutcome {
+    let pid = env.profile_id;
+    let target_canonical = canonical_period_days(period_days);
+    {
+        let db = env.db.lock().unwrap();
+        let _ = pacing::record_units(&db, pid, now, pacing::DOM_UNITS, UnitKind::Dom);
+    }
+
+    let req = AnalyticsPageRequest {
+        url: ACCOUNT_ANALYTICS_URL.to_string(),
+        network_url_filters: vec![],
+        dom_script: ACCOUNT_ANALYTICS_DOM_JS.to_string(),
+        settle_ms: SETTLE_ACCOUNT_MS,
+        pre_click_locator_js: Some(account_analytics_range_locator_js(period_days)),
+        post_click_settle_ms: SETTLE_ACCOUNT_RANGE_CLICK_MS,
+    };
+
+    let cap = match env.fetcher.fetch_page(req).await {
+        Ok(c) => c,
+        Err(_) => {
+            let db = env.db.lock().unwrap();
+            let _ = pacing::mark_period_failed(&db, period_days, now);
+            drop(db);
+            tick_result(env, false, now);
+            return TickOutcome::Failed;
+        }
+    };
+    if let Some(reason) = block_reason(&cap) {
+        return blocked(env, &reason);
+    }
+
+    let metrics = parse_account_overview(&cap.network_responses, &cap.dom_result);
+    if let Some(h) = &metrics.handle {
+        let db = env.db.lock().unwrap();
+        ingest::update_profile_handle_if_empty(&db, pid, h);
+    }
+    if metrics.is_logged_out {
+        return blocked(env, "logged_out");
+    }
+    if metrics.is_premium_upsell {
+        let db = env.db.lock().unwrap();
+        let _ = pacing::mark_period_upsell(&db, now);
+        drop(db);
+        tick_result(env, true, now);
+        return TickOutcome::Synced;
+    }
+
+    let range_matches = metrics
+        .period_days
+        .map(|d| canonical_period_days(d) == target_canonical)
+        .unwrap_or(true);
+
+    if metrics.source != "empty" && range_matches {
+        let stored = {
+            let db = env.db.lock().unwrap();
+            ingest::ingest_account_period_metrics(&db, pid, period_days, &metrics, now).unwrap_or(false)
+        };
+        if stored {
+            let db = env.db.lock().unwrap();
+            let _ = pacing::mark_period_synced(&db, period_days, now);
+            drop(db);
+            tick_result(env, true, now);
+            updated(env, "account_period");
+            return TickOutcome::Synced;
+        }
+    }
+
+    // The subscription analytics page loaded, wasn't an upsell, and DOM extraction came back empty
+    // or couldn't verify the selected range: try one vision heal under the shared AI heal budget.
+    if let Some(healer) = env.healer.filter(|h| h.available()) {
+        let may_heal = {
+            let db = env.db.lock().unwrap();
+            let last = pacing::period_last_heal_at(&db, period_days);
+            pacing::can_ai_heal(&db, pid, now, last).unwrap_or(false)
+        };
+        if may_heal {
+            {
+                let db = env.db.lock().unwrap();
+                let _ = pacing::mark_period_healed(&db, period_days, now);
+            }
+            let healed = healer.heal_account_period(ACCOUNT_ANALYTICS_URL, period_days).await;
+            let kind = if healed.is_ok() { UnitKind::AiOk } else { UnitKind::AiFail };
+            {
+                let db = env.db.lock().unwrap();
+                let _ = pacing::record_units(&db, pid, now, pacing::AI_HEAL_UNITS, kind);
+            }
+            if let Ok(m) = healed {
+                let stored = {
+                    let db = env.db.lock().unwrap();
+                    let ok = ingest::ingest_account_period_metrics(&db, pid, period_days, &m, now).unwrap_or(false);
+                    if ok {
+                        let _ = pacing::mark_period_synced(&db, period_days, now);
+                        crate::activity::record(
+                            &db,
+                            pid,
+                            "action",
+                            "Analytics read account totals from a screenshot",
+                            Some("The analytics page layout changed, so the period totals were read visually."),
+                            Some(true),
+                            None,
+                        );
+                    }
+                    ok
+                };
+                if stored {
+                    tick_result(env, true, now);
+                    updated(env, "account_period");
+                    return TickOutcome::Healed;
+                }
+            }
+        }
+    }
+
+    let db = env.db.lock().unwrap();
+    let _ = pacing::mark_period_failed(&db, period_days, now);
+    drop(db);
+    tick_result(env, false, now);
+    TickOutcome::Failed
 }
 
 async fn execute_post(env: &TickEnv<'_>, item: &TrackedPostSchedule, now: i64) -> TickOutcome {
@@ -181,7 +341,13 @@ async fn execute_post(env: &TickEnv<'_>, item: &TrackedPostSchedule, now: i64) -
         ingest::profile_handle(&db, pid).ok().flatten()
     };
     let url = post_url(handle.as_deref(), item);
-    let req = AnalyticsPageRequest { url: url.clone(), network_url_filters: vec![], dom_script: crate::selectors::post_page_js(post_id), settle_ms: SETTLE_POST_MS };
+    let req = AnalyticsPageRequest {
+        url: url.clone(),
+        network_url_filters: vec![],
+        dom_script: crate::selectors::post_page_js(post_id),
+        settle_ms: SETTLE_POST_MS,
+        ..Default::default()
+    };
 
     let cap = match env.fetcher.fetch_page(req).await {
         Ok(c) => c,
@@ -277,7 +443,13 @@ async fn execute_sweep(env: &TickEnv<'_>, replies: bool, now: i64) -> TickOutcom
     };
     let Some(handle) = handle else { return TickOutcome::Idle };
     let url = if replies { format!("https://x.com/{handle}/with_replies") } else { format!("https://x.com/{handle}") };
-    let req = AnalyticsPageRequest { url, network_url_filters: vec![], dom_script: PROFILE_TIMELINE_DOM_JS.to_string(), settle_ms: SETTLE_PROFILE_MS };
+    let req = AnalyticsPageRequest {
+        url,
+        network_url_filters: vec![],
+        dom_script: PROFILE_TIMELINE_DOM_JS.to_string(),
+        settle_ms: SETTLE_PROFILE_MS,
+        ..Default::default()
+    };
 
     let finish = |ok: bool| {
         let db = env.db.lock().unwrap();
@@ -466,6 +638,13 @@ mod tests {
         w.db.lock().unwrap().execute("UPDATE profiles SET handle = ?1 WHERE id = ?2", params![handle, w.pid]).unwrap();
     }
 
+    fn silence_sweeps_and_periods(w: &World, now: i64) {
+        let db = w.db.lock().unwrap();
+        repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
+        pacing::mark_period_synced(&db, 7, now).unwrap();
+        pacing::mark_period_synced(&db, 30, now).unwrap();
+    }
+
     fn page(likes: &str, views: &str) -> serde_json::Value {
         json!({ "state": "ok", "found": true, "gone": false, "handle": "pavel", "impressions": views, "likes": likes, "replies": "1", "bodySnippet": "" })
     }
@@ -509,10 +688,7 @@ mod tests {
         f.on(&url("111"), Ok(page("30", "2000")));
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
 
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Synced);
         assert_eq!(f.calls(), vec![url("222")], "the newest post first, and only one page per tick");
@@ -536,9 +712,9 @@ mod tests {
         f.on(&url("111"), Ok(page("5", "500")));
         let sink = CollectSink::default();
         let now = now_unix_secs();
+        silence_sweeps_and_periods(&w, now);
         {
             let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
             pacing::record_units(&db, &w.pid, now - 60, pacing::HOURLY_UNIT_CAP, UnitKind::Dom).unwrap();
         }
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Throttled);
@@ -562,10 +738,7 @@ mod tests {
         let f = Fake::new();
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
         for i in 0..3 {
             assert_eq!(run_tick(&env(&w, &f, None, &sink), now + i * 120).await, TickOutcome::Failed);
         }
@@ -586,10 +759,7 @@ mod tests {
         f.on(&url("111"), Ok(json!({ "state": "logged_out", "found": false, "bodySnippet": "" })));
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
         let out = run_tick(&env(&w, &f, None, &sink), now).await;
         assert_eq!(out, TickOutcome::Blocked("logged_out".into()));
         let db = w.db.lock().unwrap();
@@ -608,16 +778,12 @@ mod tests {
         }
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
         let mut t = now;
         for _ in 0..3 {
             assert_eq!(run_tick(&env(&w, &f, None, &sink), t).await, TickOutcome::Missing);
             t += 2 * 86_400;
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &t.to_string()).unwrap();
+            silence_sweeps_and_periods(&w, t);
         }
         assert!(pacing::load_state(&w.db.lock().unwrap(), &w.pid, "111").unwrap().unwrap().retired);
         assert_eq!(run_tick(&env(&w, &f, None, &sink), t).await, TickOutcome::Idle);
@@ -633,10 +799,7 @@ mod tests {
         let healer = Healer { calls: AtomicUsize::new(0), result: Mutex::new(Ok((800, 20))) };
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
 
         assert_eq!(run_tick(&env(&w, &f, Some(&healer), &sink), now).await, TickOutcome::Healed);
         assert_eq!(healer.calls.load(Ordering::SeqCst), 1);
@@ -658,10 +821,7 @@ mod tests {
         let healer = Healer { calls: AtomicUsize::new(0), result: Mutex::new(Err("give up".into())) };
         let sink = CollectSink::default();
         let now = now_unix_secs();
-        {
-            let db = w.db.lock().unwrap();
-            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
-        }
+        silence_sweeps_and_periods(&w, now);
         assert_eq!(run_tick(&env(&w, &f, Some(&healer), &sink), now).await, TickOutcome::Failed);
         pacing::retire(&w.db.lock().unwrap(), &w.pid, "111", now).unwrap();
         assert_eq!(run_tick(&env(&w, &f, Some(&healer), &sink), now + 3700).await, TickOutcome::Failed);
@@ -686,6 +846,11 @@ mod tests {
         f.on("https://x.com/pavel/with_replies", Ok(json!({ "handle": "pavel", "followersText": "1,200 Followers", "posts": [] })));
         f.on(&url("111"), Ok(page("20", "700")));
         let sink = CollectSink::default();
+        {
+            let db = w.db.lock().unwrap();
+            pacing::mark_period_synced(&db, 7, now).unwrap();
+            pacing::mark_period_synced(&db, 30, now).unwrap();
+        }
 
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Synced);
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120).await, TickOutcome::Synced);
@@ -693,6 +858,11 @@ mod tests {
         assert_eq!(snapshots(&w), 1, "the profile pass stored the tracked post");
 
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 240).await, TickOutcome::Idle, "the post was just covered by the profile pass");
+        {
+            let db = w.db.lock().unwrap();
+            pacing::mark_period_synced(&db, 7, now + 120 + pacing::SWEEP_INTERVAL_SECS).unwrap();
+            pacing::mark_period_synced(&db, 30, now + 120 + pacing::SWEEP_INTERVAL_SECS).unwrap();
+        }
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120 + pacing::SWEEP_INTERVAL_SECS + 10).await, TickOutcome::Failed, "next sweep after the interval (no scripted page left)");
         assert_eq!(f.calls().len(), 3);
     }
@@ -707,5 +877,203 @@ mod tests {
         pacing::set_pause(&w.db.lock().unwrap(), now + 600).unwrap();
         assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Paused);
         assert!(f.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn syncs_creator_analytics_7d_and_30d_periods_then_continues_per_post_sync() {
+        let w = world(&[("111", 2)]);
+        set_handle(&w, "pavel");
+        let now = now_unix_secs();
+        {
+            let db = w.db.lock().unwrap();
+            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
+            pacing::set_preferred_window_days(&db, 7).unwrap();
+        }
+
+        let f = Fake::new();
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({
+                "state": "ok",
+                "handle": "pavel",
+                "selectedRangeLabel": "7D",
+                "selectedRangeDays": 7,
+                "labeledMetrics": {
+                    "impressions": "31.5K",
+                    "engagement rate": "4.9%",
+                    "engagements": "1.5K",
+                    "profile visits": "420",
+                    "new follows": "29",
+                    "unfollows": "4"
+                },
+                "metricCards": {},
+                "bodySnippet": ""
+            })),
+        );
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({
+                "state": "ok",
+                "handle": "pavel",
+                "selectedRangeLabel": "4W",
+                "selectedRangeDays": 28,
+                "labeledMetrics": {
+                    "impressions": "142.3K",
+                    "engagement rate": "4.2%",
+                    "engagements": "5.9K",
+                    "profile visits": "1.8K",
+                    "new follows": "160",
+                    "unfollows": "33"
+                },
+                "metricCards": {},
+                "bodySnippet": ""
+            })),
+        );
+        f.on(&url("111"), Ok(page("15", "850")));
+
+        let sink = CollectSink::default();
+
+        // Tick 1: preferred 7d period snapshot
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Synced);
+        // Tick 2: 30d period snapshot
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120).await, TickOutcome::Synced);
+        // Tick 3: gradual per-post link sync continues seamlessly
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 240).await, TickOutcome::Synced);
+        // Tick 4: idle until next checkpoint / 4h period refresh
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 360).await, TickOutcome::Idle);
+
+        assert_eq!(
+            f.calls(),
+            vec![ACCOUNT_ANALYTICS_URL.to_string(), ACCOUNT_ANALYTICS_URL.to_string(), url("111")]
+        );
+        assert_eq!(snapshots(&w), 1);
+
+        let db = w.db.lock().unwrap();
+        let row7: (i64, f64, i64) = db
+            .query_row(
+                "SELECT impressions, engagement_rate, follower_delta FROM v_analytics_account_overview WHERE profile_id = ?1 AND period_days = 7",
+                [&w.pid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row7, (31_500, 4.9, 25));
+
+        let row30: (i64, f64, i64) = db
+            .query_row(
+                "SELECT impressions, engagement_rate, follower_delta FROM v_analytics_account_overview WHERE profile_id = ?1 AND period_days = 30",
+                [&w.pid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row30, (142_300, 4.2, 127));
+    }
+
+    #[tokio::test]
+    async fn period_range_mismatch_is_not_stored_and_upsell_cools_down_calmly() {
+        let w = world(&[]);
+        set_handle(&w, "pavel");
+        let now = now_unix_secs();
+        {
+            let db = w.db.lock().unwrap();
+            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
+            pacing::set_preferred_window_days(&db, 7).unwrap();
+        }
+
+        // Page stayed on 4W (28d) even though worker requested 7d -> must not overwrite 7d snapshot!
+        let f = Fake::new();
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({
+                "state": "ok",
+                "selectedRangeLabel": "4W",
+                "selectedRangeDays": 28,
+                "labeledMetrics": { "impressions": "142.3K" },
+                "metricCards": {},
+                "bodySnippet": ""
+            })),
+        );
+        // Next tick (30d) sees Premium upsell -> calm 24h cooldown for both periods, no failure streak
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({
+                "state": "ok",
+                "isPremiumUpsell": true,
+                "metricCards": {},
+                "labeledMetrics": {},
+                "bodySnippet": "Subscribe to X Premium to unlock analytics"
+            })),
+        );
+
+        let sink = CollectSink::default();
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Failed);
+        let stored_7d: i64 = w
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM analytics_period_snapshots WHERE period_days = 7", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored_7d, 0, "mismatched 28d capture must not be stored under 7d");
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120).await, TickOutcome::Synced);
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 240).await, TickOutcome::Idle, "upsell cooled down both 7d and 30d");
+        assert!(pacing::pause_until(&w.db.lock().unwrap()).is_none());
+    }
+
+    #[tokio::test]
+    async fn empty_account_period_scrape_falls_back_to_vision_heal() {
+        struct PeriodHealer;
+        #[async_trait::async_trait]
+        impl PostHealer for PeriodHealer {
+            fn available(&self) -> bool {
+                true
+            }
+            async fn heal(&self, _url: &str, _post_id: &str) -> Result<super::super::extract::PostMetrics, String> {
+                Err("unused".into())
+            }
+            async fn heal_account_period(&self, _url: &str, period_days: u32) -> Result<super::super::extract::AccountMetrics, String> {
+                Ok(super::super::extract::AccountMetrics {
+                    period_days: Some(period_days),
+                    period_label: Some("30D".into()),
+                    impressions: Some(88_000),
+                    engagements: Some(3_520),
+                    engagement_rate: Some(4.0),
+                    profile_visits: Some(950),
+                    follower_delta: Some(64),
+                    source: "vision_heal".into(),
+                    raw_json: json!({ "capture_source": "vision_heal" }),
+                    ..Default::default()
+                })
+            }
+        }
+
+        let w = world(&[]);
+        set_handle(&w, "pavel");
+        let now = now_unix_secs();
+        {
+            let db = w.db.lock().unwrap();
+            repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
+            pacing::mark_period_synced(&db, 7, now).unwrap();
+        }
+
+        let f = Fake::new();
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({ "state": "ok", "metricCards": {}, "labeledMetrics": {}, "bodySnippet": "" })),
+        );
+        let sink = CollectSink::default();
+        let healer = PeriodHealer;
+
+        assert_eq!(run_tick(&env(&w, &f, Some(&healer), &sink), now).await, TickOutcome::Healed);
+        let (imp, src): (i64, String) = w
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT impressions, source FROM v_analytics_account_overview WHERE profile_id = ?1 AND period_days = 30",
+                [&w.pid],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((imp, src.as_str()), (88_000, "vision_heal"));
     }
 }
