@@ -110,9 +110,6 @@ export function PreferencesPanel() {
       <h2 id="prefs-h" className="font-display text-lg font-semibold tracking-tight">
         Scout preferences
       </h2>
-      <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-        Niche, accounts and languages that steer Scout&apos;s ranking. Changes apply to the next Scout session. Nothing here contacts X.
-      </p>
       <div className="mt-3 space-y-4">{fields}</div>
       <div className="mt-4 flex items-center gap-3">
         <button type="button" onClick={save} disabled={busy} className={btnPrimary}>

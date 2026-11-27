@@ -4,7 +4,7 @@ import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
 import { REASONS } from "./logic";
 import type { QueueItem, ScoutProgress, SessionParams } from "./types";
-import { EmptyBlock, LoadingBlock, PageHeader, Segmented } from "../components/ui";
+import { EmptyBlock, LoadingBlock, Page, PageHeader, Segmented } from "../components/ui";
 import { btn, btnGhost, btnPrimary, chip, muted, Notice } from "./ui";
 
 interface Props {
@@ -118,7 +118,7 @@ export function ScoutPage({ onOpenDraft }: Props) {
   );
 
   return (
-    <div className="mx-auto max-w-3xl space-y-8">
+    <Page>
       <PageHeader title="Scout" description="Find the posts worth answering. Nothing is posted from here." actions={actions} />
 
       {error && <Notice tone="error">{error}</Notice>}
@@ -195,6 +195,6 @@ export function ScoutPage({ onOpenDraft }: Props) {
           })}
         </ul>
       )}
-    </div>
+    </Page>
   );
 }

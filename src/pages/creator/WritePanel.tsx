@@ -4,8 +4,8 @@ import { creatorApi } from "../../lib/creatorApi";
 import type { CreatorSettings, FormatRecord, OgcDraft } from "../../lib/types";
 import { DraftCard } from "./DraftCard";
 import { InlineModelGuard } from "../../components/InlineModelGuard";
-import { EmptyBlock, LoadingBlock, Notice } from "../../components/ui";
-import { btn, field, muted, panel, primary } from "./ui";
+import { LoadingBlock, Notice, btnGhost } from "../../components/ui";
+import { field, muted, primary } from "./ui";
 
 interface Props {
   locked: boolean;
@@ -106,30 +106,20 @@ export function WritePanel({ locked, xRunning, onGoToSettings }: Props) {
   if (!loaded) return <LoadingBlock label="Loading drafts" />;
 
   return (
-    <div className="space-y-4">
-      {!xRunning && <Notice tone="info">The X window is closed. You can write and edit now; open it in Settings before publishing.</Notice>}
-
+    <div className="space-y-8">
       <InlineModelGuard
         taskType="ogc_generation"
         onGoToSettings={onGoToSettings}
         onAssigned={() => undefined}
-        hint="You can still start from a blank draft and write the post yourself without a model."
       />
 
-      <section className={panel} aria-labelledby="w-h">
-        <h2 id="w-h" className="font-display text-lg font-semibold tracking-tight">New original post</h2>
-        <p className={`mt-1 text-sm ${muted}`}>Write a rough thought. The app fits it into a format that has worked for others and drafts three versions in your voice.</p>
-        <ol className={`mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs ${muted}`} aria-label="How it works">
-          <li><span className="font-medium text-zinc-900 dark:text-zinc-100">1.</span> Write a draft</li>
-          <li><span className="font-medium text-zinc-900 dark:text-zinc-100">2.</span> Edit it</li>
-          <li><span className="font-medium text-zinc-900 dark:text-zinc-100">3.</span> You approve the exact text, then it posts</li>
-        </ol>
-        <label className="mt-3 block text-sm">
-          <span className="mb-1 block font-medium">Your rough thought</span>
-          <textarea className={`${field} min-h-20`} value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. shipping a small thing every week beats planning a big launch" />
+      <section aria-label="New post" className="space-y-4">
+        <label className="block text-sm">
+          <span className="eyebrow mb-1.5 block">Your thought</span>
+          <textarea className={`${field} min-h-24`} value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Shipping a small thing every week beats planning a big launch" />
         </label>
-        <label className="mt-3 block text-sm">
-          <span className="mb-1 block font-medium">Format</span>
+        <label className="block text-sm">
+          <span className="eyebrow mb-1.5 block">Format</span>
           <select className={field} value={formatId} onChange={(e) => { setFormatId(e.target.value); setPicked(true); }} disabled={formats.length === 0}>
             {formats.length === 0 && <option value="">No formats yet. Add one in the Formats tab.</option>}
             {formats.map((f) => (
@@ -137,24 +127,17 @@ export function WritePanel({ locked, xRunning, onGoToSettings }: Props) {
             ))}
           </select>
         </label>
-        {selected && (
-          <p className={`mt-1 text-xs ${muted}`}>
-            {selected.hook_formula}
-            {selected.media_hint ? ` Works well with: ${selected.media_hint}.` : ""}
-          </p>
-        )}
-        <div className="mt-3 flex flex-wrap gap-2">
+        {selected && <p className={`-mt-2 text-xs ${muted}`}>{selected.hook_formula}</p>}
+        <div className="flex flex-wrap items-center gap-2">
           <button type="button" className={primary} disabled={busy || locked || !formatId || !topic.trim()} onClick={generate}>
-            {busy ? "Writing..." : "Write 3 versions"}
+            {busy ? "Writing..." : "Write"}
           </button>
-          <button type="button" className={btn} disabled={busy} onClick={blank}>Start from a blank draft</button>
+          <button type="button" className={btnGhost} disabled={busy} onClick={blank}>Start blank</button>
         </div>
-        {error && <div className="mt-3"><Notice tone="error">{error}</Notice></div>}
+        {error && <Notice tone="error">{error}</Notice>}
       </section>
 
-      {drafts.length === 0 ? (
-        <EmptyBlock title="No drafts yet">Write a rough thought above and your drafts will appear here. Nothing is posted until you review and approve it.</EmptyBlock>
-      ) : (
+      {drafts.length > 0 && (
         <div className="space-y-3" aria-label="Drafts">
           {drafts.map((d) => (
             <DraftCard

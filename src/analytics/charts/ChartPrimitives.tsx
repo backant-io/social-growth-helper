@@ -60,9 +60,6 @@ function KpiChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult })
       <div className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
         {formatMetricValue(raw, spec.options.format)}
       </div>
-      {spec.options.subtitle && (
-        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{spec.options.subtitle}</p>
-      )}
     </div>
   );
 }

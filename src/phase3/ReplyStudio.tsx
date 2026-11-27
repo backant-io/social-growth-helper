@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { InlineModelGuard } from "../components/InlineModelGuard";
 import { listen } from "../lib/api";
 import { offlineActionHint, useOnlineStatus } from "../lib/errors";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
-import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, compactCount, editDistance, stepSummary, toggleInBundle } from "./logic";
-import type { ActionName, CompletionStatus, DraftView, ModelOption, PostActionState, QueueItem } from "./types";
-import { EmptyBlock, LoadingBlock, PageHeader } from "../components/ui";
-import { btn, btnGhost, btnPrimary, chip, input, Modal, muted, Notice, panel } from "./ui";
+import { ACTION_META, ACTION_ORDER, MAX_CHARS, bundleText, charInfo, stepSummary, toggleInBundle } from "./logic";
+import type { ActionName, DraftView, QueueItem } from "./types";
+import { EmptyBlock, LoadingBlock, Page, PageHeader } from "../components/ui";
+import { btn, btnGhost, btnPrimary, chip, input, Modal, muted, Notice } from "./ui";
 
 interface Props {
   draftId: string | null;
@@ -15,13 +15,6 @@ interface Props {
   onGoScout: () => void;
   onGoToSettings?: () => void;
 }
-
-const TRANSFORMS: Array<{ id: string; label: string }> = [
-  { id: "shorter", label: "Shorter" },
-  { id: "funnier", label: "Funnier" },
-  { id: "more_direct", label: "More direct" },
-  { id: "fresh", label: "Regenerate" },
-];
 
 const STEP_STYLE: Record<string, string> = {
   done: "text-emerald-600 dark:text-emerald-400",
@@ -31,14 +24,6 @@ const STEP_STYLE: Record<string, string> = {
   uncertain: "text-amber-600 dark:text-amber-400",
 };
 
-function liveOn(action: ActionName, s: PostActionState | null): boolean {
-  if (!s) return false;
-  const l = s.live;
-  if (l && action in l) return (l as unknown as Record<string, string>)[action] === "done";
-  const k = s.known;
-  return action === "reply" ? k.replied : action === "quote" ? k.quoted : k[action as "like" | "bookmark" | "repost" | "follow"];
-}
-
 export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }: Props) {
   const online = useOnlineStatus();
   const [draft, setDraft] = useState<DraftView | null>(null);
@@ -47,25 +32,12 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [state, setState] = useState<PostActionState | null>(null);
-  const [otherModel, setOtherModel] = useState("");
-  const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [completion, setCompletion] = useState<CompletionStatus | null>(null);
   const [siblings, setSiblings] = useState<QueueItem[]>([]);
 
   const apply = useCallback((d: DraftView) => {
     setDraft(d);
     setText(d.edited_text);
   }, []);
-
-  const refreshCompletion = useCallback(async () => {
-    setCompletion(await p3.completionStatus());
-    setModelOptions(await p3.draftModelOptions());
-  }, []);
-
-  useEffect(() => {
-    void refreshCompletion();
-  }, [refreshCompletion]);
 
   useEffect(() => {
     setError(null);
@@ -82,11 +54,6 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   }, [draftId]);
 
   useEffect(() => {
-    if (!draft) return;
-    void p3.actionState(draft.post.observed_id, false).then(setState);
-  }, [draft?.post.observed_id]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
     if (!draftId) return;
     const off = listen<{ draft_id: string }>("publish:update", (e) => {
       if (e.draft_id === draftId) void p3.draftGet(draftId).then(setDraft);
@@ -99,7 +66,6 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
   const editable = draft ? draft.status === "draft" || draft.status === "failed" : false;
   const dirty = draft ? text !== draft.edited_text : false;
   const chars = charInfo(text, MAX_CHARS);
-  const distance = useMemo(() => (draft ? editDistance(draft.initial_text, text) : 0), [draft, text]);
   const hasText = draft ? bundleText(draft.actions) !== null : false;
 
   const run = async <T,>(label: string, fn: () => Promise<T>): Promise<T | undefined> => {
@@ -159,8 +125,8 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
 
   if (!draftId) {
     return (
-      <div className="mx-auto max-w-4xl space-y-8">
-        <PageHeader title="Reply Studio" description="Draft, edit and publish a reply to one post, in your voice. You approve every action." />
+      <Page>
+        <PageHeader title="Reply Studio" />
         <EmptyBlock
           title="No post selected"
           action={
@@ -169,17 +135,17 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
             </button>
           }
         >
-          Pick a post in Scout and choose Draft reply. It opens here with three variants to edit.
+          Choose Draft reply on a post in Scout.
         </EmptyBlock>
-      </div>
+      </Page>
     );
   }
   if (!draft) {
     return (
-      <div className="mx-auto max-w-4xl space-y-8">
+      <Page>
         <PageHeader title="Reply Studio" />
         {error ? <Notice tone="error">{error}</Notice> : <LoadingBlock label="Loading draft" />}
-      </div>
+      </Page>
     );
   }
 
@@ -189,15 +155,8 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
     if (d) setDraft({ ...d, edited_text: draft.edited_text });
   };
 
-  const engage = async (a: ActionName) => {
-    const undo = liveOn(a, state);
-    const res = await run(`engage-${a}`, () => p3.engage(draft.post.observed_id, a, undo));
-    if (res && !res.ok) setError(res.message ?? "That did not work.");
-    setState(await p3.actionState(draft.post.observed_id, true));
-  };
-
-  const transform = async (instruction: string, model: string | null = null) => {
-    const d = await run(`gen-${instruction}`, () => p3.draftGenerate(draft.id, instruction, model));
+  const regenerate = async () => {
+    const d = await run("regenerate", () => p3.draftGenerate(draft.id, "fresh", null));
     if (d) apply(d);
   };
 
@@ -208,211 +167,130 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
 
   const sum = stepSummary(draft.steps);
   const textAction = bundleText(draft.actions);
-  const models = [...new Set(draft.variants.map((v) => v.model_used))];
   const offlineHint = offlineActionHint(online);
-  const canActNow = draft.status !== "publishing";
 
   return (
-    <div className="mx-auto grid max-w-6xl gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-      <div className="space-y-4">
-        <PageHeader
-          title="Reply Studio"
-          actions={
-            <>
-              <button type="button" className={btnGhost} onClick={() => void move(-1)} aria-label="Previous queue item">Prev</button>
-              <button type="button" className={btnGhost} onClick={() => void move(1)} aria-label="Next queue item">Next</button>
-            </>
-          }
-        />
-        <section className={panel} aria-label="Original post">
-          <div className="flex items-baseline justify-between">
-            <span className="text-sm font-medium">@{draft.post.handle}</span>
-            <a href={draft.post.url} target="_blank" rel="noreferrer" className="text-xs underline">View on X</a>
-          </div>
-          <p className="mt-2 whitespace-pre-wrap text-sm">{draft.post.text}</p>
-          {draft.post.has_media && <p className={`mt-2 text-xs ${muted}`}>This post has media.</p>}
-          {siblings.find((s) => s.evaluation_id === draft.evaluation_id) && (
-            <p className={`mt-2 text-xs ${muted}`}>
-              {(() => {
-                const m = siblings.find((s) => s.evaluation_id === draft.evaluation_id)!.metrics;
-                return `${compactCount(m.likes)} likes, ${compactCount(m.reposts)} reposts, ${compactCount(m.replies)} replies`;
-              })()}
-            </p>
-          )}
-        </section>
-        <section className={panel} aria-label="Why this post was picked">
-          <h2 className="font-display text-lg font-semibold tracking-tight">Why this post{draft.score != null ? ` (score ${Math.round(draft.score)})` : ""}</h2>
-          {draft.angle && <p className="text-sm"><span className="font-medium">Angle:</span> {draft.angle}</p>}
-          {draft.reasoning && <p className={`mt-1 text-sm ${muted}`}>{draft.reasoning}</p>}
-        </section>
-        <section className={panel} aria-label="Actions on this post">
-          <h2 className="font-display text-lg font-semibold tracking-tight">Do it now</h2>
-          <p className={`mb-3 text-xs ${muted}`}>One click, one action, in the X window. Reply and Quote go through Publish below.</p>
-          <div className="grid grid-cols-2 gap-2">
-            {ACTION_ORDER.filter((a) => !ACTION_META[a].text).map((a) => {
-              const on = liveOn(a, state);
+    <Page>
+      <PageHeader
+        title="Reply Studio"
+        actions={
+          <>
+            <button type="button" className={btnGhost} onClick={() => void move(-1)} aria-label="Previous queue item">Prev</button>
+            <button type="button" className={btnGhost} onClick={() => void move(1)} aria-label="Next queue item">Next</button>
+          </>
+        }
+      />
+
+      <section aria-label="Original post" className="border-l-2 border-zinc-300 pl-4 dark:border-zinc-700">
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-sm font-medium">@{draft.post.handle}</span>
+          <a href={draft.post.url} target="_blank" rel="noreferrer" className={`text-sm underline ${muted}`}>View on X</a>
+        </div>
+        <p className="mt-1 text-sm leading-relaxed whitespace-pre-wrap">{draft.post.text}</p>
+        {draft.angle && <p className={`mt-2 text-sm ${muted}`}>{draft.angle}</p>}
+      </section>
+
+      {error && <Notice tone="error">{error}</Notice>}
+      <InlineModelGuard taskType="reply_drafting" showChip={false} onAssigned={() => undefined} onGoToSettings={onGoToSettings} />
+      {draft.status === "published" && (
+        <Notice tone="ok">
+          Done. {draft.published_url ? <a href={draft.published_url} target="_blank" rel="noreferrer" className="underline">Open on X</a> : "Your actions finished."}
+        </Notice>
+      )}
+      {draft.status === "failed" && draft.error_message && <Notice tone="error">{draft.error_message} Finished steps are kept; publish again to continue.</Notice>}
+
+      <section aria-label="Variants" className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="eyebrow">Drafts</h2>
+          <button type="button" className={btnGhost} disabled={!editable || busy !== null} onClick={() => void regenerate()}>
+            {busy === "regenerate" ? "Writing..." : "Regenerate"}
+          </button>
+        </div>
+        {draft.variants.length === 0 ? (
+          <p className={`text-sm ${muted}`}>No drafts yet. Press Regenerate, or write your own below.</p>
+        ) : (
+          <ul className="space-y-2">
+            {draft.variants.map((v) => {
+              const current = v.text === draft.edited_text && !dirty;
               return (
-                <button key={a} type="button" disabled={!canActNow || busy !== null} className={btn} aria-pressed={on} onClick={() => void engage(a)}>
-                  {busy === `engage-${a}` ? "Working..." : on ? ACTION_META[a].undo : ACTION_META[a].label}
-                  {on && <span className="ml-1 text-xs text-emerald-600 dark:text-emerald-400">({ACTION_META[a].done})</span>}
-                </button>
+                <li key={v.id}>
+                  <button
+                    type="button"
+                    disabled={!editable}
+                    onClick={() => void pick(v.id)}
+                    aria-pressed={current}
+                    className={`w-full rounded-lg border p-3.5 text-left text-sm transition-colors ${current ? "border-zinc-950 bg-zinc-100/70 dark:border-zinc-50 dark:bg-zinc-900/60" : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-600"}`}
+                  >
+                    <p className="whitespace-pre-wrap">{v.text}</p>
+                  </button>
+                </li>
               );
             })}
-          </div>
-          {(state?.known.replied || state?.known.quoted) && (
-            <p className={`mt-2 text-xs ${muted}`}>You already {state.known.replied ? "replied to" : "quoted"} this post from the app.</p>
-          )}
-        </section>
-      </div>
+          </ul>
+        )}
+      </section>
 
-      <div className="space-y-4">
-        {error && <Notice tone="error">{error}</Notice>}
-        <InlineModelGuard
-          taskType="reply_drafting"
-          onAssigned={refreshCompletion}
-          onGoToSettings={onGoToSettings}
-          hint="You can also write your own text below without a model."
+      <section aria-label="Your reply" className="space-y-2">
+        <label htmlFor="draft-text" className="eyebrow block">
+          {textAction === "quote" ? "Your quote" : "Your reply"}
+        </label>
+        <textarea
+          id="draft-text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => dirty && editable && void save()}
+          disabled={!editable}
+          rows={5}
+          className={`${input} w-full resize-y`}
         />
-        {completion && !completion.browser_navigation && draft.status !== "published" && (
-          <InlineModelGuard
-            taskType="browser_navigation"
-            showChip={false}
-            onAssigned={refreshCompletion}
-            onGoToSettings={onGoToSettings}
-            hint="Publish clicks through X with selectors first. This model is only used as a fallback when a selector breaks; without it, a broken selector fails the step."
-          />
-        )}
-        {draft.status === "published" && (
-          <Notice tone="ok">
-            Done. {draft.published_url ? <a href={draft.published_url} target="_blank" rel="noreferrer" className="underline">Open on X</a> : "Your actions finished."}
-          </Notice>
-        )}
-        {draft.status === "failed" && draft.error_message && <Notice tone="error">{draft.error_message} Finished steps are kept; Publish again to continue.</Notice>}
-
-        <section className={panel} aria-label="Variants">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-lg font-semibold tracking-tight">Variants</h2>
-            <div className="flex flex-wrap gap-2">
-              {TRANSFORMS.map((t) => (
-                <button key={t.id} type="button" className={chip(false)} disabled={!editable || busy !== null} onClick={() => void transform(t.id)}>
-                  {busy === `gen-${t.id}` ? "..." : t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          {draft.variants.length === 0 ? (
-            <p className={`text-sm ${muted}`}>No variants yet. Press Regenerate, or write your own.</p>
-          ) : (
-            <ul className="space-y-2">
-              {draft.variants.map((v) => {
-                const current = v.text === draft.edited_text && !dirty;
-                return (
-                  <li key={v.id}>
-                    <button
-                      type="button"
-                      disabled={!editable}
-                      onClick={() => void pick(v.id)}
-                      aria-pressed={current}
-                      className={`w-full rounded-lg border p-3.5 text-left text-sm transition-colors ${current ? "border-zinc-950 bg-zinc-100/70 dark:border-zinc-50 dark:bg-zinc-900/60" : "border-zinc-200 hover:border-zinc-400 dark:border-zinc-800 dark:hover:border-zinc-600"}`}
-                    >
-                      <p className="whitespace-pre-wrap">{v.text}</p>
-                      <p className={`mt-1 text-xs ${muted}`}>{[v.tone, v.model_used].filter(Boolean).join(" . ")}</p>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-200 pt-3 dark:border-zinc-800">
-            <label className="flex items-center gap-2 text-xs">
-              <span className={muted}>Redraft with another model</span>
-              <select value={otherModel} onChange={(e) => setOtherModel(e.target.value)} className={`${input} w-56`} disabled={modelOptions.length === 0}>
-                <option value="">{modelOptions.length === 0 ? "Connect a model in Settings" : "Choose a model"}</option>
-                {modelOptions.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button type="button" className={btn} disabled={!editable || !otherModel.trim() || busy !== null} onClick={() => void transform("fresh", otherModel.trim())}>
-              Redraft
-            </button>
-            {models.length > 1 && <span className={`text-xs ${muted}`}>Compare {models.join(" vs ")} above and pick one.</span>}
-          </div>
-        </section>
-
-        <section className={panel} aria-label="Your reply">
-          <label htmlFor="draft-text" className="mb-1 block text-sm font-medium">
-            {textAction === "quote" ? "Your quote" : "Your reply"}
-          </label>
-          <textarea
-            id="draft-text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onBlur={() => dirty && editable && void save()}
-            disabled={!editable}
-            rows={5}
-            className={`${input} w-full resize-y`}
-          />
-          <div className="mt-1 flex items-center justify-between text-xs">
-            <span className={chars.over ? "font-medium text-red-600" : muted} aria-live="polite">
-              {chars.count} / {chars.max}
-            </span>
-            <span className={muted}>{distance === 0 ? "unedited" : `${distance} edit${distance === 1 ? "" : "s"} from the model draft`}</span>
-          </div>
-        </section>
-
-        <section className={panel} aria-label="Publish bundle">
-          <h2 className="font-display text-lg font-semibold tracking-tight">What Publish will do</h2>
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Actions to include">
             {ACTION_ORDER.map((a) => (
               <button key={a} type="button" disabled={!editable || busy !== null} className={chip(draft.actions.includes(a))} aria-pressed={draft.actions.includes(a)} onClick={() => void toggleBundle(a)}>
                 {ACTION_META[a].label}
               </button>
             ))}
           </div>
-          <p className={`mt-2 text-xs ${muted}`}>Reply and Quote are exclusive. Steps always run in this order: like, bookmark, follow, repost, then your text.</p>
-          {draft.steps.length > 0 && (
-            <div className="mt-3" aria-label="Publish progress">
-              <p className="text-xs">{sum.done} of {sum.total} steps finished</p>
-              <ol className="mt-1 space-y-1 text-sm">
-                {draft.steps.map((s) => (
-                  <li key={s.action} className={STEP_STYLE[s.status]}>
-                    {ACTION_META[s.action as ActionName]?.label ?? s.action}: {s.status}
-                    {s.detail ? <span className={`ml-1 text-xs ${muted}`}>{s.detail}</span> : null}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-        </section>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <button
-            type="button"
-            className={btn}
-            disabled={busy !== null || draft.status === "publishing"}
-            onClick={async () => {
-              await run("discard", () => p3.draftDiscard(draft.id, null));
-              onOpenDraft(null);
-              onGoScout();
-            }}
-          >
-            Discard
-          </button>
-          <div className="flex items-center gap-3">
-            <span className={`text-xs ${muted}`}>Cmd/Ctrl+Enter</span>
-            <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? undefined} onClick={() => void openConfirm()}>
-              {draft.status === "failed" ? "Retry publish" : "Review and publish"}
-            </button>
-          </div>
+          <span className={`font-mono text-xs ${chars.over ? "font-medium text-red-600" : muted}`} aria-live="polite">
+            {chars.count} / {chars.max}
+          </span>
         </div>
+        {draft.steps.length > 0 && (
+          <div aria-label="Publish progress" className="pt-1">
+            <p className="text-xs">{sum.done} of {sum.total} steps finished</p>
+            <ol className="mt-1 space-y-1 text-sm">
+              {draft.steps.map((s) => (
+                <li key={s.action} className={STEP_STYLE[s.status]}>
+                  {ACTION_META[s.action as ActionName]?.label ?? s.action}: {s.status}
+                  {s.detail ? <span className={`ml-1 text-xs ${muted}`}>{s.detail}</span> : null}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
+      </section>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          className={btnGhost}
+          disabled={busy !== null || draft.status === "publishing"}
+          onClick={async () => {
+            await run("discard", () => p3.draftDiscard(draft.id, null));
+            onOpenDraft(null);
+            onGoScout();
+          }}
+        >
+          Discard
+        </button>
+        <button type="button" className={btnPrimary} disabled={!online || !editable || busy !== null || draft.actions.length === 0 || (hasText && (chars.over || !text.trim()))} title={offlineHint ?? undefined} onClick={() => void openConfirm()}>
+          {draft.status === "failed" ? "Retry publish" : "Review and publish"}
+        </button>
       </div>
 
       {confirming && (
         <Modal title="Confirm what will be posted" onClose={() => setConfirming(false)} wide>
-          <p className={`mb-3 text-sm ${muted}`}>The app acts in your X window only after you confirm. This is exactly what will happen, in order.</p>
+          <p className={`mb-3 text-sm ${muted}`}>This is exactly what will happen, in order.</p>
           <ol className="mb-3 list-decimal space-y-1 pl-5 text-sm">
             {draft.actions.map((a) => (
               <li key={a}>
@@ -437,6 +315,6 @@ export function ReplyStudio({ draftId, onOpenDraft, onGoScout, onGoToSettings }:
           </div>
         </Modal>
       )}
-    </div>
+    </Page>
   );
 }

@@ -147,7 +147,7 @@ export function WidgetCard({
           ? "border-sky-500 ring-2 ring-sky-500/50"
           : customizeMode
             ? "border-zinc-200 dark:border-zinc-800 ring-1 ring-sky-500/35 cursor-grab active:cursor-grabbing"
-            : "border-zinc-200 dark:border-zinc-800"
+            : "border-transparent border-t-zinc-200 dark:border-t-zinc-800 rounded-none px-0"
       } ${isDragging ? "opacity-45" : ""}`}
     >
       <header className="mb-3 flex items-start justify-between gap-2">
@@ -258,18 +258,6 @@ export function WidgetCard({
           <WidgetChartRenderer spec={widget.spec} data={data} />
         ) : null}
       </div>
-
-      {!isKpi && data && (
-        <footer className="mt-3 flex items-center justify-between border-t border-zinc-100 dark:border-zinc-800/70 pt-2 text-[10px] text-zinc-400">
-          <span>
-            {widget.spec.chart_type} · {widget.spec.view.replace("v_analytics_", "")}
-          </span>
-          <span>
-            {data.row_count} {data.row_count === 1 ? "row" : "rows"}
-            {data.truncated ? " (capped)" : ""}
-          </span>
-        </footer>
-      )}
 
       {customizeMode && (
         <button

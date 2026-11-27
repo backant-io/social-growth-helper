@@ -55,7 +55,7 @@ export function PublishSettings() {
             Enforce daily limits
           </label>
         </div>
-        <p className={`mt-1 text-sm ${muted}`}>Off by default. When on, each action is capped per rolling 24 hours and text posts keep a minimum gap. 0 means no cap.</p>
+        <p className={`mt-1 text-sm ${muted}`}>Optional daily caps. 0 means no cap.</p>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
           {CAP_FIELDS.map((f) => (
             <label key={f} className="text-sm">
@@ -94,7 +94,7 @@ export function PublishSettings() {
 
       <section className={panel} aria-labelledby="watch-h">
         <h2 id="watch-h" className="font-display text-lg font-semibold tracking-tight">Watchlist</h2>
-        <p className={`mt-1 text-sm ${muted}`}>Accounts Scout can scan for reply opportunities. Comma or newline separated handles.</p>
+        <p className={`mt-1 text-sm ${muted}`}>Handles to scan, separated by commas.</p>
         <textarea value={watch} onChange={(e) => setWatch(e.target.value)} rows={2} aria-label="Watchlist handles" className={`${input} mt-2 w-full`} />
         <button
           type="button"
@@ -112,7 +112,7 @@ export function PublishSettings() {
 
       <section className={panel} aria-labelledby="ret-h">
         <h2 id="ret-h" className="font-display text-lg font-semibold tracking-tight">Screenshot retention</h2>
-        <p className={`mt-1 text-sm ${muted}`}>Before and after screenshots of each publish are kept on this computer and deleted after this many days.</p>
+        <p className={`mt-1 text-sm ${muted}`}>Publish screenshots are deleted after this many days.</p>
         <div className="mt-2 flex items-center gap-2">
           <input type="number" min={1} max={365} value={retention} onChange={(e) => setRetention(Number(e.target.value))} aria-label="Retention days" className={`${input} w-24`} />
           <span className="text-sm">days</span>

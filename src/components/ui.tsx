@@ -147,3 +147,21 @@ export function LoadingBlock({ label = "Loading...", rows = 3 }: { label?: strin
     </div>
   );
 }
+
+/** Every screen is a Page: one centred column, one rhythm. Wide screens opt in with `wide`. */
+export function Page({ children, wide }: { children: ReactNode; wide?: boolean }) {
+  return <div className={`mx-auto space-y-8 ${wide ? "max-w-5xl" : "max-w-3xl"}`}>{children}</div>;
+}
+
+/** Secondary or rarely used controls. One quiet line that expands in place. */
+export function Disclosure({ summary, children }: { summary: string; children: ReactNode }) {
+  return (
+    <details className="group border-t border-zinc-200 pt-4 dark:border-zinc-800">
+      <summary className="eyebrow flex cursor-pointer list-none items-center justify-between hover:text-zinc-950 dark:hover:text-zinc-50">
+        {summary}
+        <span aria-hidden="true" className="transition-transform group-open:rotate-45">+</span>
+      </summary>
+      <div className="mt-4 space-y-4">{children}</div>
+    </details>
+  );
+}

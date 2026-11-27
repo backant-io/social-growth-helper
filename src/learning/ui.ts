@@ -1,1 +1,1 @@
-export { btn, btnDanger, btnPrimary, input, panel } from "../components/ui";
+export { btn, btnDanger, btnGhost, btnPrimary, input, panel } from "../components/ui";
