@@ -65,6 +65,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
         let state = handle.state::<AppState>();
         let p3 = handle.state::<Phase3>();
         let sink = TauriSink(handle.clone());
+        let relauncher = AppRelauncher(handle.clone());
         let _job = state.jobs.register("Scout session");
         let env = ScoutEnv {
             db: &state.db,
@@ -78,6 +79,7 @@ pub async fn scout_start(app: AppHandle, params: SessionParams) -> AppResult<Str
             thumbs_dir: Some(state.paths.data_dir.join("thumbs")),
             idle_poll_ms: 1000,
             pause_ms: (1800, 3600),
+            relaunch: Some(&relauncher),
         };
         run_session(&env, &sid, &params).await;
         state.browser_health.attach_scout_params(params.clone());
@@ -132,4 +134,18 @@ pub fn scout_set_threshold(app: AppHandle, state: State<'_, AppState>, threshold
     let v = repo::set_threshold(&state.db.lock().unwrap(), threshold)?;
     crate::tray::refresh_all(&app);
     Ok(v)
+}
+
+/// Reopens the managed X window for a running session, unless the user closed it on purpose.
+struct AppRelauncher(AppHandle);
+
+#[async_trait::async_trait]
+impl super::session::BrowserRelauncher for AppRelauncher {
+    async fn relaunch(&self) -> Result<(), String> {
+        let state = self.0.state::<AppState>();
+        if !state.browser_health.expects_open() {
+            return Err("the X window was closed on purpose".into());
+        }
+        crate::commands::ensure_x_browser_open(&self.0, &state).await.map(|_| ()).map_err(|e| e.to_string())
+    }
 }

@@ -5,6 +5,7 @@ import { XPostCard } from "../components/XPostCard";
 import { EmptyBlock, LoadingBlock, Modal, Page, PageHeader, Segmented } from "../components/ui";
 import { p3 } from "./api";
 import { useShortcuts } from "./hooks";
+import { scoreLine } from "./logic";
 import { ReplyBox } from "./ReplyBox";
 import type { CompletionStatus, QueueItem, ScoutProgress, SessionParams } from "./types";
 import { btn, btnPrimary, input, muted, Notice } from "./ui";
@@ -202,6 +203,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
                 media={item.post.media}
                 url={item.post.url}
                 metrics={item.metrics}
+                signal={scoreLine(item.score, item.breakout_flags ?? [])}
+                signalTitle={[item.angle && `Angle: ${item.angle}`, item.reasoning].filter(Boolean).join("\n") || undefined}
                 selected={i === selected}
                 onSelect={() => setSelected(i)}
               >

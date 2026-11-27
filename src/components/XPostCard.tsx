@@ -21,7 +21,11 @@ export interface XPostCardProps {
   media?: MediaItem[];
   url?: string | null;
   metrics: CardMetrics;
-  /** Small tags shown right of the header, e.g. a score. */
+  /** A quiet secondary line under the engagement row, e.g. "Score 91 · High saves". */
+  signal?: string | null;
+  /** Hover text for the signal line (why it scored that way). */
+  signalTitle?: string;
+  /** Small tags shown right of the header. */
   badge?: ReactNode;
   /** Rendered inside the card, under the metrics row, separated by a rule. */
   children?: ReactNode;
@@ -153,7 +157,7 @@ const VERIFIED_PATH = "M12 2.5 14.4 4l2.8-.2 1 2.6 2.4 1.5-.8 2.7.8 2.7-2.4 1.5-
  * engagement row. Children (a reply box) continue the same column directly below the post, joined to the
  * avatar by a thread line, so the reply reads as part of the post. Rows are flat; the parent draws the dividers.
  */
-export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, badge, children, compact, selected, onSelect }: XPostCardProps) {
+export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, media = [], url, metrics, signal, signalTitle, badge, children, compact, selected, onSelect }: XPostCardProps) {
   const when = relativeTime(postedAt ?? null);
   const stats = (["replies", "reposts", "likes", "views", "bookmarks"] as const).filter((k) => metrics[k] != null);
   const display = name || `@${handle}`;
@@ -196,35 +200,41 @@ export function XPostCard({ handle, name, avatarUrl, verified, postedAt, text, m
         <p className={`mt-0.5 text-[15px] leading-[1.35] whitespace-pre-wrap ${compact ? "line-clamp-5" : ""}`}>{text}</p>
         <PostMedia media={media} postUrl={url} />
 
-        <ul className={`mt-3 -ml-2 flex max-w-lg items-center justify-between text-[13px] ${muted}`} aria-label="Engagement">
-          {stats.map((k) => (
-            <li key={k} className="flex min-w-12 items-center gap-1.5 px-2 py-0.5" title={LABELS[k]}>
-              {ICONS[k]}
-              <span className="tabular-nums">{compactCount(metrics[k] ?? 0)}</span>
-              <span className="sr-only">{LABELS[k]}</span>
-            </li>
-          ))}
+        <div className={`mt-3 -ml-2 flex items-center gap-3 text-[13px] ${muted}`}>
+          <ul className="flex min-w-0 max-w-md flex-1 items-center justify-between" aria-label="Engagement">
+            {stats.map((k) => (
+              <li key={k} className="flex min-w-12 items-center gap-1.5 px-2 py-0.5" title={LABELS[k]}>
+                {ICONS[k]}
+                <span className="tabular-nums">{compactCount(metrics[k] ?? 0)}</span>
+                <span className="sr-only">{LABELS[k]}</span>
+              </li>
+            ))}
+          </ul>
           {url && (
-            <li className="ml-auto">
-              <a
-                href={url}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                data-testid="view-on-x"
-                title={`Show this post in the X window: ${url}`}
-                className="flex items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-sky-600 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
-              >
-                View on X
-                <Icon>
-                  <path d="M14 4h6v6" />
-                  <path d="M20 4 10.5 13.5" />
-                  <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
-                </Icon>
-              </a>
-            </li>
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              data-testid="view-on-x"
+              title={`Show this post in the X window: ${url}`}
+              className="ml-auto flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 font-medium text-sky-600 hover:bg-sky-50 hover:underline dark:text-sky-400 dark:hover:bg-sky-950/40"
+            >
+              View on X
+              <Icon>
+                <path d="M14 4h6v6" />
+                <path d="M20 4 10.5 13.5" />
+                <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+              </Icon>
+            </a>
           )}
-        </ul>
+        </div>
+
+        {signal && (
+          <p data-testid="post-signal" title={signalTitle} className={`mt-1 truncate text-xs tabular-nums ${muted}`}>
+            {signal}
+          </p>
+        )}
 
         {children && (
           <div className="mt-3" onClick={(e) => e.stopPropagation()}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, relativeTime, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, factorLabel, filterCommands, formatDuration, matchShortcut, normalizeBundle, relativeTime, scoreLine, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -81,5 +81,14 @@ describe("palette and steps", () => {
     ]);
     expect(s).toMatchObject({ done: 1, total: 2 });
     expect(s.blocked?.action).toBe("reply");
+  });
+});
+
+describe("scoreLine", () => {
+  it("reads as a quiet line: score then up to two humanised signals", () => {
+    expect(factorLabel("high_saves")).toBe("High saves");
+    expect(factorLabel("3.4x-reach")).toBe("3.4x reach");
+    expect(scoreLine(90.6, ["small_account", "breakout", "early_wave"])).toBe("Score 91 · Small account · Breakout");
+    expect(scoreLine(72, [])).toBe("Score 72");
   });
 });
