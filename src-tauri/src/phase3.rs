@@ -3,7 +3,7 @@
 
 use crate::browser::health::BrowserState;
 use crate::completion::{CompletionProvider, UnconfiguredProvider};
-use crate::control::{EventSink, KillSwitch};
+use crate::control::{EventSink, KillSwitch, StopSignal};
 use crate::error::{AppError, AppResult};
 use crate::publish::queue::PublishQueue;
 use crate::state::AppState;
@@ -21,8 +21,9 @@ pub const SHOT_RETENTION_DAYS: u64 = 30;
 
 pub struct RunningScout {
     pub session_id: String,
-    pub stop: Arc<AtomicBool>,
+    pub stop: Arc<StopSignal>,
     pub pause: Arc<AtomicBool>,
+    pub done: tokio::sync::watch::Receiver<bool>,
 }
 
 pub struct Phase3 {
@@ -200,9 +201,7 @@ pub fn set_kill(app: &AppHandle, engaged: bool) -> AppResult<()> {
     }
     if engaged {
         p3.kill.engage();
-        if let Some(s) = p3.scout.lock().unwrap().as_ref() {
-            s.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
+        crate::scout::commands::request_scout_stop(&p3);
     } else {
         p3.kill.release();
     }

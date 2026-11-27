@@ -554,7 +554,7 @@ pub async fn browser_resume(app: AppHandle) -> AppResult<BrowserStatus> {
 pub async fn browser_abort(app: AppHandle) -> AppResult<BrowserStatus> {
     let state = app.state::<AppState>();
     state.browser_health.abort();
-    crate::scout::commands::scout_stop(app.state::<crate::phase3::Phase3>());
+    crate::scout::commands::request_scout_stop(&app.state::<crate::phase3::Phase3>());
     Ok(state.browser_health.status(&state.browser).await)
 }
 

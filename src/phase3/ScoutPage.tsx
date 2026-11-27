@@ -33,6 +33,7 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const [target, setTarget] = useState(20);
   const [threshold, setThreshold] = useState(72);
   const [running, setRunning] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState<ScoutProgress | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -45,12 +46,21 @@ export function ScoutPage({ onGoToSettings }: Props) {
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [completion, setCompletion] = useState<CompletionStatus>({ scoring: true, drafting: true, browser_navigation: true });
   const remembered = useRef(false);
+  const stoppingRef = useRef(false);
+  const reloadSeq = useRef(0);
 
   const refreshQueue = useCallback(() => void p3.scoutQueue().then(setQueue).catch(() => undefined), []);
 
   const reload = useCallback(async () => {
+    const seq = ++reloadSeq.current;
     const [status, q, comp] = await Promise.all([p3.scoutStatus(), p3.scoutQueue(), p3.completionStatus()]);
+    if (seq !== reloadSeq.current) return;
     setRunning(status.running);
+    if (!status.running) {
+      setPaused(false);
+      setStopping(false);
+      stoppingRef.current = false;
+    }
     setCompletion(comp);
     setThreshold(status.threshold);
     if (!remembered.current && status.last_params) {
@@ -67,17 +77,23 @@ export function ScoutPage({ onGoToSettings }: Props) {
     void reload().catch((e) => setError(String(e.message ?? e)));
     const offs = [
       listen<ScoutProgress>("scout:progress", (p) => {
+        if (stoppingRef.current) return;
         setProgress(p);
         setPaused(false);
         refreshQueue();
       }),
       listen("scout:finished", () => {
+        reloadSeq.current += 1;
+        stoppingRef.current = false;
+        setStopping(false);
         setRunning(false);
         setPaused(false);
         void reload();
       }),
       listen<{ message: string }>("scout:error", (e) => setError(e.message)),
-      listen("scout:paused", () => setPaused(true)),
+      listen("scout:paused", () => {
+        if (!stoppingRef.current) setPaused(true);
+      }),
       listen("scout:resumed", () => setPaused(false)),
     ];
     return () => offs.forEach((o) => void o.then((f) => f()));
@@ -90,6 +106,9 @@ export function ScoutPage({ onGoToSettings }: Props) {
     try {
       const n = Math.max(1, Math.min(500, Math.round(target) || 1));
       await p3.scoutStart({ feed_source: feed, max_duration_sec: SESSION_SECONDS, max_posts: postsBudget(n), stop_after_queued: n, threshold });
+      reloadSeq.current += 1;
+      stoppingRef.current = false;
+      setStopping(false);
       setProgress(null);
       setRunning(true);
       setSetup(false);
@@ -97,6 +116,25 @@ export function ScoutPage({ onGoToSettings }: Props) {
       setStartError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const stop = async () => {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setStopping(true);
+    setError(null);
+    try {
+      await p3.scoutStop();
+      reloadSeq.current += 1;
+      setRunning(false);
+      setPaused(false);
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      stoppingRef.current = false;
+      setStopping(false);
     }
   };
 
@@ -130,8 +168,8 @@ export function ScoutPage({ onGoToSettings }: Props) {
               Reply prompt
             </button>
             {running ? (
-              <button type="button" className={btn} onClick={() => void p3.scoutStop()}>
-                Stop
+              <button type="button" data-testid="scout-stop" className={btn} onClick={() => void stop()} disabled={stopping}>
+                {stopping ? "Stopping..." : "Stop"}
               </button>
             ) : (
               <button type="button" data-testid="scout-start" className={btnPrimary} onClick={() => { setStartError(null); setSetup(true); }}>

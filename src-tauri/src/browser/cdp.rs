@@ -111,6 +111,16 @@ impl CleanCdpSession {
     }
 
     pub async fn send(&self, method: &str, params: Value, session_id: Option<&str>) -> Result<Value, BrowserError> {
+        self.send_with_timeout(method, params, session_id, REQUEST_TIMEOUT).await
+    }
+
+    pub async fn send_with_timeout(
+        &self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Value, BrowserError> {
         check_method(method)?;
         if self.is_closed() {
             return Err(BrowserError::Disconnected);
@@ -130,7 +140,7 @@ impl CleanCdpSession {
             return Err(BrowserError::Disconnected);
         }
 
-        match tokio::time::timeout(REQUEST_TIMEOUT, resp_rx).await {
+        match tokio::time::timeout(timeout, resp_rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(BrowserError::Disconnected),
             Err(_) => {
@@ -153,6 +163,11 @@ pub(crate) mod test_server {
     }
 
     pub async fn spawn(respond: impl Fn(&Value) -> Value + Send + Sync + 'static) -> FakeCdp {
+        spawn_maybe(move |req| Some(respond(req))).await
+    }
+
+    /// Like [`spawn`], but returning `None` drops the reply to simulate a stalled/timed-out CDP call.
+    pub async fn spawn_maybe(respond: impl Fn(&Value) -> Option<Value> + Send + Sync + 'static) -> FakeCdp {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://127.0.0.1:{}/devtools/browser/test", listener.local_addr().unwrap().port());
         let received: Arc<StdMutex<Vec<Value>>> = Arc::default();
@@ -163,10 +178,11 @@ pub(crate) mod test_server {
             while let Some(Ok(Message::Text(t))) = ws.next().await {
                 let req: Value = serde_json::from_str(t.as_str()).unwrap();
                 rec.lock().unwrap().push(req.clone());
-                let mut resp = respond(&req);
-                resp["id"] = req["id"].clone();
-                if ws.send(Message::text(resp.to_string())).await.is_err() {
-                    break;
+                if let Some(mut resp) = respond(&req) {
+                    resp["id"] = req["id"].clone();
+                    if ws.send(Message::text(resp.to_string())).await.is_err() {
+                        break;
+                    }
                 }
                 if req["method"] == "Browser.close" {
                     break;
