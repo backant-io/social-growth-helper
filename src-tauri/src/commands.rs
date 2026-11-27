@@ -606,12 +606,12 @@ fn health_status_str(h: ProviderHealth) -> &'static str {
 }
 
 fn to_account_view(state: &AppState, acct: ProviderAccount, remote_models: &[String]) -> ProviderAccountView {
+    // Derive secret presence from SQLite's keychain_ref without reading the OS keychain;
+    // reading here triggers macOS Keychain permission prompts whenever views mount (Creator, Style, Settings).
     let has_secret = acct
         .keychain_ref
         .as_deref()
-        .and_then(|k| state.secrets.load(k).ok().flatten())
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
+        .is_some_and(|k| !k.trim().is_empty());
     let cached = state.remote_models.lock().unwrap().get(&acct.id).cloned().unwrap_or_default();
     let remote = if remote_models.is_empty() { cached.as_slice() } else { remote_models };
     let models = catalog::merge_catalog(acct.provider_type, remote, &acct.config.custom_models);
@@ -1211,6 +1211,77 @@ mod tests {
 
         // Second sync without newer Cookies should be a no-op.
         assert!(!sync_profile_state_if_newer(&src, &dst));
+    }
+
+    #[test]
+    fn to_account_view_never_touches_keychain() {
+        use crate::secrets::{Platform, SecretBackend, SecretError, SecretsService};
+        use crate::state::AppPaths;
+        use std::sync::Arc;
+
+        struct PanicBackend;
+        impl SecretBackend for PanicBackend {
+            fn set(&self, k: &str, _: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain set({k}) during account view build");
+            }
+            fn get(&self, k: &str) -> Result<Option<String>, SecretError> {
+                panic!("unexpected keychain get({k}) during account view build");
+            }
+            fn delete(&self, k: &str) -> Result<(), SecretError> {
+                panic!("unexpected keychain delete({k}) during account view build");
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let paths = AppPaths::under(dir.path().to_path_buf());
+        let (db, _) = storage::open(&paths.db_path, &paths.backup_dir).unwrap();
+        let pid = repo::ensure_default_profile(&db, "/tmp/p").unwrap();
+        let mut state = AppState::new(paths, db, pid);
+        state.secrets = Arc::new(SecretsService::with_backend(
+            Box::new(PanicBackend),
+            Platform::Macos,
+            true,
+        ));
+
+        let api_acct = ProviderAccount {
+            id: "anthropic_api".into(),
+            provider_type: ProviderType::AnthropicApi,
+            label: "Anthropic API".into(),
+            keychain_ref: Some("provider:anthropic_api".into()),
+            billing_lane: BillingLane::Api,
+            status: "connected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        let view = to_account_view(&state, api_acct, &[]);
+        assert!(view.has_secret);
+
+        let cli_acct = ProviderAccount {
+            id: "claude_cli".into(),
+            provider_type: ProviderType::ClaudeCli,
+            label: "Claude CLI".into(),
+            keychain_ref: None,
+            billing_lane: BillingLane::Subscription,
+            status: "connected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        assert!(!to_account_view(&state, cli_acct, &[]).has_secret);
+
+        let blank_ref_acct = ProviderAccount {
+            id: "xai_api".into(),
+            provider_type: ProviderType::XaiApi,
+            label: "xAI API".into(),
+            keychain_ref: Some("   ".into()),
+            billing_lane: BillingLane::Api,
+            status: "disconnected".into(),
+            last_verified_at: None,
+            last_error: None,
+            config: ProviderAccountConfig::default(),
+        };
+        assert!(!to_account_view(&state, blank_ref_acct, &[]).has_secret);
     }
 }
 
