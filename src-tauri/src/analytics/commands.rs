@@ -22,6 +22,21 @@ use crate::state::AppState;
 use serde::Serialize;
 use tauri::State;
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ActivitySummary {
+    pub scouted_posts: usize,
+    pub evaluated_posts: usize,
+    pub queued_posts: usize,
+    pub drafted_replies: usize,
+    pub published_replies: usize,
+    pub drafted_ogc: usize,
+    pub published_ogc: usize,
+    pub engagement_actions: usize,
+    pub synced_post_snapshots: usize,
+    pub synced_account_snapshots: usize,
+    pub unsynced_published_posts: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DashboardSnapshot {
     pub active_layout: DashboardLayout,
@@ -31,6 +46,52 @@ pub struct DashboardSnapshot {
     pub last_health: Option<SyncHealthReport>,
     pub builder_route: BuilderRouteStatus,
     pub window_days: u32,
+    pub activity_summary: ActivitySummary,
+}
+
+pub fn compute_activity_summary(conn: &rusqlite::Connection, profile_id: &str) -> AppResult<ActivitySummary> {
+    let count_one = |sql: &str| -> AppResult<usize> {
+        let n: i64 = conn.query_row(sql, [profile_id], |r| r.get(0))?;
+        Ok(n.max(0) as usize)
+    };
+
+    super::views::ensure_views(conn)?;
+
+    Ok(ActivitySummary {
+        scouted_posts: count_one("SELECT COUNT(*) FROM observed_posts WHERE profile_id = ?1")?,
+        evaluated_posts: count_one(
+            "SELECT COUNT(*) FROM scout_evaluations se
+             JOIN observed_posts op ON op.id = se.observed_post_id
+             WHERE op.profile_id = ?1",
+        )?,
+        queued_posts: count_one(
+            "SELECT COUNT(*) FROM scout_evaluations se
+             JOIN observed_posts op ON op.id = se.observed_post_id
+             WHERE op.profile_id = ?1 AND se.status = 'queued'",
+        )?,
+        drafted_replies: count_one("SELECT COUNT(*) FROM reply_drafts WHERE profile_id = ?1")?,
+        published_replies: count_one(
+            "SELECT COUNT(*) FROM reply_drafts WHERE profile_id = ?1 AND status = 'published'",
+        )?,
+        drafted_ogc: count_one("SELECT COUNT(*) FROM ogc_drafts WHERE profile_id = ?1")?,
+        published_ogc: count_one(
+            "SELECT COUNT(*) FROM ogc_drafts WHERE profile_id = ?1 AND status = 'published'",
+        )?,
+        engagement_actions: count_one(
+            "SELECT COUNT(*) FROM action_events WHERE profile_id = ?1 AND ok = 1",
+        )?,
+        synced_post_snapshots: count_one(
+            "SELECT COUNT(DISTINCT platform_post_id) FROM analytics_snapshots
+             WHERE profile_id = ?1 AND scope = 'post' AND platform_post_id IS NOT NULL",
+        )?,
+        synced_account_snapshots: count_one(
+            "SELECT COUNT(*) FROM analytics_snapshots WHERE profile_id = ?1 AND scope = 'account'",
+        )?,
+        unsynced_published_posts: count_one(
+            "SELECT COUNT(*) FROM v_analytics_post_performance
+             WHERE profile_id = ?1 AND impressions IS NULL",
+        )?,
+    })
 }
 
 #[tauri::command]
@@ -46,6 +107,7 @@ pub fn analytics_get_dashboard(
     let schedule = compute_schedule(&conn, &state.profile_id, now_unix_secs())?;
     let last_health = load_last_health(&conn)?;
     let builder_route = get_builder_route_status(&conn)?;
+    let activity_summary = compute_activity_summary(&conn, &state.profile_id)?;
 
     Ok(DashboardSnapshot {
         active_layout,
@@ -55,6 +117,7 @@ pub fn analytics_get_dashboard(
         last_health,
         builder_route,
         window_days: eff_window,
+        activity_summary,
     })
 }
 
@@ -67,14 +130,13 @@ pub async fn analytics_sync_stats(
         let conn = state.db.lock().unwrap();
         onboarding::require_acknowledged(&conn)?;
     }
-    ingest::sync_stats(
-        &state.db,
-        &state.profile_id,
-        state.browser.as_ref(),
-        &state.jobs,
-        options.unwrap_or_default(),
-    )
-    .await
+    let opts = options.unwrap_or_default();
+    if state.browser.is_running().await {
+        ingest::sync_stats(&state.db, &state.profile_id, state.browser.as_ref(), &state.jobs, opts).await
+    } else {
+        crate::commands::ensure_publish_browser_ready(&state).await?;
+        ingest::sync_stats(&state.db, &state.profile_id, state.publish_browser.as_ref(), &state.jobs, opts).await
+    }
 }
 
 #[tauri::command]

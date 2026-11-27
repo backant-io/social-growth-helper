@@ -909,6 +909,19 @@ export const analyticsApi = {
         note: "No model is assigned to dashboard_builder yet (Settings → AI models). Using built-in deterministic widget planner.",
       },
       window_days: windowDays,
+      activity_summary: {
+        scouted_posts: 24,
+        evaluated_posts: 24,
+        queued_posts: 6,
+        drafted_replies: 6,
+        published_replies: SAMPLE_POSTS.filter((p) => p.draft_kind === "reply" || p.draft_kind === "quote").length,
+        drafted_ogc: 3,
+        published_ogc: SAMPLE_POSTS.filter((p) => p.draft_kind === "ogc").length,
+        engagement_actions: 14,
+        synced_post_snapshots: SAMPLE_POSTS.length,
+        synced_account_snapshots: 3,
+        unsynced_published_posts: 0,
+      },
     };
   },
 

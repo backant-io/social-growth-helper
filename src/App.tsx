@@ -199,7 +199,7 @@ export default function App() {
               onOpenSettings={() => setSection("settings")}
             />
           ) : section === "analytics" && !locked ? (
-            <AnalyticsPage />
+            <AnalyticsPage onNavigate={setSection} />
           ) : locked && ["scout", "activity"].includes(section) ? (
             <EmptyState
               section={active}

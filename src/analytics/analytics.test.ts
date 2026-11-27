@@ -1,7 +1,12 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
+import { hasPerformanceData } from "./AnalyticsPage";
 import { analyticsApi, evaluatePreviewSpec, resetPreviewStore, validatePreviewSpec } from "./api";
 import { formatCompact, formatMetricValue } from "./charts/ChartPrimitives";
 import { serializeWidgetCsv } from "./csv";
+import { SyncHealthBanner } from "./SyncHealthBanner";
+import type { ActivitySummary, DashboardSnapshot } from "./types";
 
 describe("Phase 4 analytics frontend", () => {
   beforeEach(() => {
@@ -114,5 +119,92 @@ describe("Phase 4 analytics frontend", () => {
       options: {},
     });
     expect(funnel.row_count).toBeGreaterThan(0);
+  });
+
+  it("detects empty vs local-published vs synced analytics states accurately", async () => {
+    const base = await analyticsApi.getDashboard(30);
+    const emptyActivity: ActivitySummary = {
+      scouted_posts: 0,
+      evaluated_posts: 0,
+      queued_posts: 0,
+      drafted_replies: 0,
+      published_replies: 0,
+      drafted_ogc: 0,
+      published_ogc: 0,
+      engagement_actions: 0,
+      synced_post_snapshots: 0,
+      synced_account_snapshots: 0,
+      unsynced_published_posts: 0,
+    };
+
+    const brandNew: DashboardSnapshot = { ...base, activity_summary: emptyActivity };
+    expect(hasPerformanceData(brandNew)).toBe(false);
+
+    const scoutedOnly: DashboardSnapshot = {
+      ...base,
+      activity_summary: { ...emptyActivity, scouted_posts: 18, evaluated_posts: 12, drafted_replies: 3 },
+    };
+    expect(hasPerformanceData(scoutedOnly)).toBe(false);
+
+    const localPublished: DashboardSnapshot = {
+      ...base,
+      activity_summary: { ...emptyActivity, published_replies: 2, unsynced_published_posts: 2 },
+    };
+    expect(hasPerformanceData(localPublished)).toBe(true);
+
+    const syncedOnly: DashboardSnapshot = {
+      ...base,
+      activity_summary: { ...emptyActivity, synced_post_snapshots: 1 },
+    };
+    expect(hasPerformanceData(syncedOnly)).toBe(true);
+  });
+
+  it("renders actionable guidance in SyncHealthBanner for unsynced local posts and empty syncs", () => {
+    const emptySchedule = { tracked_posts: 0, posts_due_now: 0, missed_windows: 0, items: [] };
+    const localOnlyHtml = renderToStaticMarkup(
+      createElement(SyncHealthBanner, {
+        health: null,
+        schedule: emptySchedule,
+        activity: {
+          scouted_posts: 5,
+          evaluated_posts: 5,
+          queued_posts: 2,
+          drafted_replies: 2,
+          published_replies: 2,
+          drafted_ogc: 0,
+          published_ogc: 0,
+          engagement_actions: 3,
+          synced_post_snapshots: 0,
+          synced_account_snapshots: 0,
+          unsynced_published_posts: 2,
+        },
+        syncing: false,
+        onSyncDue: () => {},
+        onBackfill30d: () => {},
+      }),
+    );
+    expect(localOnlyHtml).toContain("Showing 2 published posts from local activity");
+    expect(localOnlyHtml).toContain("Backfill 30 days");
+
+    const emptySyncHtml = renderToStaticMarkup(
+      createElement(SyncHealthBanner, {
+        health: {
+          checked_at: "2026-11-27T09:00:00Z",
+          status: "ok",
+          extraction_mode: "empty",
+          tier_mode: "unknown",
+          account_synced: false,
+          posts_synced: 0,
+          external_posts_matched: 0,
+          backfill_posts_added: 0,
+          issues: [],
+        },
+        schedule: emptySchedule,
+        syncing: false,
+        onSyncDue: () => {},
+        onBackfill30d: () => {},
+      }),
+    );
+    expect(emptySyncHtml).toContain("Last sync did not find any X posts");
   });
 });
