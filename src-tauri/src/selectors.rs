@@ -42,6 +42,7 @@ pub mod sel {
     sel!(VIDEO_PLAYER, "[data-testid=\"videoPlayer\"]", ["[data-testid=\"videoComponent\"]"]);
     sel!(VERIFIED, "[data-testid=\"icon-verified\"]", ["svg[aria-label*=\"Verified\"]"]);
     sel!(SOCIAL_CONTEXT, "[data-testid=\"socialContext\"]", []);
+    sel!(PROFILE_LINK, "a[data-testid=\"AppTabBar_Profile_Link\"]", []);
     sel!(AVATAR, "[data-testid=\"Tweet-User-Avatar\"] img", ["a[role=\"link\"] img[src*=\"profile_images\"]"]);
     sel!(PROFILE_FOLLOWERS, "a[href$=\"/followers\"]", ["a[href$=\"/verified_followers\"]"]);
     sel!(FEED_TAB, "[role=\"tab\"]", []);
@@ -76,7 +77,7 @@ pub fn registry() -> Vec<&'static Selector> {
     use sel::*;
     vec![
         &TWEET, &TWEET_TEXT, &AUTHOR, &PERMALINK_TIME, &PROMOTED, &REPLY_RESTRICTED, &METRICS_GROUP, &MEDIA, &QUOTE_CARD, &SHOW_MORE, &IMAGE,
-        &VIDEO_PLAYER, &VERIFIED, &SOCIAL_CONTEXT, &AVATAR, &PROFILE_FOLLOWERS,
+        &VIDEO_PLAYER, &VERIFIED, &SOCIAL_CONTEXT, &AVATAR, &PROFILE_LINK, &PROFILE_FOLLOWERS,
         &ACCOUNT_SWITCHER, &LIKE, &UNLIKE, &REPLY, &RETWEET, &UNRETWEET, &RETWEET_CONFIRM, &UNRETWEET_CONFIRM,
         &BOOKMARK, &UNBOOKMARK, &FOLLOW, &UNFOLLOW, &UNFOLLOW_CONFIRM, &CARET, &MENU_ITEM, &COMPOSER, &SUBMIT, &TOAST,
         &CHALLENGE_CLOUDFLARE, &CHALLENGE_ARKOSE, &CHALLENGE_TEXT_INPUT,
@@ -408,69 +409,85 @@ return null; }})()"#,
     )
 }
 
-/// After posting: the id of a card by `me` whose text starts with `snippet`, or a status link in the toast.
-pub fn find_published_js(me: Option<&str>, snippet: &str) -> String {
+/// JS that sets `foundId` to the status id of your own reply (or quote) whose text contains `want`, searching
+/// every post on the page except the one you answered. Your handle comes from `me` or, when unknown, from the
+/// sidebar profile link; without either, any other card containing the text counts. Read-only.
+fn found_reply_js(post_id: &str, me: Option<&str>, snippet: &str) -> String {
     format!(
-        r#"(() => {{ {prelude}
-const want = {snip};
-const me = {me};
-if (me) {{
-  for (const a of document.querySelectorAll({tweet}[0])) {{
+        r#"
+const norm = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+const want = norm({snip});
+const targetId = {post};
+const profileLink = $all({profile});
+const own = norm({me} || (profileLink ? (profileLink.getAttribute('href') || '').split('/')[1] : '')).replace(/^@/, '');
+let foundId = null;
+if (want) {{
+  for (const a of document.querySelectorAll({tweet}.join(','))) {{
     const link = a.querySelector('a[href*="/status/"] time')?.closest('a');
     const m = (link?.getAttribute('href') || '').match(/^\/([^/]+)\/status\/(\d+)/);
-    const body = $all({ttext}, a);
-    if (m && m[1].toLowerCase() === me.toLowerCase() && body && body.innerText.replace(/\s+/g, ' ').trim().startsWith(want)) return m[2];
+    if (!m || m[2] === targetId) continue;
+    if (own && m[1].toLowerCase() !== own) continue;
+    const body = [...a.querySelectorAll({ttext}.join(','))].map(e => e.innerText).join(' ');
+    if (norm(body).includes(want)) {{ foundId = m[2]; break; }}
   }}
 }}
+"#,
+        snip = json!(snippet),
+        post = json!(post_id),
+        me = me.map(|m| json!(m).to_string()).unwrap_or_else(|| "null".into()),
+        profile = list(&sel::PROFILE_LINK),
+        tweet = list(&sel::TWEET),
+        ttext = list(&sel::TWEET_TEXT),
+    )
+}
+
+/// What identifies a submitted text on the page: its words without links (X shortens those), first 40 characters.
+pub fn fingerprint(text: &str) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let plain: Vec<&str> = words.iter().copied().filter(|w| !w.contains("://") && !w.starts_with("www.")).collect();
+    let chosen = if plain.is_empty() { words } else { plain };
+    chosen.join(" ").chars().take(40).collect()
+}
+
+/// The id of your own card carrying `snippet` (see [`fingerprint`]), or of a status link in the toast. Read-only.
+pub fn find_published_js(post_id: &str, me: Option<&str>, snippet: &str) -> String {
+    format!(
+        r#"(() => {{ {prelude}
+{found}
+if (foundId) return foundId;
 const t = $all({toast});
 const l = t ? t.querySelector('a[href*="/status/"]') : null;
 const m2 = l ? (l.getAttribute('href') || '').match(/status\/(\d+)/) : null;
 return m2 ? m2[1] : null; }})()"#,
         prelude = prelude(),
-        snip = json!(snippet),
-        me = me.map(|m| json!(m).to_string()).unwrap_or_else(|| "null".into()),
-        tweet = list(&sel::TWEET),
-        ttext = list(&sel::TWEET_TEXT),
+        found = found_reply_js(post_id, me, snippet),
         toast = list(&sel::TOAST),
     )
 }
 
-/// After pressing Post on a reply or quote: what the page shows now, as `{holds, dialog, toast, id}`.
-/// `holds` is true while any composer still contains `snippet` (the submitted text); X keeps an empty inline
-/// composer on a post page, so "a composer exists" says nothing. `toast` is `"ok"`, `"error"` or null, and
-/// `id` is the status id of your own matching card or of a link in the toast. Read-only.
-pub fn submit_result_js(me: Option<&str>, snippet: &str) -> String {
+/// After pressing Post: what the page shows now, as `{holds, dialog, toast, id}`. `id` is the status id of
+/// your reply once its text is on the page (or of a link in the toast). That is the proof of success; an open
+/// composer is not evidence either way, because X keeps an inline composer on a post page. `holds` says the
+/// submitted text is still sitting in a composer, `toast` is `"ok"`, `"error"` or null. Read-only.
+pub fn submit_result_js(post_id: &str, me: Option<&str>, snippet: &str) -> String {
     format!(
         r#"(() => {{ {prelude}
-const want = {snip};
-const me = {me};
-const norm = (s) => (s || '').replace(/\s+/g, ' ').trim();
+{found}
 const composers = [...document.querySelectorAll({composer}.join(','))];
 const holds = composers.some(c => {{ const t = norm(c.innerText); return want ? t.includes(want) : t.length > 0; }});
 const dialog = composers.some(c => c.closest('[role="dialog"]') && visible(c));
-let id = null;
-if (me) {{
-  for (const a of document.querySelectorAll({tweet}[0])) {{
-    const link = a.querySelector('a[href*="/status/"] time')?.closest('a');
-    const m = (link?.getAttribute('href') || '').match(/^\/([^/]+)\/status\/(\d+)/);
-    const body = $all({ttext}, a);
-    if (m && m[1].toLowerCase() === me.toLowerCase() && body && norm(body.innerText).startsWith(want)) {{ id = m[2]; break; }}
-  }}
-}}
+let id = foundId;
 const toastEl = $all({toast});
 const toastText = norm(toastEl ? toastEl.innerText : '');
 const toastLink = toastEl ? toastEl.querySelector('a[href*="/status/"]') : null;
 const toastId = toastLink ? ((toastLink.getAttribute('href') || '').match(/status\/(\d+)/) || [])[1] : null;
 if (!id && toastId) id = toastId;
-const bad = /wrong|error|couldn.?t|could not|failed|try again|unable|not sent/i.test(toastText);
+const bad = /wrong|error|couldn.?t|could not|failed|try again|unable|not sent/.test(toastText);
 return {{ holds, dialog, toast: toastEl ? (bad ? 'error' : 'ok') : null, id: id || null }};
 }})()"#,
         prelude = prelude(),
-        snip = json!(snippet),
-        me = me.map(|m| json!(m).to_string()).unwrap_or_else(|| "null".into()),
+        found = found_reply_js(post_id, me, snippet),
         composer = list(&sel::COMPOSER),
-        tweet = list(&sel::TWEET),
-        ttext = list(&sel::TWEET_TEXT),
         toast = list(&sel::TOAST),
     )
 }
@@ -515,7 +532,7 @@ mod tests {
 
     #[test]
     fn read_scripts_never_mutate_or_click() {
-        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js(), submit_result_js(Some("me"), "hi")] {
+        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js(), submit_result_js("1", Some("me"), "hi"), find_published_js("1", Some("me"), "hi")] {
             for banned in [".click(", ".submit(", "dispatchEvent", "fetch(", "XMLHttpRequest", "innerHTML =", "textContent =", ".value ="] {
                 assert!(!js.contains(banned), "script contains {banned}");
             }
@@ -524,11 +541,18 @@ mod tests {
 
     #[test]
     fn submit_result_checks_text_in_any_composer_not_just_that_one_exists() {
-        let js = submit_result_js(Some("me"), "my reply");
-        for needle in ["const holds", "composers.some", "t.includes(want)", "toast", "closest('[role=\"dialog\"]')"] {
+        let js = submit_result_js("111", Some("me"), "my reply");
+        for needle in ["const holds", "composers.some", "t.includes(want)", "toast", "closest('[role=\"dialog\"]')", "targetId", "AppTabBar_Profile_Link"] {
             assert!(js.contains(needle), "submit result script lacks {needle}");
         }
         assert!(js.contains("\"my reply\""));
+    }
+
+    #[test]
+    fn fingerprint_ignores_links_and_whitespace_and_is_bounded() {
+        assert_eq!(fingerprint("  great   point\nhttps://t.co/abc  here "), "great point here");
+        assert_eq!(fingerprint("https://example.com"), "https://example.com");
+        assert_eq!(fingerprint(&"word ".repeat(30)).chars().count(), 40);
     }
 
     #[test]
