@@ -708,7 +708,11 @@ mod tests {
         let after_sync = evaluate_layout(&conn, &pid, &layout.id, Some(30)).unwrap();
         let find_after = |title: &str| after_sync.iter().find(|w| w.widget.title == title).unwrap();
         assert_eq!(find_after("Replies Published").data.as_ref().unwrap().rows[0]["reply_count"], serde_json::json!(1));
-        assert_eq!(find_after("Impressions").data.as_ref().unwrap().rows[0]["total_impressions"], serde_json::json!(2500));
+        assert_eq!(
+            find_after("Impressions").data.as_ref().unwrap().rows[0]["total_impressions"],
+            serde_json::Value::Null,
+            "account impressions wait for X Creator Analytics period snapshot instead of partial local post sum"
+        );
         assert_eq!(
             find_after("Avg Impressions / Reply").data.as_ref().unwrap().rows[0]["avg_reply_impressions"],
             serde_json::json!(2500.0)
@@ -716,6 +720,85 @@ mod tests {
         let summary_after = crate::analytics::commands::compute_activity_summary(&conn, &pid).unwrap();
         assert_eq!(summary_after.synced_post_snapshots, 1);
         assert_eq!(summary_after.unsynced_published_posts, 1);
+    }
+
+    #[test]
+    fn window_7d_and_30d_use_period_snapshots_and_published_at_cutoffs() {
+        let dir = tempdir().unwrap();
+        let (conn, _) = open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
+        let pid = repo::ensure_default_profile(&conn, "/tmp/p").unwrap();
+        let now_unix = crate::analytics::schedule::now_unix_secs();
+        let captured_today = crate::util::format_unix(now_unix);
+        let two_days_ago = crate::util::format_unix(now_unix - 2 * 86_400);
+        let twenty_days_ago = crate::util::format_unix(now_unix - 20 * 86_400);
+
+        // Two replies: one published 2 days ago, one 20 days ago, BOTH synced today.
+        conn.execute(
+            "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_followers, text, feed_source, posted_at, first_seen_at, metrics_at_capture_json)
+             VALUES ('op1', ?1, 'src1', 'levelsio', 150000, 'Build', 'for_you', ?2, ?2, '{}')",
+            params![pid, twenty_days_ago],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO reply_drafts (id, profile_id, observed_post_id, initial_text, edited_text, edit_distance, model_used, style_guide_version, draft_kind, actions_json, status, published_at, published_post_id, published_url, created_at)
+             VALUES
+               ('rd_recent', ?1, 'op1', 'a', 'recent reply', 2, 'claude-sonnet-4', 1, 'reply', '[]', 'published', ?2, '80001', 'https://x.com/pavel/status/80001', ?2),
+               ('rd_older',  ?1, 'op1', 'b', 'older reply',  3, 'claude-sonnet-4', 1, 'reply', '[]', 'published', ?3, '80002', 'https://x.com/pavel/status/80002', ?3)",
+            params![pid, two_days_ago, twenty_days_ago],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO analytics_snapshots (id, profile_id, scope, platform_post_id, draft_kind, draft_id, captured_at, age_hours, impressions, likes, replies, reposts, bookmarks, engagement_rate)
+             VALUES
+               ('sp1', ?1, 'post', '80001', 'reply', 'rd_recent', ?2, 48.0, 1200, 30, 4, 2, 5, 3.42),
+               ('sp2', ?1, 'post', '80002', 'reply', 'rd_older',  ?2, 480.0, 9500, 210, 18, 12, 40, 2.95)",
+            params![pid, captured_today],
+        )
+        .unwrap();
+
+        // Period snapshots pulled from X Creator Analytics for 7d and 30d.
+        conn.execute(
+            "INSERT INTO analytics_period_snapshots
+             (id, profile_id, period_days, period_label, captured_at, impressions, engagements, engagement_rate, profile_visits, follower_delta, new_follows, unfollows, source)
+             VALUES
+               ('p7',  ?1, 7,  '7D', ?2, 31500, 1540, 4.9, 420, 25, 29, 4, 'dom_fallback'),
+               ('p30', ?1, 30, '4W', ?2, 142300, 5976, 4.2, 1800, 127, 160, 33, 'dom_fallback')",
+            params![pid, captured_today],
+        )
+        .unwrap();
+
+        let layout = ensure_active_layout(&conn, &pid).unwrap();
+        let eval_7 = evaluate_layout(&conn, &pid, &layout.id, Some(7)).unwrap();
+        let eval_30 = evaluate_layout(&conn, &pid, &layout.id, Some(30)).unwrap();
+
+        let val = |widgets: &[EvaluatedWidget], title: &str, col: &str| {
+            widgets
+                .iter()
+                .find(|w| w.widget.title == title)
+                .unwrap()
+                .data
+                .as_ref()
+                .unwrap()
+                .rows[0][col]
+                .clone()
+        };
+
+        assert_eq!(val(&eval_7, "Impressions", "total_impressions"), serde_json::json!(31500));
+        assert_eq!(val(&eval_7, "Engagement Rate", "avg_engagement_rate"), serde_json::json!(4.9));
+        assert_eq!(val(&eval_7, "Follower Delta", "net_followers"), serde_json::json!(25));
+        assert_eq!(val(&eval_7, "Replies Published", "reply_count"), serde_json::json!(1));
+        assert_eq!(val(&eval_7, "Avg Impressions / Reply", "avg_reply_impressions"), serde_json::json!(1200.0));
+
+        assert_eq!(val(&eval_30, "Impressions", "total_impressions"), serde_json::json!(142300));
+        assert_eq!(val(&eval_30, "Engagement Rate", "avg_engagement_rate"), serde_json::json!(4.2));
+        assert_eq!(val(&eval_30, "Follower Delta", "net_followers"), serde_json::json!(127));
+        assert_eq!(val(&eval_30, "Replies Published", "reply_count"), serde_json::json!(2));
+        assert_eq!(val(&eval_30, "Avg Impressions / Reply", "avg_reply_impressions"), serde_json::json!(5350.0));
+
+        let ov7 = crate::analytics::commands::load_period_overview(&conn, &pid, 7).unwrap().unwrap();
+        let ov30 = crate::analytics::commands::load_period_overview(&conn, &pid, 30).unwrap().unwrap();
+        assert_eq!((ov7.period_days, ov7.period_label.as_str(), ov7.impressions), (7, "7D", Some(31500)));
+        assert_eq!((ov30.period_days, ov30.period_label.as_str(), ov30.impressions), (30, "4W", Some(142300)));
     }
 
     #[test]

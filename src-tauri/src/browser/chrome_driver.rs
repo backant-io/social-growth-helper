@@ -590,6 +590,63 @@ impl ChromeCdpDriver {
             collect_network_event(&ev, &sid, &filters, &mut matched);
         }
 
+        // Optional read-only range-selector click (e.g. selecting 7D / 4W on X Creator Analytics).
+        if let Some(locator_js) = &req.pre_click_locator_js {
+            if let Ok(loc) = Self::eval_in_session(session, &sid, locator_js).await {
+                let found = loc["found"].as_bool().unwrap_or(false);
+                let already = loc["alreadySelected"].as_bool().unwrap_or(false);
+                if found && !already {
+                    if let (Some(x), Some(y)) = (loc["x"].as_f64(), loc["y"].as_f64()) {
+                        if x.is_finite() && y.is_finite() {
+                            matched.clear();
+                            let click_timeout = Duration::from_secs(4);
+                            let _ = session
+                                .send_with_timeout(
+                                    "Input.dispatchMouseEvent",
+                                    json!({ "type": "mouseMoved", "x": x, "y": y }),
+                                    Some(&sid),
+                                    click_timeout,
+                                )
+                                .await;
+                            let _ = session
+                                .send_with_timeout(
+                                    "Input.dispatchMouseEvent",
+                                    json!({ "type": "mousePressed", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+                                    Some(&sid),
+                                    click_timeout,
+                                )
+                                .await;
+                            let _ = session
+                                .send_with_timeout(
+                                    "Input.dispatchMouseEvent",
+                                    json!({ "type": "mouseReleased", "x": x, "y": y, "button": "left", "clickCount": 1 }),
+                                    Some(&sid),
+                                    click_timeout,
+                                )
+                                .await;
+
+                            if req.post_click_settle_ms > 0 {
+                                let post_deadline = tokio::time::Instant::now()
+                                    + Duration::from_millis(req.post_click_settle_ms);
+                                while tokio::time::Instant::now() < post_deadline {
+                                    let remaining =
+                                        post_deadline.saturating_duration_since(tokio::time::Instant::now());
+                                    match tokio::time::timeout(remaining, events_rx.recv()).await {
+                                        Ok(Ok(ev)) => collect_network_event(&ev, &sid, &filters, &mut matched),
+                                        Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                                        _ => break,
+                                    }
+                                }
+                            }
+                            while let Ok(ev) = events_rx.try_recv() {
+                                collect_network_event(&ev, &sid, &filters, &mut matched);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut network_responses = Vec::new();
         for (request_id, url, status) in matched {
             if let Ok(body_val) = session
@@ -853,6 +910,7 @@ mod tests {
                 network_url_filters: vec!["AccountOverviewQuery".into()],
                 dom_script: "({ impressions: 12000 })".into(),
                 settle_ms: 0,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -868,6 +926,52 @@ mod tests {
         assert!(m.contains(&"Target.closeTarget".to_string()));
         assert!(!m.iter().any(|x| x == "Runtime.enable"));
         // Main feed session S1 was never touched!
+        assert!(sent.iter().all(|r| r.get("sessionId").and_then(Value::as_str) != Some("S1")));
+    }
+
+    #[tokio::test]
+    async fn analytics_capture_clicks_range_locator_when_not_already_selected() {
+        let (d, rec) = attached_driver(|req| match req["method"].as_str().unwrap() {
+            "Target.createTarget" => json!({ "result": { "targetId": "TAB_ANL" } }),
+            "Target.attachToTarget" => json!({ "result": { "sessionId": "S_ANL" } }),
+            "Target.getTargetInfo" => json!({ "result": { "targetInfo": { "url": "https://x.com/i/account_analytics" } } }),
+            "Page.getFrameTree" => json!({ "result": { "frameTree": { "frame": { "id": "F_ANL" } } } }),
+            "Page.createIsolatedWorld" => json!({ "result": { "executionContextId": 42 } }),
+            "Runtime.evaluate" => {
+                let expr = req["params"]["expression"].as_str().unwrap_or("");
+                if expr == "document.readyState" {
+                    json!({ "result": { "result": { "type": "string", "value": "complete" } } })
+                } else if expr == "LOCATE_7D" {
+                    json!({ "result": { "result": { "value": { "found": true, "alreadySelected": false, "x": 320.5, "y": 140.0 } } } })
+                } else {
+                    json!({ "result": { "result": { "value": { "selectedRangeDays": 7, "impressions": 31500 } } } })
+                }
+            }
+            _ => json!({ "result": {} }),
+        })
+        .await;
+
+        let cap = d
+            .capture_analytics_page(AnalyticsPageRequest {
+                url: "https://x.com/i/account_analytics".into(),
+                network_url_filters: vec![],
+                dom_script: "READ_DOM".into(),
+                settle_ms: 0,
+                pre_click_locator_js: Some("LOCATE_7D".into()),
+                post_click_settle_ms: 0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(cap.dom_result["selectedRangeDays"], 7);
+        let sent = rec.lock().unwrap().clone();
+        let clicks: Vec<&Value> = sent
+            .iter()
+            .filter(|r| r["method"] == "Input.dispatchMouseEvent" && r["sessionId"] == "S_ANL")
+            .collect();
+        assert_eq!(clicks.len(), 3, "mouseMoved + mousePressed + mouseReleased on analytics tab");
+        assert_eq!(clicks[1]["params"]["x"], 320.5);
+        assert_eq!(clicks[1]["params"]["y"], 140.0);
         assert!(sent.iter().all(|r| r.get("sessionId").and_then(Value::as_str) != Some("S1")));
     }
 

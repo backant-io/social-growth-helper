@@ -21,13 +21,23 @@ pub struct ViewSchemaInfo {
 pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
     match view {
         AllowedView::VAnalyticsAccountOverview => &[
+            "period_days",
+            "period_label",
             "captured_at",
             "day",
             "impressions",
+            "engagements",
             "engagement_rate",
             "profile_visits",
             "followers_total",
             "follower_delta",
+            "new_follows",
+            "unfollows",
+            "likes",
+            "replies",
+            "reposts",
+            "bookmarks",
+            "source",
         ],
         AllowedView::VAnalyticsPostPerformance => &[
             "platform_post_id",
@@ -62,6 +72,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsTimeSeries => &[
             "captured_at",
+            "published_at",
             "day",
             "week",
             "draft_kind",
@@ -77,6 +88,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsByModel => &[
             "captured_at",
+            "published_at",
             "day",
             "week",
             "model_family",
@@ -93,6 +105,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsTimingTier => &[
             "captured_at",
+            "published_at",
             "day",
             "timing_bucket",
             "follower_tier",
@@ -108,6 +121,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsByAction => &[
             "captured_at",
+            "published_at",
             "day",
             "draft_kind",
             "actions_bundle",
@@ -123,6 +137,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsByFormat => &[
             "captured_at",
+            "published_at",
             "day",
             "viral_format_id",
             "viral_format_name",
@@ -139,6 +154,7 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
         ],
         AllowedView::VAnalyticsWinnersFlops => &[
             "captured_at",
+            "published_at",
             "platform_post_id",
             "tier",
             "rank_desc",
@@ -173,8 +189,17 @@ pub fn view_columns(view: AllowedView) -> &'static [&'static str] {
     }
 }
 
-pub fn view_time_column(_view: AllowedView) -> &'static str {
-    "captured_at"
+pub fn view_time_column(view: AllowedView) -> &'static str {
+    match view {
+        AllowedView::VAnalyticsAccountOverview | AllowedView::VAnalyticsSnapshotHistory => "captured_at",
+        AllowedView::VAnalyticsPostPerformance
+        | AllowedView::VAnalyticsTimeSeries
+        | AllowedView::VAnalyticsByModel
+        | AllowedView::VAnalyticsTimingTier
+        | AllowedView::VAnalyticsByAction
+        | AllowedView::VAnalyticsByFormat
+        | AllowedView::VAnalyticsWinnersFlops => "published_at",
+    }
 }
 
 pub fn list_view_schemas() -> Vec<ViewSchemaInfo> {
@@ -204,5 +229,5 @@ pub fn ensure_views(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
-const VIEWS_SQL: &str = include_str!("../storage/migrations/0010_analytics_live_views.sql");
+const VIEWS_SQL: &str = include_str!("../storage/migrations/0014_analytics_period_views.sql");
 

@@ -33,12 +33,16 @@ pub const TICK_FAILS_BEFORE_PAUSE: i64 = 3;
 pub const TICK_FAIL_PAUSE_SECS: i64 = 6 * 3600;
 
 pub const SWEEP_INTERVAL_SECS: i64 = 5 * 3600;
+pub const PERIOD_SYNC_INTERVAL_SECS: i64 = 4 * 3600;
+pub const PERIOD_UPSELL_COOLDOWN_SECS: i64 = 24 * 3600;
+pub const TRACKED_PERIODS: [u32; 2] = [30, 7];
 pub const MAX_TRACKED_AGE_HOURS: f64 = 14.0 * 24.0;
 pub const MISSING_BEFORE_RETIRE: i64 = 3;
 const MIN_RECHECK_SECS: i64 = 30 * 60;
 
 const PAUSE_UNTIL_KEY: &str = "analytics_sync_pause_until";
 const TICK_FAILS_KEY: &str = "analytics_sync_tick_fails";
+const PREFERRED_WINDOW_KEY: &str = "analytics_preferred_window_days";
 
 /// Randomised spacing between two page loads (90 to 180 seconds). `entropy` is any varying number.
 pub fn jitter_secs(entropy: u64) -> u64 {
@@ -241,6 +245,82 @@ pub fn mark_healed(conn: &Connection, profile_id: &str, post_id: &str, now: i64)
         params![profile_id, post_id, now],
     )?;
     Ok(())
+}
+
+fn canonical_period_key(period_days: u32) -> u32 {
+    if period_days <= 7 { 7 } else { 30 }
+}
+
+fn period_due_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_next_due_at", canonical_period_key(period_days))
+}
+
+fn period_fails_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_fails", canonical_period_key(period_days))
+}
+
+fn period_heal_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_last_heal_at", canonical_period_key(period_days))
+}
+
+pub fn preferred_window_days(conn: &Connection) -> u32 {
+    match get_setting(conn, PREFERRED_WINDOW_KEY).ok().flatten().and_then(|v| v.parse::<u32>().ok()) {
+        Some(d) if d <= 7 => 7,
+        _ => 30,
+    }
+}
+
+pub fn set_preferred_window_days(conn: &Connection, window_days: u32) -> AppResult<()> {
+    let canon = canonical_period_key(window_days);
+    if preferred_window_days(conn) != canon || get_setting(conn, PREFERRED_WINDOW_KEY)?.is_none() {
+        set_setting(conn, PREFERRED_WINDOW_KEY, &canon.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn period_next_due_at(conn: &Connection, period_days: u32) -> i64 {
+    get_setting(conn, &period_due_key(period_days))
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+}
+
+pub fn period_last_heal_at(conn: &Connection, period_days: u32) -> Option<i64> {
+    get_setting(conn, &period_heal_key(period_days))
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+}
+
+pub fn mark_period_synced(conn: &Connection, period_days: u32, now: i64) -> AppResult<()> {
+    set_setting(conn, &period_due_key(period_days), &(now + PERIOD_SYNC_INTERVAL_SECS).to_string())?;
+    set_setting(conn, &period_fails_key(period_days), "0")?;
+    Ok(())
+}
+
+pub fn mark_period_failed(conn: &Connection, period_days: u32, now: i64) -> AppResult<()> {
+    let fails: i64 = get_setting(conn, &period_fails_key(period_days))?
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        + 1;
+    set_setting(conn, &period_fails_key(period_days), &fails.to_string())?;
+    set_setting(conn, &period_due_key(period_days), &(now + backoff_secs(fails)).to_string())?;
+    Ok(())
+}
+
+/// Non-Premium upsell is not an error: quietly cool down both period ranges for 24h.
+pub fn mark_period_upsell(conn: &Connection, now: i64) -> AppResult<()> {
+    let until = (now + PERIOD_UPSELL_COOLDOWN_SECS).to_string();
+    for p in TRACKED_PERIODS {
+        set_setting(conn, &period_due_key(p), &until)?;
+        set_setting(conn, &period_fails_key(p), "0")?;
+    }
+    Ok(())
+}
+
+pub fn mark_period_healed(conn: &Connection, period_days: u32, now: i64) -> AppResult<()> {
+    set_setting(conn, &period_heal_key(period_days), &now.to_string())
 }
 
 #[cfg(test)]

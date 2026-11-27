@@ -7,6 +7,7 @@ import type {
   DashboardSnapshot,
   DashboardWidget,
   EvaluatedWidget,
+  PeriodOverview,
   RepromptResult,
   SyncStatus,
   ViewSchemaInfo,
@@ -25,7 +26,46 @@ async function invokeCmd<T>(cmd: string, args?: Record<string, unknown>): Promis
   }
 }
 
-const PREVIEW_STORAGE_KEY = "sgh-analytics-preview-v1";
+const PREVIEW_STORAGE_KEY = "sgh-analytics-preview-v2";
+
+const PREVIEW_PERIOD_OVERVIEWS: Record<7 | 30, PeriodOverview> = {
+  7: {
+    period_days: 7,
+    period_label: "7D",
+    captured_at: "2026-11-27T10:00:00Z",
+    impressions: 31500,
+    engagements: 1543,
+    engagement_rate: 4.9,
+    profile_visits: 420,
+    followers_total: 4465,
+    follower_delta: 25,
+    new_follows: 29,
+    unfollows: 4,
+    likes: 810,
+    replies: 145,
+    reposts: 52,
+    bookmarks: 132,
+    source: "dom_fallback",
+  },
+  30: {
+    period_days: 30,
+    period_label: "4W",
+    captured_at: "2026-11-27T10:00:00Z",
+    impressions: 142300,
+    engagements: 5976,
+    engagement_rate: 4.2,
+    profile_visits: 1800,
+    followers_total: 4465,
+    follower_delta: 127,
+    new_follows: 160,
+    unfollows: 33,
+    likes: 3120,
+    replies: 540,
+    reposts: 215,
+    bookmarks: 488,
+    source: "dom_fallback",
+  },
+};
 
 interface PreviewPostRow {
   platform_post_id: string;
@@ -55,8 +95,8 @@ const SAMPLE_POSTS: PreviewPostRow[] = [
   {
     platform_post_id: "1001",
     draft_kind: "reply",
-    day: "2026-11-20",
-    week: "2026-W47",
+    day: "2026-11-05",
+    week: "2026-W45",
     post_text: "Shipping local-first beats waiting for another cloud SaaS auth migration.",
     context_text: "Why are desktop tools suddenly feeling faster than web apps again?",
     context_author: "patio11",
@@ -78,8 +118,8 @@ const SAMPLE_POSTS: PreviewPostRow[] = [
   {
     platform_post_id: "1002",
     draft_kind: "reply",
-    day: "2026-11-21",
-    week: "2026-W47",
+    day: "2026-11-10",
+    week: "2026-W46",
     post_text: "Half of AI growth advice is just repackaged spam. Good replies still look human.",
     context_text: "Unpopular opinion: automated engagement kills accounts faster than silence.",
     context_author: "levelsio",
@@ -101,8 +141,8 @@ const SAMPLE_POSTS: PreviewPostRow[] = [
   {
     platform_post_id: "1003",
     draft_kind: "ogc",
-    day: "2026-11-22",
-    week: "2026-W47",
+    day: "2026-11-15",
+    week: "2026-W46",
     post_text: "3 lessons after replacing 4 SaaS dashboards with one local SQLite file:\n1. Zero latency\n2. Own your schema\n3. Reprompt any chart live.",
     context_text: "",
     context_author: "",
@@ -263,16 +303,16 @@ function starterWidgetSpecs(): Array<{ title: string; spec: WidgetSpec; position
       position: { x: 0, y: 0, w: 4, h: 1 },
       spec: {
         title: "Impressions",
-        view: "v_analytics_post_performance",
+        view: "v_analytics_account_overview",
         chart_type: "kpi",
         group_by: [],
-        metrics: [{ column: "impressions", agg: "sum", alias: "total_impressions" }],
+        metrics: [{ column: "impressions", agg: "latest", alias: "total_impressions" }],
         select_columns: [],
         filters: [],
         sort: null,
         limit: 1,
         window_days: 30,
-        options: { subtitle: "Total post impressions in window", value_field: "total_impressions", format: "number" },
+        options: { subtitle: "Account impressions for selected period", value_field: "total_impressions", format: "number" },
       },
     },
     {
@@ -280,16 +320,16 @@ function starterWidgetSpecs(): Array<{ title: string; spec: WidgetSpec; position
       position: { x: 4, y: 0, w: 4, h: 1 },
       spec: {
         title: "Engagement Rate",
-        view: "v_analytics_post_performance",
+        view: "v_analytics_account_overview",
         chart_type: "kpi",
         group_by: [],
-        metrics: [{ column: "engagement_rate", agg: "avg", alias: "avg_engagement_rate" }],
+        metrics: [{ column: "engagement_rate", agg: "latest", alias: "avg_engagement_rate" }],
         select_columns: [],
         filters: [],
         sort: null,
         limit: 1,
         window_days: 30,
-        options: { subtitle: "Mean engagement rate across posts", value_field: "avg_engagement_rate", format: "percent" },
+        options: { subtitle: "Account engagement rate for selected period", value_field: "avg_engagement_rate", format: "percent" },
       },
     },
     {
@@ -300,13 +340,13 @@ function starterWidgetSpecs(): Array<{ title: string; spec: WidgetSpec; position
         view: "v_analytics_account_overview",
         chart_type: "kpi",
         group_by: [],
-        metrics: [{ column: "follower_delta", agg: "sum", alias: "net_followers" }],
+        metrics: [{ column: "follower_delta", agg: "latest", alias: "net_followers" }],
         select_columns: [],
         filters: [],
         sort: null,
         limit: 1,
         window_days: 30,
-        options: { subtitle: "Net followers gained across account syncs", value_field: "net_followers", format: "signed" },
+        options: { subtitle: "Net followers gained in selected period", value_field: "net_followers", format: "signed" },
       },
     },
     {
@@ -565,9 +605,8 @@ function saveStore(store: PreviewStore): void {
 function rowsForPreviewView(view: AllowedView): Array<Record<string, unknown>> {
   if (view === "v_analytics_account_overview") {
     return [
-      { day: "2026-11-20", impressions: 22100, engagement_rate: 3.1, profile_visits: 310, followers_total: 4210, follower_delta: 42 },
-      { day: "2026-11-23", impressions: 39400, engagement_rate: 3.5, profile_visits: 520, followers_total: 4338, follower_delta: 128 },
-      { day: "2026-11-26", impressions: 71520, engagement_rate: 3.4, profile_visits: 790, followers_total: 4465, follower_delta: 127 },
+      { ...PREVIEW_PERIOD_OVERVIEWS[7], day: PREVIEW_PERIOD_OVERVIEWS[7].captured_at.slice(0, 10) },
+      { ...PREVIEW_PERIOD_OVERVIEWS[30], day: PREVIEW_PERIOD_OVERVIEWS[30].captured_at.slice(0, 10) },
     ];
   }
   if (view === "v_analytics_timing_tier") {
@@ -619,7 +658,10 @@ export function validatePreviewSpec(rawJson: string): WidgetSpec {
 export function evaluatePreviewSpec(spec: WidgetSpec, windowDays?: number): WidgetQueryResult {
   const effWindow = windowDays ?? spec.window_days ?? 30;
   let rows = rowsForPreviewView(spec.view);
-  if (effWindow <= 7) {
+  if (spec.view === "v_analytics_account_overview") {
+    const canonPeriod = effWindow <= 7 ? 7 : 30;
+    rows = rows.filter((r) => Number(r.period_days) === canonPeriod);
+  } else if (effWindow <= 7) {
     rows = rows.filter((r) => String(r.day ?? "2026-11-26") >= "2026-11-20");
   }
   for (const f of spec.filters ?? []) {
@@ -668,12 +710,16 @@ export function evaluatePreviewSpec(spec: WidgetSpec, windowDays?: number): Widg
       const obj: Record<string, unknown> = {};
       for (const g of gcols) obj[g] = list[0]?.[g] ?? null;
       for (const m of spec.metrics ?? []) {
-        const nums = list.map((r) => Number(r[m.column] ?? 0)).filter((n) => !Number.isNaN(n));
+        const nums = list
+          .map((r) => r[m.column])
+          .filter((v) => v !== null && v !== undefined)
+          .map((v) => Number(v))
+          .filter((n) => !Number.isNaN(n));
         if (m.agg === "count") obj[m.alias] = list.length;
-        else if (m.agg === "sum") obj[m.alias] = Math.round(nums.reduce((a, b) => a + b, 0) * 100) / 100;
-        else if (m.agg === "avg") obj[m.alias] = nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100 : 0;
-        else if (m.agg === "min") obj[m.alias] = nums.length ? Math.min(...nums) : 0;
-        else obj[m.alias] = nums.length ? Math.max(...nums) : 0;
+        else if (m.agg === "sum") obj[m.alias] = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) * 100) / 100 : null;
+        else if (m.agg === "avg") obj[m.alias] = nums.length ? Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100 : null;
+        else if (m.agg === "min") obj[m.alias] = nums.length ? Math.min(...nums) : null;
+        else obj[m.alias] = nums.length ? Math.max(...nums) : null;
       }
       outRows.push(obj);
     }
@@ -897,6 +943,7 @@ export const analyticsApi = {
         note: "No model is assigned to dashboard_builder yet (Settings → AI models). Using built-in deterministic widget planner.",
       },
       window_days: windowDays,
+      period_overview: PREVIEW_PERIOD_OVERVIEWS[windowDays <= 7 ? 7 : 30],
       activity_summary: {
         scouted_posts: 24,
         evaluated_posts: 24,

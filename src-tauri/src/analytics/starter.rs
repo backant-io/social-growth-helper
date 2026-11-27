@@ -20,12 +20,12 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
             position: WidgetPosition { x: 0, y: 0, w: 4, h: 1 },
             spec: WidgetSpec {
                 title: "Impressions".into(),
-                view: AllowedView::VAnalyticsPostPerformance,
+                view: AllowedView::VAnalyticsAccountOverview,
                 chart_type: ChartType::Kpi,
                 group_by: vec![],
                 metrics: vec![WidgetMetric {
                     column: "impressions".into(),
-                    agg: AggFn::Sum,
+                    agg: AggFn::Latest,
                     alias: "total_impressions".into(),
                 }],
                 select_columns: vec![],
@@ -34,7 +34,7 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
                 limit: 1,
                 window_days: 30,
                 options: WidgetOptions {
-                    subtitle: Some("Total post impressions in window".into()),
+                    subtitle: Some("Account impressions for selected period".into()),
                     value_field: Some("total_impressions".into()),
                     format: Some("number".into()),
                     ..Default::default()
@@ -46,12 +46,12 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
             position: WidgetPosition { x: 4, y: 0, w: 4, h: 1 },
             spec: WidgetSpec {
                 title: "Engagement Rate".into(),
-                view: AllowedView::VAnalyticsPostPerformance,
+                view: AllowedView::VAnalyticsAccountOverview,
                 chart_type: ChartType::Kpi,
                 group_by: vec![],
                 metrics: vec![WidgetMetric {
                     column: "engagement_rate".into(),
-                    agg: AggFn::Avg,
+                    agg: AggFn::Latest,
                     alias: "avg_engagement_rate".into(),
                 }],
                 select_columns: vec![],
@@ -60,7 +60,7 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
                 limit: 1,
                 window_days: 30,
                 options: WidgetOptions {
-                    subtitle: Some("Mean engagement rate across posts".into()),
+                    subtitle: Some("Account engagement rate for selected period".into()),
                     value_field: Some("avg_engagement_rate".into()),
                     format: Some("percent".into()),
                     ..Default::default()
@@ -77,7 +77,7 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
                 group_by: vec![],
                 metrics: vec![WidgetMetric {
                     column: "follower_delta".into(),
-                    agg: AggFn::Sum,
+                    agg: AggFn::Latest,
                     alias: "net_followers".into(),
                 }],
                 select_columns: vec![],
@@ -86,7 +86,7 @@ pub fn starter_widgets() -> Vec<StarterWidgetDef> {
                 limit: 1,
                 window_days: 30,
                 options: WidgetOptions {
-                    subtitle: Some("Net followers gained across account syncs".into()),
+                    subtitle: Some("Net followers gained in selected period".into()),
                     value_field: Some("net_followers".into()),
                     format: Some("signed".into()),
                     ..Default::default()
