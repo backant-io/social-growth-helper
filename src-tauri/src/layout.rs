@@ -44,6 +44,11 @@ pub fn default_layout(a: &WorkArea) -> WindowLayout {
     }
 }
 
+/// `set_size` on a Tauri window sets the content area, while layouts are outer frames (title bar included).
+pub fn inner_size(outer: &WindowBounds, frame_w: u32, frame_h: u32) -> (u32, u32) {
+    (outer.width.saturating_sub(frame_w), outer.height.saturating_sub(frame_h))
+}
+
 fn overlap(b: &WindowBounds, a: &WorkArea) -> (i64, i64) {
     let w = (i64::from(b.left) + i64::from(b.width)).min(i64::from(a.x) + i64::from(a.width)) - i64::from(b.left).max(i64::from(a.x));
     let h = (i64::from(b.top) + i64::from(b.height)).min(i64::from(a.y) + i64::from(a.height)) - i64::from(b.top).max(i64::from(a.y));
@@ -96,6 +101,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let (db, _) = crate::storage::open(&dir.path().join("a.db"), &dir.path().join("b")).unwrap();
         db
+    }
+
+    #[test]
+    fn inner_size_removes_the_title_bar_so_both_windows_share_top_and_bottom() {
+        let l = default_layout(&SCREEN);
+        assert_eq!(inner_size(&l.app, 0, 28), (l.app.width, l.app.height - 28));
+        assert_eq!(inner_size(&l.app, 0, 5000), (l.app.width, 0));
     }
 
     #[test]
