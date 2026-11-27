@@ -32,6 +32,9 @@ pub struct ScrapedPost {
     pub handle: Option<String>,
     #[serde(default)]
     pub author: String,
+    /// The poster's profile picture (`pbs.twimg.com/profile_images/...`), for rendering the card in our UI.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
     #[serde(default)]
     pub author_verified: bool,
     #[serde(default)]
@@ -260,6 +263,13 @@ mod tests {
         assert_eq!(im.image_urls.len(), 1);
         assert_eq!(parse_metrics_label(im.metrics_label.as_deref().unwrap()).likes, 1500);
         assert_eq!(sample(base("6")).context_text(), None, "a plain post has no context");
+    }
+
+    #[test]
+    fn card_carries_the_avatar_url() {
+        let p = sample(serde_json::json!({ "id": "9", "handle": "a", "avatar_url": "https://pbs.twimg.com/profile_images/1/a_bigger.jpg" }));
+        assert_eq!(p.avatar_url.as_deref(), Some("https://pbs.twimg.com/profile_images/1/a_bigger.jpg"));
+        assert_eq!(sample(serde_json::json!({ "id": "9" })).avatar_url, None);
     }
 
     #[test]

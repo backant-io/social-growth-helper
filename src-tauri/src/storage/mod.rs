@@ -53,6 +53,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "outlier_scoring",
         sql: include_str!("migrations/0008_outlier_scoring.sql"),
     },
+    Migration {
+        version: 9,
+        name: "post_avatar",
+        sql: include_str!("migrations/0009_post_avatar.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;

@@ -42,6 +42,7 @@ pub mod sel {
     sel!(VIDEO_PLAYER, "[data-testid=\"videoPlayer\"]", ["[data-testid=\"videoComponent\"]"]);
     sel!(VERIFIED, "[data-testid=\"icon-verified\"]", ["svg[aria-label*=\"Verified\"]"]);
     sel!(SOCIAL_CONTEXT, "[data-testid=\"socialContext\"]", []);
+    sel!(AVATAR, "[data-testid=\"Tweet-User-Avatar\"] img", ["a[role=\"link\"] img[src*=\"profile_images\"]"]);
     sel!(PROFILE_FOLLOWERS, "a[href$=\"/followers\"]", ["a[href$=\"/verified_followers\"]"]);
     sel!(FEED_TAB, "[role=\"tab\"]", []);
     sel!(ACCOUNT_SWITCHER, "[data-testid=\"SideNav_AccountSwitcher_Button\"]", []);
@@ -75,7 +76,7 @@ pub fn registry() -> Vec<&'static Selector> {
     use sel::*;
     vec![
         &TWEET, &TWEET_TEXT, &AUTHOR, &PERMALINK_TIME, &PROMOTED, &REPLY_RESTRICTED, &METRICS_GROUP, &MEDIA, &QUOTE_CARD, &SHOW_MORE, &IMAGE,
-        &VIDEO_PLAYER, &VERIFIED, &SOCIAL_CONTEXT, &PROFILE_FOLLOWERS,
+        &VIDEO_PLAYER, &VERIFIED, &SOCIAL_CONTEXT, &AVATAR, &PROFILE_FOLLOWERS,
         &ACCOUNT_SWITCHER, &LIKE, &UNLIKE, &REPLY, &RETWEET, &UNRETWEET, &RETWEET_CONFIRM, &UNRETWEET_CONFIRM,
         &BOOKMARK, &UNBOOKMARK, &FOLLOW, &UNFOLLOW, &UNFOLLOW_CONFIRM, &CARET, &MENU_ITEM, &COMPOSER, &SUBMIT, &TOAST,
         &CHALLENGE_CLOUDFLARE, &CHALLENGE_ARKOSE, &CHALLENGE_TEXT_INPUT,
@@ -154,6 +155,11 @@ const text = (a, s) => ($all(s, a) || {{}}).innerText || '';
 const me = (((($all({acct}) || {{}}).innerText) || '').match(/@([A-Za-z0-9_]{{1,15}})/) || [])[1] || null;
 const REPLYING = /(?:Replying to|Antwort an|En respuesta a|En réponse à|In risposta a)\s+@([A-Za-z0-9_]{{1,15}})/i;
 const SENSITIVE = /sensib|sensitiv|empfindlich/i;
+const avatarUrl = (a) => {{
+  const q = $all({avatar}, a);
+  const u = q ? (q.currentSrc || q.src || '') : '';
+  return /^https:\/\/pbs\.twimg\.com\/profile_images\//.test(u) ? u.replace(/_(normal|mini|bigger)\./, '_bigger.') : null;
+}};
 const posts = [];
 let prev = null;
 for (const a of document.querySelectorAll({tweet}[0])) {{
@@ -200,6 +206,7 @@ for (const a of document.querySelectorAll({tweet}[0])) {{
     id: m ? m[2] : null,
     handle,
     author: text(a, {author}).split('\n')[0],
+    avatar_url: avatarUrl(a),
     author_verified: !!$all({verified}, a),
     is_repost: !!$all({social_context}, a),
     text: body ? body.innerText : '',
@@ -227,6 +234,7 @@ return {{ state: pageState(), me, url: location.href, posts }};
         ttext = list(&sel::TWEET_TEXT),
         author = list(&sel::AUTHOR),
         verified = list(&sel::VERIFIED),
+        avatar = list(&sel::AVATAR),
         social_context = list(&sel::SOCIAL_CONTEXT),
         promo = list(&sel::PROMOTED),
         restricted = list(&sel::REPLY_RESTRICTED),
@@ -285,6 +293,19 @@ return window[k].last === 0 ? 1000000000 : Date.now() - window[k].last;
 }
 
 /// Marks the app's own scrolling so it is not mistaken for the user.
+/// Presses X's "Retry" / "Try again" button when the timeline stopped loading ("Something went wrong").
+/// Returns whether a button was clicked. Never touches anything else.
+pub fn retry_feed_js() -> String {
+    r#"(() => {
+const re = /^(retry|try again|erneut versuchen|nochmal versuchen|reintentar|réessayer)$/i;
+const b = [...document.querySelectorAll('[role="button"], button')].find(el => re.test((el.innerText || '').trim()) && el.getBoundingClientRect().width > 0);
+if (!b) return false;
+b.click();
+return true;
+})()"#
+        .to_string()
+}
+
 pub fn set_busy_js(busy: bool) -> String {
     format!("(() => {{ const s = window['__sghActivity']; if (s) {{ s.busy = {busy}; if ({busy}) s.last = s.last; }} return true; }})()")
 }

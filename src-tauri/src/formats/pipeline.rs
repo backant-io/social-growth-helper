@@ -10,11 +10,12 @@ use super::extract::{extract_blueprint, ExtractError};
 use super::llm::{LlmError, StructuredLlm};
 use super::repo::{self, Candidate, FormatRecord, FormatSource, NewCandidate};
 use crate::error::{AppError, AppResult};
+use crate::scout::model::MediaItem;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Mutex;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PostInput {
     pub platform_post_id: String,
     pub author_handle: String,
@@ -22,6 +23,9 @@ pub struct PostInput {
     pub text: String,
     pub metrics: PostMetrics,
     pub posted_at: Option<String>,
+    pub author_name: String,
+    pub avatar_url: Option<String>,
+    pub media: Vec<MediaItem>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +90,9 @@ pub fn consider_post(
             source: source.as_str(),
             virality_score: verdict.score,
             reasons,
+            author_name: post.author_name.trim().to_string(),
+            avatar_url: post.avatar_url.clone(),
+            media: post.media.clone(),
         },
     )?;
     let already_known = candidate.is_none();
@@ -197,6 +204,7 @@ mod tests {
             text: format!("Unpopular opinion: hustle {id} is wrong. It burns you out."),
             metrics: PostMetrics { likes, reposts: likes / 10, replies: likes / 20, bookmarks: likes / 8, views: None },
             posted_at: None,
+            ..Default::default()
         }
     }
 

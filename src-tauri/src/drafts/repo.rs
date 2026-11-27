@@ -14,6 +14,8 @@ pub struct PostView {
     pub observed_id: String,
     pub platform_post_id: String,
     pub handle: String,
+    pub author_name: String,
+    pub avatar_url: Option<String>,
     pub text: String,
     pub has_media: bool,
     pub url: String,
@@ -105,7 +107,7 @@ pub fn load_style_for_generation(conn: &Connection, profile_id: &str, post_text:
 
 pub fn post_by_observed(conn: &Connection, observed_id: &str) -> AppResult<PostView> {
     conn.query_row(
-        "SELECT id, platform_post_id, author_handle, text, has_media, media_json FROM observed_posts WHERE id = ?1",
+        "SELECT id, platform_post_id, author_handle, text, has_media, media_json, author_display_name, author_avatar_url FROM observed_posts WHERE id = ?1",
         [observed_id],
         |r| {
             let (handle, pid): (String, String) = (r.get(2)?, r.get(1)?);
@@ -115,6 +117,8 @@ pub fn post_by_observed(conn: &Connection, observed_id: &str) -> AppResult<PostV
                 url: post_url(&handle, &pid),
                 platform_post_id: pid,
                 handle,
+                author_name: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                avatar_url: r.get(7)?,
                 text: r.get(3)?,
                 has_media: r.get::<_, i64>(4)? != 0,
                 media: serde_json::from_str(&media_raw).unwrap_or_default(),
@@ -292,7 +296,7 @@ pub fn get_view(conn: &Connection, draft_id: &str) -> AppResult<DraftView> {
                     DraftView {
                         id: r.get(0)?,
                         evaluation_id: r.get(1)?,
-                        post: PostView { observed_id: r.get(2)?, platform_post_id: String::new(), handle: String::new(), text: String::new(), has_media: false, url: String::new(), media: vec![] },
+                        post: PostView { observed_id: r.get(2)?, platform_post_id: String::new(), handle: String::new(), author_name: String::new(), avatar_url: None, text: String::new(), has_media: false, url: String::new(), media: vec![] },
                         kind: r.get(3)?,
                         initial_text: r.get(4)?,
                         edited_text: r.get(5)?,

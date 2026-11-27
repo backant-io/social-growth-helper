@@ -3,6 +3,7 @@
 use super::blueprint::{FormatBlueprint, Slot};
 use super::detect::{PostMetrics, ViralThresholds};
 use crate::error::{AppError, AppResult};
+use crate::scout::model::MediaItem;
 use crate::util::{new_id, now_rfc3339};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
@@ -279,6 +280,9 @@ pub struct Candidate {
     pub format_id: Option<String>,
     pub error_message: Option<String>,
     pub created_at: String,
+    pub author_name: String,
+    pub avatar_url: Option<String>,
+    pub media: Vec<MediaItem>,
 }
 
 impl Candidate {
@@ -298,10 +302,13 @@ pub struct NewCandidate {
     pub source: &'static str,
     pub virality_score: f64,
     pub reasons: Vec<String>,
+    pub author_name: String,
+    pub avatar_url: Option<String>,
+    pub media: Vec<MediaItem>,
 }
 
 const CAND_COLS: &str = "id, platform_post_id, author_handle, author_followers, text, metrics_json, posted_at, source, \
-virality_score, reasons_json, status, format_id, error_message, created_at";
+virality_score, reasons_json, status, format_id, error_message, created_at, author_name, author_avatar_url, media_json";
 
 fn row_to_candidate(r: &Row) -> rusqlite::Result<Candidate> {
     let metrics: String = r.get(5)?;
@@ -321,6 +328,9 @@ fn row_to_candidate(r: &Row) -> rusqlite::Result<Candidate> {
         format_id: r.get(11)?,
         error_message: r.get(12)?,
         created_at: r.get(13)?,
+        author_name: r.get::<_, Option<String>>(14)?.unwrap_or_default(),
+        avatar_url: r.get(15)?,
+        media: serde_json::from_str(&r.get::<_, Option<String>>(16)?.unwrap_or_else(|| "[]".into())).unwrap_or_default(),
     })
 }
 
@@ -329,7 +339,7 @@ pub fn insert_candidate(conn: &Connection, profile_id: &str, c: &NewCandidate) -
     let id = new_id();
     let n = conn.execute(
         "INSERT OR IGNORE INTO format_candidates (id, profile_id, platform_post_id, author_handle, author_followers, text, \
-         metrics_json, posted_at, source, virality_score, reasons_json, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+         metrics_json, posted_at, source, virality_score, reasons_json, created_at, author_name, author_avatar_url, media_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
         params![
             id,
             profile_id,
@@ -342,7 +352,10 @@ pub fn insert_candidate(conn: &Connection, profile_id: &str, c: &NewCandidate) -
             c.source,
             c.virality_score,
             serde_json::to_string(&c.reasons).unwrap(),
-            now_rfc3339()
+            now_rfc3339(),
+            c.author_name,
+            c.avatar_url,
+            serde_json::to_string(&c.media).unwrap_or_else(|_| "[]".into())
         ],
     )?;
     if n == 0 {
@@ -520,6 +533,9 @@ mod tests {
             source: "manual",
             virality_score: 70.0,
             reasons: vec!["r".into()],
+            author_name: "Alice".into(),
+            avatar_url: Some("https://pbs.twimg.com/profile_images/1/a_bigger.jpg".into()),
+            media: vec![],
         }
     }
 

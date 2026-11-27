@@ -25,7 +25,12 @@ use std::sync::{Arc, Mutex};
 use crate::phase3::get_watchlist;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const EXHAUSTED_AFTER_EMPTY_SCROLLS: u32 = 5;
+/// A feed is only "exhausted" after this many scrolls in a row that revealed nothing new. X loads more posts
+/// lazily and sometimes stalls, so the loop waits, retries and reloads before it gives up.
+const EXHAUSTED_AFTER_EMPTY_SCROLLS: u32 = 14;
+/// After this many empty scrolls the feed page is reloaded once (the timeline is rebuilt from the top; posts
+/// already seen are skipped).
+const RELOAD_AFTER_EMPTY_SCROLLS: u32 = 7;
 /// The scout holds still while the user touched the page less than this long ago (SCT-14).
 pub const USER_IDLE_MS: u64 = 5_000;
 const MAX_THUMBS_PER_SESSION: usize = 12;
@@ -83,6 +88,9 @@ fn consider_for_formats(
         text: post.text.clone(),
         metrics: PostMetrics { likes: metrics.likes, reposts: metrics.reposts, replies: metrics.replies, bookmarks: metrics.bookmarks, views: (metrics.views > 0).then_some(metrics.views) },
         posted_at: post.time.clone(),
+        author_name: post.author.clone(),
+        avatar_url: post.avatar_url.clone(),
+        media: post.resolved_media(),
     };
     let db = env.db.lock().unwrap();
     pipeline::consider_post(&db, env.profile_id, &input, PostSource::Scout, thresholds, false).map(|d| d.candidate.is_some()).unwrap_or(false)
@@ -262,7 +270,10 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
     let targets = targets(&params.feed_source, &watchlist);
     let following_in_play = uses_following(&params.feed_source);
     let per_target = ((params.max_posts as usize).div_ceil(targets.len().max(1))).max(5);
+    let queued_quota = params.stop_after_queued.filter(|_| targets.len() > 1).map(|n| ((n + targets.len() as i64 - 1) / targets.len() as i64).max(1));
     let (mut target_idx, mut target_new) = (0usize, 0usize);
+    let mut target_queued_start = 0i64;
+    let mut reloaded_this_target = false;
     let mut paused_total = Duration::ZERO;
     let mut thumb_budget = MAX_THUMBS_PER_SESSION;
     {
@@ -453,7 +464,7 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         }
         env.sink.emit(
             "scout:progress",
-            json!({ "session_id": session_id, "scanned": scanned, "queued": queued, "scored": scored, "elapsed_sec": started.elapsed().as_secs(), "filtered": filtered }),
+            json!({ "session_id": session_id, "scanned": scanned, "queued": queued, "target": params.stop_after_queued, "scored": scored, "elapsed_sec": started.elapsed().as_secs(), "filtered": filtered }),
         );
 
         if new_ids == 0 {
@@ -461,13 +472,26 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         } else {
             empty_scrolls = 0;
         }
-        let target_done = empty_scrolls >= EXHAUSTED_AFTER_EMPTY_SCROLLS || (targets.len() > 1 && target_new >= per_target);
+        if empty_scrolls == RELOAD_AFTER_EMPTY_SCROLLS && !reloaded_this_target {
+            reloaded_this_target = true;
+            let d = env.browser.lock().await;
+            if visit(&*d, &targets[target_idx], following_in_play).await.is_err() {
+                break 'main "browser_error".into();
+            }
+            drop(d);
+            env.kill.sleep(Duration::from_millis(jitter(env.pause_ms).max(env.pause_ms.0)), env.stop).await;
+            continue;
+        }
+        let quota_met = queued_quota.is_some_and(|q| queued - target_queued_start >= q);
+        let target_done = empty_scrolls >= EXHAUSTED_AFTER_EMPTY_SCROLLS || (targets.len() > 1 && (target_new >= per_target || quota_met));
         if target_done {
             if target_idx + 1 >= targets.len() {
                 break "feed_exhausted".into();
             }
             target_idx += 1;
             (target_new, empty_scrolls) = (0, 0);
+            target_queued_start = queued;
+            reloaded_this_target = false;
             let d = env.browser.lock().await;
             if visit(&*d, &targets[target_idx], following_in_play).await.is_err() {
                 break 'main "browser_error".into();
@@ -479,7 +503,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
 
         {
             let d = env.browser.lock().await;
-            let delta = 700.0 + jitter((0, 400)) as f64;
+            let stalled = empty_scrolls.min(6) as f64;
+            let delta = 700.0 + jitter((0, 400)) as f64 + stalled * 350.0;
+            if empty_scrolls > 0 {
+                let _ = d.eval_json(&selectors::retry_feed_js()).await;
+            }
             let _ = d.eval_json(&selectors::set_busy_js(true)).await;
             let scrolled = d.wheel_scroll(640.0, 500.0, delta).await;
             let _ = d.eval_json(&selectors::set_busy_js(false)).await;
@@ -489,6 +517,9 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
         }
         if !env.kill.sleep(Duration::from_millis(jitter(env.pause_ms)), env.stop).await {
             continue;
+        }
+        if empty_scrolls > 0 && env.pause_ms.1 > 0 {
+            env.kill.sleep(Duration::from_millis(1200 * u64::from(empty_scrolls.min(4))), env.stop).await;
         }
     };
 
@@ -627,6 +658,27 @@ mod tests {
         let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
         let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
         assert_eq!((s.reason.as_str(), s.scanned), ("feed_exhausted", 3));
+    }
+
+    #[tokio::test]
+    async fn keeps_scrolling_through_a_stall_until_the_target_is_found() {
+        use std::sync::atomic::AtomicUsize;
+        let reads = Arc::new(AtomicUsize::new(0));
+        let rc = reads.clone();
+        let mock = MockDriver::new().with_eval_fn(move |js| {
+            if js.contains("posts.push") {
+                let n = rc.fetch_add(1, Ordering::SeqCst);
+                return if n < 9 { feed(3, 0) } else { feed(12, 0) };
+            }
+            feed(3, 0)
+        });
+        let b = browser(&mock).await;
+        let f = fixture();
+        let p = params(500, Some(8));
+        let sid = repo::create_session(&f.db.lock().unwrap(), &f.profile, &p).unwrap();
+        let s = run_session(&env(&f, &b, Arc::new(UnconfiguredProvider)), &sid, &p).await;
+        assert_eq!(s.reason, "queue_goal", "a feed that stalls for several scrolls is not exhausted");
+        assert!(s.queued >= 8);
     }
 
     #[tokio::test]

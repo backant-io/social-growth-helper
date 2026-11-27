@@ -237,6 +237,7 @@ pub fn run() {
             creator::commands::creator_save_settings,
             creator::commands::creator_match_formats,
             creator::commands::creator_generate,
+            creator::commands::creator_variation,
             creator::commands::creator_create_blank,
             creator::commands::creator_drafts,
             creator::commands::creator_edit,

@@ -63,7 +63,18 @@ pub struct Generated {
     pub drafts: Vec<OgcDraft>,
 }
 
+/// The topic when the user gave none: their niche topics from Preferences, else a neutral prompt.
+fn default_topic(conn: &Connection, profile_id: &str) -> String {
+    let topics = settings::get_preferences(conn, profile_id).ok().flatten().map(|p| p.niche_topics).unwrap_or_default();
+    if topics.is_empty() {
+        "something useful I learned recently from my own work".to_string()
+    } else {
+        format!("one of my usual topics: {}", topics.join(", "))
+    }
+}
+
 /// Generates three variants for `format_id` and stores them. Nothing leaves the machine except the model call.
+/// An empty `topic` falls back to the user's niche topics, so a template alone is enough to get examples.
 pub async fn generate_variants(
     db: &Mutex<Connection>,
     profile_id: &str,
@@ -71,13 +82,52 @@ pub async fn generate_variants(
     format_id: &str,
     topic: &str,
 ) -> AppResult<Generated> {
+    generate_with_label(db, profile_id, llm, format_id, topic, topic).await
+}
+
+/// The brief for "Create a variation": same hook and structure as the source post, new angle and wording.
+pub fn variation_brief(source_text: &str) -> String {
+    let source: String = source_text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(600).collect();
+    format!(
+        "Write a variation of the post below. Keep its hook style and structure, but change the angle, the example and the wording so it is clearly a new post and not a paraphrase.\nPost to vary: {source}"
+    )
+}
+
+/// Turns one viral post into three similar-but-different drafts. The post's format is extracted first when
+/// it has none yet, so this needs the format-extraction model once per post.
+pub async fn generate_variation(
+    db: &Mutex<Connection>,
+    profile_id: &str,
+    llm: &dyn StructuredLlm,
+    candidate_id: &str,
+) -> AppResult<Generated> {
+    let candidate = {
+        let conn = db.lock().unwrap();
+        repo::get_candidate(&conn, profile_id, candidate_id)?.ok_or_else(|| AppError::Validation("that post is no longer in your list".into()))?
+    };
+    let format_id = match candidate.format_id.clone() {
+        Some(id) => id,
+        None => crate::formats::pipeline::process_candidate(db, profile_id, llm, candidate_id).await?.format.id,
+    };
+    let label = format!("Variation of @{}", candidate.author_handle);
+    generate_with_label(db, profile_id, llm, &format_id, &variation_brief(&candidate.text), &label).await
+}
+
+async fn generate_with_label(
+    db: &Mutex<Connection>,
+    profile_id: &str,
+    llm: &dyn StructuredLlm,
+    format_id: &str,
+    topic: &str,
+    label: &str,
+) -> AppResult<Generated> {
     let topic = topic.trim();
-    if topic.is_empty() {
-        return Err(AppError::Validation("write a rough thought or topic first".into()));
-    }
+    let topic = if topic.is_empty() { default_topic(&db.lock().unwrap(), profile_id) } else { topic.to_string() };
+    let topic = topic.as_str();
     if topic.chars().count() > TOPIC_LIMIT {
         return Err(AppError::Validation(format!("keep the topic under {TOPIC_LIMIT} characters")));
     }
+    let label = if label.trim().is_empty() { "From a template" } else { label.trim() };
     let (format, style, cfg) = {
         let conn = db.lock().unwrap();
         let format = repo::get_format(&conn, profile_id, format_id)?.ok_or_else(|| AppError::Validation("format not found".into()))?;
@@ -101,7 +151,7 @@ pub async fn generate_variants(
             &NewDraft {
                 format_id: Some(&format.id),
                 batch_id: Some(&batch_id),
-                topic_seed: topic,
+                topic_seed: label,
                 text: &text,
                 model_used: "ogc_generation",
                 status: "variant",
@@ -168,6 +218,43 @@ mod tests {
         let reqs = llm.requests.lock().unwrap();
         assert_eq!(reqs[0].task, "ogc_generation");
         assert!(reqs[0].user.contains("why founders need sleep"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_topic_uses_niche_topics_and_a_variation_carries_the_source_post() {
+        let (conn, pid, _d) = db();
+        let fid = seed_format(&conn, &pid);
+        conn.execute("UPDATE format_candidates SET format_id = NULL WHERE 0", []).ok();
+        let cand = repo::insert_candidate(
+            &conn,
+            &pid,
+            &repo::NewCandidate {
+                platform_post_id: "7".into(),
+                author_handle: "alice".into(),
+                author_followers: Some(1000),
+                text: "Unpopular opinion: standups are waste.".into(),
+                metrics: Default::default(),
+                posted_at: None,
+                source: "manual",
+                virality_score: 80.0,
+                reasons: vec![],
+                author_name: "Alice".into(),
+                avatar_url: None,
+                media: vec![],
+            },
+        )
+        .unwrap()
+        .unwrap();
+        repo::set_candidate_status(&conn, &pid, &cand.id, "extracted", Some(&fid), None).unwrap();
+        let m = Mutex::new(conn);
+        let llm = ScriptedLlm::with(vec![Ok(REPLY), Ok(REPLY)]);
+        let g = generate_variants(&m, &pid, &llm, &fid, "  ").await.unwrap();
+        assert_eq!(g.drafts.len(), 3);
+        let v = generate_variation(&m, &pid, &llm, &cand.id).await.unwrap();
+        assert_eq!(v.drafts[0].topic_seed, "Variation of @alice");
+        let reqs = llm.requests.lock().unwrap();
+        assert!(reqs[0].user.contains("something useful I learned"));
+        assert!(reqs[1].user.contains("Post to vary: Unpopular opinion: standups are waste."));
     }
 
     #[tokio::test]

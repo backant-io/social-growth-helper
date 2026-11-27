@@ -45,6 +45,13 @@ pub async fn creator_generate(state: State<'_, AppState>, format_id: String, top
     super::generate_variants(&state.db, &state.profile_id, state.llm.as_ref(), &format_id, &topic).await
 }
 
+/// "Create a variation": three drafts that follow a viral post's format with a new angle and wording.
+#[tauri::command]
+pub async fn creator_variation(state: State<'_, AppState>, candidate_id: String) -> AppResult<Generated> {
+    let _job = state.jobs.register("Writing variations");
+    super::generate_variation(&state.db, &state.profile_id, state.llm.as_ref(), &candidate_id).await
+}
+
 #[tauri::command]
 pub fn creator_create_blank(state: State<'_, AppState>, format_id: Option<String>, text: String) -> AppResult<OgcDraft> {
     let db = state.db.lock().unwrap();

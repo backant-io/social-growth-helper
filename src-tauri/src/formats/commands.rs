@@ -113,6 +113,7 @@ pub fn formats_add_post(state: State<'_, AppState>, post: ManualPost) -> AppResu
         text: post.text,
         metrics: PostMetrics { likes: post.likes, reposts: post.reposts, replies: post.replies, bookmarks: post.bookmarks, views: post.views },
         posted_at: None,
+        ..Default::default()
     };
     let db = state.db.lock().unwrap();
     let thresholds = repo::get_thresholds(&db)?;
@@ -188,6 +189,9 @@ pub async fn formats_watch_scan(state: State<'_, AppState>, id: String) -> AppRe
             text: p.text,
             metrics: p.metrics,
             posted_at: p.posted_at,
+            author_name: p.author_name,
+            avatar_url: p.avatar_url,
+            media: p.media,
         };
         if let Ok(d) = pipeline::consider_post(&db, &state.profile_id, &input, PostSource::Watchlist, &thresholds, false) {
             if d.verdict.flagged {

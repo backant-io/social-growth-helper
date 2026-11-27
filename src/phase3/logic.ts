@@ -75,6 +75,21 @@ export function compactCount(n: number): string {
   return String(n);
 }
 
+/** X-style age: "now", "5m", "3h", then "Nov 26" (adds the year when it is not the current one). */
+export function relativeTime(iso: string | null, nowMs: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const sec = Math.max(0, Math.round((nowMs - t) / 1000));
+  if (sec < 45) return "now";
+  if (sec < 3600) return `${Math.max(1, Math.round(sec / 60))}m`;
+  if (sec < 86_400) return `${Math.round(sec / 3600)}h`;
+  const d = new Date(t);
+  const month = d.toLocaleString("en-US", { month: "short", timeZone: "UTC" });
+  const sameYear = d.getUTCFullYear() === new Date(nowMs).getUTCFullYear();
+  return sameYear ? `${month} ${d.getUTCDate()}` : `${month} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+}
+
 export function stepSummary(steps: StepView[]): { done: number; total: number; blocked: StepView | null } {
   return {
     done: steps.filter((s) => s.status === "done" || s.status === "skipped").length,

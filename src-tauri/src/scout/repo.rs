@@ -113,17 +113,18 @@ pub fn upsert_observed(
             "UPDATE observed_posts
              SET author_followers = COALESCE(?2, author_followers),
                  author_verified = MAX(author_verified, ?3),
-                 media_json = CASE WHEN ?4 <> '[]' THEN ?4 ELSE media_json END
+                 media_json = CASE WHEN ?4 <> '[]' THEN ?4 ELSE media_json END,
+                 author_avatar_url = COALESCE(?5, author_avatar_url)
              WHERE id = ?1",
-            params![id, author_followers, p.author_verified as i64, media_json],
+            params![id, author_followers, p.author_verified as i64, media_json, p.avatar_url],
         );
         return Ok(id);
     }
     let id = new_id();
     conn.execute(
         "INSERT INTO observed_posts (id, profile_id, platform_post_id, author_handle, author_display_name, author_followers, author_verified, text, has_media, media_json, feed_source,
-            posted_at, first_seen_at, metrics_at_capture_json, velocity_score, context_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            posted_at, first_seen_at, metrics_at_capture_json, velocity_score, context_json, author_avatar_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         params![
             id,
             profile_id,
@@ -140,7 +141,8 @@ pub fn upsert_observed(
             now_rfc3339(),
             metrics,
             velocity,
-            p.context_text()
+            p.context_text(),
+            p.avatar_url
         ],
     )?;
     Ok(id)
@@ -307,7 +309,8 @@ pub fn queue(conn: &Connection, profile_id: &str, threshold: f64, now_unix: i64,
         "SELECT e.id, e.session_id, e.potential_score, e.angle_summary, e.reasoning, e.model_used, e.status, e.created_at,
                 o.id, o.platform_post_id, o.author_handle, o.text, o.has_media, o.metrics_at_capture_json, o.posted_at,
                 e.outlier_score, e.breakout_flags_json, o.author_followers, o.author_verified, o.media_json,
-                d.id, COALESCE(d.edited_text, d.initial_text), d.status, d.error_message, d.published_url
+                d.id, COALESCE(d.edited_text, d.initial_text), d.status, d.error_message, d.published_url,
+                o.author_display_name, o.author_avatar_url
          FROM scout_evaluations e
          JOIN observed_posts o ON o.id = e.observed_post_id
          LEFT JOIN reply_drafts d ON d.id = (
@@ -342,6 +345,8 @@ pub fn queue(conn: &Connection, profile_id: &str, threshold: f64, now_unix: i64,
                 url: post_url(&handle, &pid),
                 platform_post_id: pid,
                 handle,
+                author_name: r.get::<_, Option<String>>(25)?.unwrap_or_default(),
+                avatar_url: r.get(26)?,
                 text: r.get(11)?,
                 has_media: r.get::<_, i64>(12)? != 0 || !media.is_empty(),
                 media,

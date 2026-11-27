@@ -20,6 +20,8 @@ export interface PostView {
   observed_id: string;
   platform_post_id: string;
   handle: string;
+  author_name: string;
+  avatar_url: string | null;
   text: string;
   has_media: boolean;
   url: string;

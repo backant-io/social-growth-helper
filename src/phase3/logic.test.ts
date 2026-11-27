@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, stepSummary, toggleInBundle } from "./logic";
+import { charInfo, compactCount, editDistance, filterCommands, formatDuration, matchShortcut, normalizeBundle, relativeTime, stepSummary, toggleInBundle } from "./logic";
 
 describe("bundles", () => {
   it("orders actions and keeps one text action", () => {
@@ -33,6 +33,19 @@ describe("text helpers", () => {
     expect(formatDuration(3900)).toBe("1h 5m");
     expect(compactCount(1250)).toBe("1.3K");
     expect(compactCount(12)).toBe("12");
+  });
+});
+
+describe("relativeTime", () => {
+  const now = Date.parse("2026-11-27T12:00:00Z");
+  it("formats the age like X does", () => {
+    expect(relativeTime("2026-11-27T11:59:50Z", now)).toBe("now");
+    expect(relativeTime("2026-11-27T11:48:00Z", now)).toBe("12m");
+    expect(relativeTime("2026-11-27T09:00:00Z", now)).toBe("3h");
+    expect(relativeTime("2026-11-20T09:00:00Z", now)).toBe("Nov 20");
+    expect(relativeTime("2025-03-02T09:00:00Z", now)).toBe("Mar 2, 2025");
+    expect(relativeTime(null, now)).toBe("");
+    expect(relativeTime("nope", now)).toBe("");
   });
 });
 
