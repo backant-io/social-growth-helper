@@ -248,6 +248,55 @@ return {{ state: pageState(), me, url: location.href, posts }};
     )
 }
 
+/// Reads the public counters of one post from its own page: the card for `post_id` only, so a reply does not
+/// pick up its parent's numbers. Returns `{state, url, found, gone, handle, impressions, likes, replies, reposts,
+/// bookmarks, tweetText, postedAt, bodySnippet}`; counters are display strings or `null`. Never interacts.
+pub fn post_page_js(post_id: &str) -> String {
+    format!(
+        r#"(() => {{
+{prelude}
+const id = {id};
+const a = articleFor(id);
+const label = (sels) => {{
+  if (!a) return null;
+  const el = $all(sels, a);
+  if (!el) return null;
+  const t = (el.getAttribute('aria-label') || el.innerText || '').trim();
+  return /\d/.test(t) ? t : '0';
+}};
+const views = a ? a.querySelector('a[href*="/analytics"]') : null;
+const body = (document.body && document.body.innerText || '').slice(0, 1500);
+const acct = ((($all({acct}) || {{}}).innerText) || '').match(/@([A-Za-z0-9_]{{1,15}})/);
+return {{
+  state: pageState(),
+  url: location.href,
+  found: !!a,
+  gone: !a && /(this post doesn.t exist|page doesn.t exist|this post was deleted|account (?:no longer exists|doesn.t exist))/i.test(body),
+  handle: acct ? acct[1] : null,
+  impressions: views ? (views.getAttribute('aria-label') || views.innerText || '').trim() || null : null,
+  likes: label({like}.concat({unlike})),
+  replies: label({reply}),
+  reposts: label({retweet}.concat({unretweet})),
+  bookmarks: label({bookmark}.concat({unbookmark})),
+  tweetText: a ? (($all({ttext}, a) || {{}}).innerText || null) : null,
+  postedAt: a && a.querySelector('time') ? a.querySelector('time').getAttribute('datetime') : null,
+  bodySnippet: body
+}};
+}})()"#,
+        prelude = prelude(),
+        id = json!(post_id),
+        acct = list(&sel::ACCOUNT_SWITCHER),
+        like = list(&sel::LIKE),
+        unlike = list(&sel::UNLIKE),
+        reply = list(&sel::REPLY),
+        retweet = list(&sel::RETWEET),
+        unretweet = list(&sel::UNRETWEET),
+        bookmark = list(&sel::BOOKMARK),
+        unbookmark = list(&sel::UNBOOKMARK),
+        ttext = list(&sel::TWEET_TEXT),
+    )
+}
+
 /// Image hosts a thumbnail may be fetched from.
 pub fn is_image_url(u: &str) -> bool {
     u.starts_with("https://pbs.twimg.com/") && u.len() < 600 && !u.contains(char::is_whitespace)
@@ -532,7 +581,7 @@ mod tests {
 
     #[test]
     fn read_scripts_never_mutate_or_click() {
-        for js in [page_state_js(), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js(), submit_result_js("1", Some("me"), "hi"), find_published_js("1", Some("me"), "hi")] {
+        for js in [page_state_js(), post_page_js("1"), extract_feed_js(), probe_js("1"), composer_text_js(), menu_texts_js(), composer_gone_js(), submit_result_js("1", Some("me"), "hi"), find_published_js("1", Some("me"), "hi")] {
             for banned in [".click(", ".submit(", "dispatchEvent", "fetch(", "XMLHttpRequest", "innerHTML =", "textContent =", ".value ="] {
                 assert!(!js.contains(banned), "script contains {banned}");
             }

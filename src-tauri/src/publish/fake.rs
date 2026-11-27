@@ -424,6 +424,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn likes_and_replies_are_in_the_ledger_and_announced_the_moment_they_happen() {
+        let r = rig(&["like", "reply"], |_| {});
+        let res = r.publish().await;
+        assert!(res.ok, "{:?}", res.message);
+        let rows: Vec<(String, String)> = {
+            let db = r.db.lock().unwrap();
+            let mut st = db.prepare("SELECT action, source FROM action_events WHERE profile_id = ?1 AND ok = 1 ORDER BY action").unwrap();
+            st.query_map([&r.profile], |row| Ok((row.get(0)?, row.get(1)?))).unwrap().map(|x| x.unwrap()).collect()
+        };
+        assert_eq!(rows, vec![("like".to_string(), "publish".to_string()), ("reply".to_string(), "publish".to_string())]);
+        let announced = r.sink.0.lock().unwrap().iter().filter(|(k, _)| k == "analytics:updated").count();
+        assert!(announced >= 2, "one announcement per recorded step, plus one at the end");
+    }
+
+    #[tokio::test]
     async fn a_reply_that_only_appears_after_reloading_the_post_is_still_confirmed() {
         let r = rig(&["like", "reply"], |s| {
             s.submit_hangs = true;

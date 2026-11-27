@@ -1,11 +1,9 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it } from "vitest";
 import { hasPerformanceData } from "./AnalyticsPage";
 import { analyticsApi, evaluatePreviewSpec, resetPreviewStore, validatePreviewSpec } from "./api";
 import { formatCompact, formatMetricValue } from "./charts/ChartPrimitives";
 import { serializeWidgetCsv } from "./csv";
-import { SyncHealthBanner } from "./SyncHealthBanner";
+import { syncStatusLine } from "./syncStatus";
 import type { ActivitySummary, DashboardSnapshot } from "./types";
 
 describe("Phase 4 analytics frontend", () => {
@@ -132,6 +130,11 @@ describe("Phase 4 analytics frontend", () => {
       drafted_ogc: 0,
       published_ogc: 0,
       engagement_actions: 0,
+      likes_given: 0,
+      bookmarks_saved: 0,
+      reposts_made: 0,
+      follows_made: 0,
+      quotes_made: 0,
       synced_post_snapshots: 0,
       synced_account_snapshots: 0,
       unsynced_published_posts: 0,
@@ -159,52 +162,25 @@ describe("Phase 4 analytics frontend", () => {
     expect(hasPerformanceData(syncedOnly)).toBe(true);
   });
 
-  it("renders actionable guidance in SyncHealthBanner for unsynced local posts and empty syncs", () => {
-    const emptySchedule = { tracked_posts: 0, posts_due_now: 0, missed_windows: 0, items: [] };
-    const localOnlyHtml = renderToStaticMarkup(
-      createElement(SyncHealthBanner, {
-        health: null,
-        schedule: emptySchedule,
-        activity: {
-          scouted_posts: 5,
-          evaluated_posts: 5,
-          queued_posts: 2,
-          drafted_replies: 2,
-          published_replies: 2,
-          drafted_ogc: 0,
-          published_ogc: 0,
-          engagement_actions: 3,
-          synced_post_snapshots: 0,
-          synced_account_snapshots: 0,
-          unsynced_published_posts: 2,
-        },
-        syncing: false,
-        onSyncDue: () => {},
-        onBackfill30d: () => {},
-      }),
-    );
-    expect(localOnlyHtml).toContain("Showing 2 published posts from local activity");
-    expect(localOnlyHtml).toContain("Backfill 30 days");
+  it("shows one calm status line and never a failure message", () => {
+    const now = Date.parse("2026-11-27T10:00:00Z");
+    expect(syncStatusLine(null, now)).toBe("Numbers update on their own.");
+    expect(syncStatusLine({ last_update_at: null, blocked: null }, now)).toBe("Numbers update on their own.");
+    expect(syncStatusLine({ last_update_at: "2026-11-27T09:59:00Z", blocked: null }, now)).toBe("Updated just now");
+    expect(syncStatusLine({ last_update_at: "2026-11-27T09:40:00Z", blocked: null }, now)).toBe("Updated 20 min ago");
+    expect(syncStatusLine({ last_update_at: "2026-11-27T04:00:00Z", blocked: null }, now)).toBe("Updated 6 h ago");
+    expect(syncStatusLine({ last_update_at: "2026-11-24T10:00:00Z", blocked: null }, now)).toBe("Updated 3 d ago");
+    expect(syncStatusLine({ last_update_at: null, blocked: "logged_out" }, now)).toBe("Sign in to X to keep numbers updating.");
+    expect(syncStatusLine({ last_update_at: null, blocked: "challenge" }, now)).toBe("X needs a quick look before numbers can update.");
+    for (const line of [
+      syncStatusLine(null, now),
+      syncStatusLine({ last_update_at: null, blocked: "locked" }, now),
+    ]) {
+      expect(line).not.toMatch(/try again|failed|error|sync stats|backfill/i);
+    }
+  });
 
-    const emptySyncHtml = renderToStaticMarkup(
-      createElement(SyncHealthBanner, {
-        health: {
-          checked_at: "2026-11-27T09:00:00Z",
-          status: "ok",
-          extraction_mode: "empty",
-          tier_mode: "unknown",
-          account_synced: false,
-          posts_synced: 0,
-          external_posts_matched: 0,
-          backfill_posts_added: 0,
-          issues: [],
-        },
-        schedule: emptySchedule,
-        syncing: false,
-        onSyncDue: () => {},
-        onBackfill30d: () => {},
-      }),
-    );
-    expect(emptySyncHtml).toContain("Last sync did not find any X posts");
+  it("exposes no manual sync or backfill in the analytics api", () => {
+    expect(Object.keys(analyticsApi)).not.toContain("syncStats");
   });
 });

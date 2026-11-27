@@ -2,7 +2,6 @@ import { useState } from "react";
 import {
   btn,
   btnGhost,
-  btnPrimary,
   input,
   PageHeader,
   Segmented,
@@ -14,11 +13,9 @@ interface LayoutControlsProps {
   layouts: DashboardLayout[];
   windowDays: number;
   customizeMode: boolean;
-  syncing: boolean;
   onWindowChange: (days: number) => void;
   onToggleCustomize: () => void;
   onOpenBuilder: () => void;
-  onSyncStats: (backfillDays?: number) => void;
   onSwitchLayout: (layoutId: string) => void;
   onSaveVersion: () => void;
   onRenameLayout: (newName: string) => void;
@@ -32,11 +29,9 @@ export function LayoutControls({
   layouts,
   windowDays,
   customizeMode,
-  syncing,
   onWindowChange,
   onToggleCustomize,
   onOpenBuilder,
-  onSyncStats,
   onSwitchLayout,
   onSaveVersion,
   onRenameLayout,
@@ -83,14 +78,6 @@ export function LayoutControls({
               className={customizeMode ? btn : btnGhost}
             >
               {customizeMode ? "Done" : "Customize"}
-            </button>
-            <button
-              type="button"
-              disabled={syncing}
-              onClick={() => onSyncStats(undefined)}
-              className={btnPrimary}
-            >
-              {syncing ? "Syncing..." : "Sync stats"}
             </button>
           </>
         }
@@ -153,18 +140,6 @@ export function LayoutControls({
                   }}
                 >
                   Reset to starter layout
-                </button>
-                <button
-                  type="button"
-                  disabled={syncing}
-                  className={item}
-                  title="Backfill the last 30 days of profile posts (flags external posts)"
-                  onClick={() => {
-                    onSyncStats(30);
-                    setMenuOpen(false);
-                  }}
-                >
-                  Backfill 30 days
                 </button>
                 {layouts.length > 1 && (
                   <button

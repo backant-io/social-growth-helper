@@ -68,6 +68,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "reply_formats",
         sql: include_str!("migrations/0011_reply_formats.sql"),
     },
+    Migration {
+        version: 12,
+        name: "analytics_background_sync",
+        sql: include_str!("migrations/0012_analytics_background_sync.sql"),
+    },
 ];
 
 const BACKUPS_TO_KEEP: usize = 5;

@@ -6,7 +6,7 @@ import { analyticsApi } from "./api";
 import { downloadCsv } from "./csv";
 import { LayoutControls } from "./LayoutControls";
 import { RepromptBuilderModal } from "./RepromptBuilderModal";
-import { SyncHealthBanner } from "./SyncHealthBanner";
+import { syncStatusLine } from "./syncStatus";
 import type {
   ActivitySummary,
   DashboardSnapshot,
@@ -59,21 +59,22 @@ function CollectedActivityStrip({ activity }: { activity: ActivitySummary }) {
     { label: "Queued", value: activity.queued_posts },
     { label: "Reply drafts", value: activity.drafted_replies },
     { label: "Creator drafts", value: activity.drafted_ogc },
-    { label: "Actions", value: activity.engagement_actions },
+    { label: "Likes", value: activity.likes_given },
+    { label: "Saved", value: activity.bookmarks_saved },
+    { label: "Reposts", value: activity.reposts_made },
+    { label: "Follows", value: activity.follows_made },
   ];
 
   return (
     <section
-      aria-label="Activity collected in this app"
+      aria-label="Your activity"
       className="space-y-3 border-t border-zinc-200 pt-5 dark:border-zinc-800"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="eyebrow">Activity collected in this app</h2>
-        <span className={`text-xs ${muted}`}>
-          Live counts from your local database before your first post performance sync
-        </span>
+        <h2 className="eyebrow">Your activity</h2>
+        <span className={`text-xs ${muted}`}>Counted as you go</span>
       </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-9">
         {items.map((stat) => (
           <div
             key={stat.label}
@@ -95,8 +96,6 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
   const [windowDays, setWindowDays] = useState<number>(30);
   const [customizeMode, setCustomizeMode] = useState(false);
   const [showEmptyWidgets, setShowEmptyWidgets] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncNote, setSyncNote] = useState<string | null>(null);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [dragOverWidgetId, setDragOverWidgetId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -134,48 +133,26 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
 
   useEffect(() => {
     let active = true;
-    let unlisten: (() => void) | null = null;
-    void listen("publish:update", () => {
-      if (active) void loadDashboard(windowDays);
-    }).then((fn) => {
-      if (active) unlisten = fn;
-      else fn();
-    });
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unlisteners: Array<() => void> = [];
+    const refresh = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (active) void loadDashboard(windowDays);
+      }, 800);
+    };
+    for (const name of ["publish:update", "analytics:updated"]) {
+      void listen(name, refresh).then((fn) => {
+        if (active) unlisteners.push(fn);
+        else fn();
+      });
+    }
     return () => {
       active = false;
-      unlisten?.();
+      if (timer) clearTimeout(timer);
+      unlisteners.forEach((fn) => fn());
     };
   }, [loadDashboard, windowDays]);
-
-  const handleSync = useCallback(
-    async (backfillDays?: number) => {
-      setSyncing(true);
-      setError(null);
-      setSyncNote(null);
-      try {
-        const report = await analyticsApi.syncStats(backfillDays ? { backfill_days: backfillDays } : {});
-        await loadDashboard(windowDays);
-        if (!mountedRef.current) return;
-        const { posts_synced, account_synced, issues } = report.health;
-        if (issues.length === 0) {
-          if (posts_synced > 0 || account_synced) {
-            const parts: string[] = [];
-            if (posts_synced > 0) parts.push(`${posts_synced} post${posts_synced === 1 ? "" : "s"}`);
-            if (account_synced) parts.push("account overview");
-            setSyncNote(`Synced ${parts.join(" and ")} from X.`);
-          } else {
-            setSyncNote("Sync finished, but no posts or account stats were returned from X yet.");
-          }
-        }
-      } catch (e) {
-        if (!mountedRef.current) return;
-        setError((e as Error).message);
-      } finally {
-        if (mountedRef.current) setSyncing(false);
-      }
-    },
-    [loadDashboard, windowDays],
-  );
 
   async function handleAcceptWidget(spec: WidgetSpec, sourcePrompt: string) {
     if (!snapshot) return;
@@ -309,11 +286,9 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         layouts={snapshot.layouts}
         windowDays={windowDays}
         customizeMode={customizeMode}
-        syncing={syncing}
         onWindowChange={setWindowDays}
         onToggleCustomize={() => setCustomizeMode((v) => !v)}
         onOpenBuilder={() => setBuilderTarget({ open: true, widget: null })}
-        onSyncStats={(days) => void handleSync(days)}
         onSwitchLayout={(id) => void handleLayoutAction(() => analyticsApi.switchLayout(id))}
         onSaveVersion={() =>
           void handleLayoutAction(() => analyticsApi.saveLayoutVersion(snapshot.active_layout.id))
@@ -330,20 +305,13 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         onResetStarter={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
       />
 
-      <SyncHealthBanner
-        health={snapshot.last_health}
-        schedule={snapshot.schedule}
-        activity={snapshot.activity_summary}
-        syncing={syncing}
-        onSyncDue={() => void handleSync(undefined)}
-        onBackfill30d={() => void handleSync(30)}
-      />
+      <p className={`text-xs ${muted}`} role="status">
+        {syncStatusLine(snapshot.sync_status)}
+      </p>
 
       {customizeMode && (
         <Notice tone="info">Drag cards to reorder or resize. Changes save as you go.</Notice>
       )}
-
-      {syncNote && <Notice tone="ok">{syncNote}</Notice>}
 
       {error && <Notice tone="error">{error}</Notice>}
 
@@ -354,47 +322,26 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
           )}
 
           <EmptyBlock
-            title="No post performance data yet"
+            title="Nothing here yet"
             action={
               <div className="flex flex-wrap items-center justify-center gap-2">
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => void handleSync(30)}
-                  className={btnPrimary}
-                >
-                  {syncing ? "Syncing..." : "Backfill 30 days from X"}
-                </button>
-                <button
-                  type="button"
-                  disabled={syncing}
-                  onClick={() => void handleSync(undefined)}
-                  className={btn}
-                >
-                  Sync stats
-                </button>
                 {onNavigate && (
                   <>
-                    <button type="button" onClick={() => onNavigate("scout")} className={btnGhost}>
+                    <button type="button" onClick={() => onNavigate("scout")} className={btnPrimary}>
                       Open Scout
                     </button>
-                    <button type="button" onClick={() => onNavigate("creator")} className={btnGhost}>
+                    <button type="button" onClick={() => onNavigate("creator")} className={btn}>
                       Open Creator
                     </button>
                   </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setShowEmptyWidgets(true)}
-                  className={btnGhost}
-                >
+                <button type="button" onClick={() => setShowEmptyWidgets(true)} className={btnGhost}>
                   Show starter widgets
                 </button>
               </div>
             }
           >
-            Analytics populates automatically as soon as you publish a reply from Scout or a post from
-            Creator, or import your recent X posts with a 30-day backfill.
+            Your numbers appear here after your first reply or post.
           </EmptyBlock>
         </div>
       ) : snapshot.widgets.length === 0 ? (
@@ -425,13 +372,13 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         <div className="space-y-4">
           {!hasData && showEmptyWidgets && !customizeMode && (
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-500">
-              <span>Previewing starter layout with no post data yet.</span>
+              <span>Previewing the starter layout.</span>
               <button
                 type="button"
                 onClick={() => setShowEmptyWidgets(false)}
                 className="underline hover:text-zinc-900 dark:hover:text-zinc-100"
               >
-                Back to setup guide
+                Back
               </button>
             </div>
           )}
@@ -462,6 +409,10 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
             ))}
           </div>
         </div>
+      )}
+
+      {!showGettingStarted && !customizeMode && localActivity && snapshot.activity_summary && (
+        <CollectedActivityStrip activity={snapshot.activity_summary} />
       )}
 
       {builderTarget.open && (

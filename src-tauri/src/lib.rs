@@ -84,6 +84,7 @@ pub fn run() {
             app.manage(state);
             app.manage(p3);
             publish::commands::spawn_worker(app.handle());
+            analytics::worker::spawn(app.handle());
             if let Err(e) = tray::install(app.handle()) {
                 log::warn!("tray unavailable: {e}");
             }
@@ -172,7 +173,6 @@ pub fn run() {
             learning::commands::data_wipe,
             // Phase 4: analytics & dynamic dashboard
             analytics::commands::analytics_get_dashboard,
-            analytics::commands::analytics_sync_stats,
             analytics::commands::analytics_list_views,
             analytics::commands::analytics_switch_layout,
             analytics::commands::analytics_save_layout_version,
