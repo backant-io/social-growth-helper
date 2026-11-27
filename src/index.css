@@ -198,21 +198,57 @@ pre,
   font-family: var(--font-mono);
 }
 
-/* Native dropdown popups ignore transparent backgrounds and inherit the text colour, which made the
-   model lists unreadable when the popup theme and the app theme disagreed. Always give them both. */
+/*
+  Form controls read the design tokens directly. Tailwind's preflight makes selects transparent and
+  inherit colour; native popups then paint with the OS theme, so text could end up dark on dark (or
+  invisible when closed). Every control gets an explicit surface + text colour from the tokens, and
+  color-scheme follows the same light/dark switch as the tokens so the native popup always agrees.
+*/
+:root {
+  --control-bg: var(--bg);
+  --control-fg: var(--fg);
+  --control-fg-disabled: var(--fg-faint);
+  --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%235f5f5f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --control-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%23a3a3a3' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5'/%3E%3C/svg%3E");
+  }
+}
+
 select {
   color-scheme: light;
-  color: var(--fg);
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--control-bg);
+  background-image: var(--control-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.625rem center;
+  background-size: 0.75rem;
+  color: var(--control-fg);
+  padding-right: 2rem;
+  text-overflow: ellipsis;
+}
+
+select:disabled {
+  color: var(--control-fg-disabled);
+  opacity: 0.7;
 }
 
 select option,
 select optgroup {
-  background-color: var(--bg);
-  color: var(--fg);
+  background-color: var(--control-bg);
+  color: var(--control-fg);
 }
 
 select option:disabled {
-  color: var(--fg-faint);
+  color: var(--control-fg-disabled);
+}
+
+input,
+textarea {
+  color: var(--control-fg);
 }
 
 @media (prefers-color-scheme: dark) {

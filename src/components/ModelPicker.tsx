@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../lib/api";
-import { btnPrimary, input } from "./ui";
+import { btnPrimary, input, muted } from "./ui";
 import type { ModelInfo, ProviderAccountView } from "../lib/types";
 
 export interface ModelSelection {
@@ -117,7 +117,7 @@ export function ModelPicker({
         {providers.length > 0 && onProvidersUpdated && (
           <button
             type="button"
-            className="px-1.5 py-1 text-xs text-zinc-500 hover:text-zinc-950 dark:hover:text-zinc-50"
+            className={`px-1.5 py-1 text-xs ${muted} hover:text-zinc-950 dark:hover:text-zinc-50`}
             onClick={() => setAddingFor(addingFor ? null : value.providerAccountId ?? providers[0].id)}
             title="Add a custom model ID"
           >
@@ -127,7 +127,7 @@ export function ModelPicker({
       </div>
 
       {selected && !compact && (
-        <p className="text-xs text-zinc-500">
+        <p className={`text-xs ${muted}`}>
           {selected.account.billing_lane === "subscription" ? "Subscription" : "API billing"}
           {selected.model.capabilities.vision ? " / Vision" : ""}
           {selected.model.capabilities.thinking ? " / Thinking" : ""}
