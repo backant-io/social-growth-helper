@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod filter;
 pub mod model;
+pub mod outlier;
 pub mod repo;
 pub mod score;
 pub mod session;

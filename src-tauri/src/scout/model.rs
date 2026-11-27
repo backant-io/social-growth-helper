@@ -11,6 +11,20 @@ pub struct Metrics {
     pub views: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MediaItem {
+    /// `"image"`, `"video"`, or `"gif"`.
+    pub kind: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub poster_url: Option<String>,
+    #[serde(default)]
+    pub alt: Option<String>,
+    #[serde(default)]
+    pub duration: Option<String>,
+}
+
 /// A tweet card as read from the feed. Everything here is untrusted page content (SEC-07).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScrapedPost {
@@ -18,6 +32,10 @@ pub struct ScrapedPost {
     pub handle: Option<String>,
     #[serde(default)]
     pub author: String,
+    #[serde(default)]
+    pub author_verified: bool,
+    #[serde(default)]
+    pub is_repost: bool,
     #[serde(default)]
     pub text: String,
     #[serde(default)]
@@ -40,9 +58,12 @@ pub struct ScrapedPost {
     pub parent: Option<String>,
     #[serde(default)]
     pub replying_to: Option<String>,
-    /// Up to two image URLs, for image-aware scoring (SCT-19).
+    /// Up to four image URLs, for image-aware scoring and UI display (SCT-19).
     #[serde(default)]
     pub image_urls: Vec<String>,
+    /// Structured images, videos and GIFs extracted from the post.
+    #[serde(default)]
+    pub media: Vec<MediaItem>,
     /// The card shows a "Show more" link: the text read here is cut off (BRW-19).
     #[serde(default)]
     pub truncated: bool,
@@ -52,6 +73,17 @@ pub struct ScrapedPost {
 }
 
 impl ScrapedPost {
+    /// Returns structured media items, falling back to `image_urls` if `media` is empty.
+    pub fn resolved_media(&self) -> Vec<MediaItem> {
+        if !self.media.is_empty() {
+            return self.media.clone();
+        }
+        self.image_urls
+            .iter()
+            .map(|u| MediaItem { kind: "image".into(), url: Some(u.clone()), poster_url: None, alt: None, duration: None })
+            .collect()
+    }
+
     /// Quote and thread context as one block of untrusted text, or `None` when there is none.
     pub fn context_text(&self) -> Option<String> {
         let mut parts = vec![];

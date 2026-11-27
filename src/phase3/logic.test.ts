@@ -53,10 +53,10 @@ describe("shortcuts", () => {
 describe("palette and steps", () => {
   const cmds = [
     { id: "a", label: "Start scout session" },
-    { id: "b", label: "Open Reply Studio" },
+    { id: "b", label: "Open Scout" },
   ];
   it("filters by every word", () => {
-    expect(filterCommands(cmds, "reply studio").map((c) => c.id)).toEqual(["b"]);
+    expect(filterCommands(cmds, "open scout").map((c) => c.id)).toEqual(["b"]);
     expect(filterCommands(cmds, "")).toHaveLength(2);
     expect(filterCommands(cmds, "zzz")).toHaveLength(0);
   });

@@ -1,6 +1,7 @@
 use super::bundle::{self, ActionKind};
 use super::edit::edit_distance;
 use super::generate::{StyleContext, StyleShot, Variant};
+use crate::scout::model::MediaItem;
 use crate::style::repo::{get_active_style_guide, retrieve_examples_for_prompt};
 use crate::style::ExampleKind;
 use crate::error::{AppError, AppResult};
@@ -16,6 +17,7 @@ pub struct PostView {
     pub text: String,
     pub has_media: bool,
     pub url: String,
+    pub media: Vec<MediaItem>,
 }
 
 /// Quote and thread context captured with the post (SCT-20), if any.
@@ -49,6 +51,9 @@ pub struct DraftView {
     pub angle: Option<String>,
     pub reasoning: Option<String>,
     pub score: Option<f64>,
+    pub outlier_score: Option<f64>,
+    pub breakout_flags: Vec<String>,
+    pub author_followers: Option<i64>,
     pub kind: String,
     pub initial_text: String,
     pub edited_text: String,
@@ -100,11 +105,20 @@ pub fn load_style_for_generation(conn: &Connection, profile_id: &str, post_text:
 
 pub fn post_by_observed(conn: &Connection, observed_id: &str) -> AppResult<PostView> {
     conn.query_row(
-        "SELECT id, platform_post_id, author_handle, text, has_media FROM observed_posts WHERE id = ?1",
+        "SELECT id, platform_post_id, author_handle, text, has_media, media_json FROM observed_posts WHERE id = ?1",
         [observed_id],
         |r| {
             let (handle, pid): (String, String) = (r.get(2)?, r.get(1)?);
-            Ok(PostView { observed_id: r.get(0)?, url: post_url(&handle, &pid), platform_post_id: pid, handle, text: r.get(3)?, has_media: r.get::<_, i64>(4)? != 0 })
+            let media_raw: String = r.get::<_, Option<String>>(5)?.unwrap_or_else(|| "[]".into());
+            Ok(PostView {
+                observed_id: r.get(0)?,
+                url: post_url(&handle, &pid),
+                platform_post_id: pid,
+                handle,
+                text: r.get(3)?,
+                has_media: r.get::<_, i64>(4)? != 0,
+                media: serde_json::from_str(&media_raw).unwrap_or_default(),
+            })
         },
     )
     .optional()?
@@ -265,16 +279,20 @@ pub fn get_view(conn: &Connection, draft_id: &str) -> AppResult<DraftView> {
         .query_row(
             "SELECT d.id, d.evaluation_id, d.observed_post_id, d.draft_kind, d.initial_text, d.edited_text, d.edit_distance, d.tone_tag,
                     d.model_used, d.actions_json, d.status, d.error_message, d.published_url, d.created_at,
-                    e.angle_summary, e.reasoning, e.potential_score
-             FROM reply_drafts d LEFT JOIN scout_evaluations e ON e.id = d.evaluation_id WHERE d.id = ?1",
+                    e.angle_summary, e.reasoning, e.potential_score, e.outlier_score, e.breakout_flags_json, o.author_followers
+             FROM reply_drafts d
+             LEFT JOIN scout_evaluations e ON e.id = d.evaluation_id
+             LEFT JOIN observed_posts o ON o.id = d.observed_post_id
+             WHERE d.id = ?1",
             [draft_id],
             |r| {
                 let actions: String = r.get(9)?;
+                let flags_raw: String = r.get::<_, Option<String>>(18)?.unwrap_or_else(|| "[]".into());
                 Ok((
                     DraftView {
                         id: r.get(0)?,
                         evaluation_id: r.get(1)?,
-                        post: PostView { observed_id: r.get(2)?, platform_post_id: String::new(), handle: String::new(), text: String::new(), has_media: false, url: String::new() },
+                        post: PostView { observed_id: r.get(2)?, platform_post_id: String::new(), handle: String::new(), text: String::new(), has_media: false, url: String::new(), media: vec![] },
                         kind: r.get(3)?,
                         initial_text: r.get(4)?,
                         edited_text: r.get(5)?,
@@ -289,6 +307,9 @@ pub fn get_view(conn: &Connection, draft_id: &str) -> AppResult<DraftView> {
                         angle: r.get(14)?,
                         reasoning: r.get(15)?,
                         score: r.get(16)?,
+                        outlier_score: r.get(17)?,
+                        breakout_flags: serde_json::from_str(&flags_raw).unwrap_or_default(),
+                        author_followers: r.get(19)?,
                         variants: vec![],
                         steps: vec![],
                     },
@@ -511,6 +532,7 @@ mod tests {
             angle: None,
             model_hint: None,
             context: None,
+            why_working: None,
         };
         let g = generate(&provider, &r).await.unwrap();
         assert_eq!(g.variants.iter().map(|v| v.text.as_str()).collect::<Vec<_>>(), vec!["Use PgBouncer, transaction mode.", "Cap the pool."]);

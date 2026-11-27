@@ -92,6 +92,7 @@ pub async fn creator_publish(state: State<'_, AppState>, p3: State<'_, Phase3>, 
         let max = super::get_settings(&db)?.max_chars;
         gate::approve_top_level(&db, &state.profile_id, &id, &expected_text, max, p3.kill.is_engaged())?
     };
+    crate::commands::ensure_publish_browser_ready(&state).await?;
     let rx = p3.publish.submit_and_wait(approval);
     rx.await.map_err(|_| AppError::Other("the publish worker stopped".into()))?;
     let db = state.db.lock().unwrap();

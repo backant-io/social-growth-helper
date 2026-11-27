@@ -572,8 +572,8 @@ function PromptsPanel() {
         selectedTask,
       ) && (
         <p className="mt-2 text-xs text-zinc-500">
-          An override applies to Scout scoring, Reply Studio drafts, Creator and
-          the Style bench. In Scout, Reply Studio and Creator the safety rules
+          An override applies to Scout scoring, Scout reply drafts, Creator and
+          the Style bench. In Scout and Creator the safety rules
           and output format are always added, and the post input is appended if
           the template leaves out its placeholder.
         </p>

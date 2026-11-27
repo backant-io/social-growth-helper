@@ -17,6 +17,7 @@ async fn chrome_launches_clean_runs_script_and_closes_gracefully() {
         start_url: "about:blank".into(),
         width: 480,
         height: 640,
+        invisible: false,
     };
     let mut driver = ChromeCdpDriver::new();
     driver.launch(cfg).await.expect("launch");

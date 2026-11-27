@@ -8,7 +8,6 @@ const PATHS: Record<SectionId, ReactNode> = {
       <path d="m16 16 4.5 4.5" />
     </>
   ),
-  reply: <path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5V16.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" />,
   creator: (
     <>
       <path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17Z" />

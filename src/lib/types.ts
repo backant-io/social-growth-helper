@@ -97,7 +97,7 @@ export interface AppInfo {
   arch: string;
 }
 
-export type SectionId = "scout" | "reply" | "creator" | "analytics" | "learning" | "style" | "activity" | "settings";
+export type SectionId = "scout" | "creator" | "analytics" | "learning" | "style" | "activity" | "settings";
 
 export type QuitGuardPayload = { kind: "needs_confirmation"; jobs: string[] } | { kind: "proceed" };
 

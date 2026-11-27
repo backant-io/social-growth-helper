@@ -201,6 +201,22 @@ impl BrowserDriver for ChromeCdpDriver {
                 .as_str()
                 .ok_or_else(|| BrowserError::Other("attachToTarget returned no sessionId".into()))?
                 .to_string();
+            if cfg.invisible {
+                if let Ok(v) = session.send("Browser.getVersion", json!({}), None).await {
+                    if let Some(ua) = v["userAgent"].as_str() {
+                        let clean_ua = ua.replace("HeadlessChrome/", "Chrome/");
+                        if clean_ua != ua {
+                            let _ = session
+                                .send(
+                                    "Emulation.setUserAgentOverride",
+                                    json!({ "userAgent": clean_ua }),
+                                    Some(&page_session),
+                                )
+                                .await;
+                        }
+                    }
+                }
+            }
             Ok(Live { session, target_id, page_session, profile_dir: cfg.profile_dir.clone() })
         }
         .await;
@@ -299,6 +315,55 @@ impl BrowserDriver for ChromeCdpDriver {
 
     async fn bring_to_front(&self) -> Result<(), BrowserError> {
         self.page_call("Page.bringToFront", json!({})).await?;
+        Ok(())
+    }
+
+    async fn export_cookies(&self) -> Result<Vec<Value>, BrowserError> {
+        let l = self.live()?;
+        let res = l.session.send("Storage.getCookies", json!({}), None).await?;
+        Ok(res["cookies"].as_array().cloned().unwrap_or_default())
+    }
+
+    async fn import_cookies(&self, cookies: &[Value]) -> Result<(), BrowserError> {
+        if cookies.is_empty() {
+            return Ok(());
+        }
+        let l = self.live()?;
+        let sanitized: Vec<Value> = cookies
+            .iter()
+            .filter_map(|c| {
+                let name = c.get("name").and_then(Value::as_str)?;
+                let value = c.get("value").and_then(Value::as_str)?;
+                if name.is_empty() {
+                    return None;
+                }
+                let mut obj = serde_json::Map::new();
+                obj.insert("name".into(), json!(name));
+                obj.insert("value".into(), json!(value));
+                for key in ["domain", "path", "sameSite", "priority", "sourceScheme"] {
+                    if let Some(v) = c.get(key).filter(|v| !v.is_null()) {
+                        obj.insert(key.into(), v.clone());
+                    }
+                }
+                for key in ["secure", "httpOnly", "sameParty"] {
+                    if let Some(b) = c.get(key).and_then(Value::as_bool) {
+                        obj.insert(key.into(), json!(b));
+                    }
+                }
+                if let Some(exp) = c.get("expires").and_then(Value::as_f64) {
+                    if exp > 0.0 {
+                        obj.insert("expires".into(), json!(exp));
+                    }
+                }
+                if let Some(pk) = c.get("partitionKey").filter(|v| !v.is_null()) {
+                    obj.insert("partitionKey".into(), pk.clone());
+                }
+                Some(Value::Object(obj))
+            })
+            .collect();
+        if !sanitized.is_empty() {
+            l.session.send("Storage.setCookies", json!({ "cookies": sanitized }), None).await?;
+        }
         Ok(())
     }
 

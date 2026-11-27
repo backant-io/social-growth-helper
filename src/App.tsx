@@ -29,7 +29,6 @@ import { p3 } from "./phase3/api";
 import { ActivityPage } from "./phase3/ActivityPage";
 import { CommandPalette, ShortcutHelp } from "./phase3/CommandPalette";
 import { matchShortcut, type PaletteCommand } from "./phase3/logic";
-import { ReplyStudio } from "./phase3/ReplyStudio";
 import { ScoutPage } from "./phase3/ScoutPage";
 
 export default function App() {
@@ -43,7 +42,6 @@ export default function App() {
   const [quitJobs, setQuitJobs] = useState<string[] | null>(null);
   const online = useOnlineStatus();
   const [proposed, setProposed] = useState(0);
-  const [draftId, setDraftId] = useState<string | null>(null);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
 
@@ -159,11 +157,6 @@ export default function App() {
     else if (id === "tour") openTour();
   };
 
-  const openDraft = (id: string | null) => {
-    setDraftId(id);
-    if (id) setSection("reply");
-  };
-
   const locked = status ? isLocked(status.rules.acknowledged, skipped) : false;
   const setupIncomplete =
     !!status && !status.rules.acknowledged && skipped && !overlay;
@@ -207,21 +200,14 @@ export default function App() {
             />
           ) : section === "analytics" && !locked ? (
             <AnalyticsPage />
-          ) : locked && ["scout", "reply", "activity"].includes(section) ? (
+          ) : locked && ["scout", "activity"].includes(section) ? (
             <EmptyState
               section={active}
               locked={locked}
               onReviewRules={() => setOverlay("rules")}
             />
           ) : section === "scout" ? (
-            <ScoutPage onOpenDraft={openDraft} />
-          ) : section === "reply" ? (
-            <ReplyStudio
-              draftId={draftId}
-              onOpenDraft={openDraft}
-              onGoScout={() => setSection("scout")}
-              onGoToSettings={() => setSection("settings")}
-            />
+            <ScoutPage onGoToSettings={() => setSection("settings")} />
           ) : section === "activity" ? (
             <ActivityPage />
           ) : section === "creator" && !locked ? (

@@ -91,6 +91,22 @@ impl BrowserService {
         self.driver.lock().await.bring_to_front().await
     }
 
+    pub async fn export_cookies(&self) -> Result<Vec<serde_json::Value>, BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.export_cookies().await
+    }
+
+    pub async fn import_cookies(&self, cookies: &[serde_json::Value]) -> Result<(), BrowserError> {
+        let d = self.driver.lock().await;
+        if !d.is_running() {
+            return Err(BrowserError::Disconnected);
+        }
+        d.import_cookies(cookies).await
+    }
+
     pub async fn is_running(&self) -> bool {
         self.driver.lock().await.is_running()
     }
@@ -200,6 +216,7 @@ mod tests {
             start_url: X_HOME_URL.into(),
             width: 1,
             height: 1,
+            invisible: false,
         }
     }
 

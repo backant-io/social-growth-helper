@@ -97,12 +97,25 @@ pub fn evaluate(signals: &PostSignals, t: &ViralThresholds) -> ViralVerdict {
         reasons.push(format!("{:.0}% as many bookmarks as likes, so people are saving it.", bookmark_ratio * 100.0));
     }
 
+    let epk = m.views.filter(|&v| v >= 1_000).map(|v| engagement / (v as f64 / 1_000.0));
+    let view_efficient = engagement >= 60.0 && epk.is_some_and(|r| r >= 25.0);
+    if view_efficient && !overperforms && signals.author_followers.is_none() {
+        reasons.push(format!("{:.1} weighted engagement per 1K views.", epk.unwrap_or(0.0)));
+    }
+
     let reach_pts = 60.0 * (reach_multiple / (t.reach_multiple * 4.0)).min(1.0);
     let save_pts = 40.0 * (bookmark_ratio / (t.bookmark_ratio * 2.0)).min(1.0);
-    let score = if enough { (reach_pts + save_pts).clamp(0.0, 100.0) } else { 0.0 };
+    let view_pts = epk.map(|r| 35.0 * (r / 45.0).min(1.0)).unwrap_or(0.0);
+    let score = if enough {
+        (reach_pts + save_pts).max(view_pts + save_pts * 0.6).clamp(0.0, 100.0)
+    } else if view_efficient {
+        (view_pts + save_pts * 0.5).clamp(0.0, 100.0)
+    } else {
+        0.0
+    };
 
     ViralVerdict {
-        flagged: overperforms || saved,
+        flagged: overperforms || saved || (signals.author_followers.is_none() && view_efficient),
         score: (score * 10.0).round() / 10.0,
         engagement,
         reach_multiple,

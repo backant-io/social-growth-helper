@@ -99,10 +99,10 @@ export interface Shortcut {
 
 export const SHORTCUTS: Shortcut[] = [
   { keys: "Cmd/Ctrl+K", label: "Open the command palette" },
-  { keys: "Cmd/Ctrl+Enter", label: "Publish the current draft (opens the confirmation)" },
+  { keys: "Cmd/Ctrl+Enter", label: "Send the reply for the current post" },
   { keys: "J / K", label: "Next / previous queue item or draft" },
   { keys: "D", label: "Dismiss the current queue item" },
-  { keys: "Enter", label: "Open the selected queue item in Reply Studio" },
+  { keys: "Enter", label: "Expand the selected queue item and draft a reply" },
   { keys: "?", label: "Show this list" },
   { keys: "Esc", label: "Close a dialog or the palette" },
 ];

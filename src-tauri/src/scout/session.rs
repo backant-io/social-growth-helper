@@ -2,8 +2,12 @@
 
 use super::filter::{classify, FilterConfig, FilterCounts, DEFAULT_MAX_AGE_SECS};
 use super::model::{parse_metrics_label, parse_rfc3339_unix, velocity, FeedRead, Metrics, ScrapedPost};
+use super::outlier::{evaluate_outlier, OutlierSignals};
 use super::repo::{self, SessionParams};
-use super::score::{apply_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
+use super::score::{apply_outlier_and_preferences, build_scoring_prompt, heuristic_score, parse_scores, rubric_with_preferences, Candidate, Score, BATCH_SIZE};
+use crate::drafts::edit::DEFAULT_MAX_CHARS;
+use crate::drafts::generate::{self as draft_gen, GenRequest, Instruction};
+use crate::drafts::repo as draft_repo;
 use crate::browser::health::{report_halt, BrowserState};
 use crate::browser::service::{BrowserService, X_FOLLOWING_URL, X_HOME_URL};
 use crate::completion::{CompletionProvider, CompletionRequest, TaskSlot};
@@ -60,7 +64,14 @@ pub struct SessionSummary {
 
 /// Feeds every organic post the scout reads into continuous viral detection (OGC-06). It runs before the scout's
 /// own filters, because a stale or already-scored post can still be a good format source. Never fails the session.
-fn consider_for_formats(env: &ScoutEnv<'_>, thresholds: &ViralThresholds, post: &ScrapedPost, metrics: &Metrics, own_handle: Option<&str>) -> bool {
+fn consider_for_formats(
+    env: &ScoutEnv<'_>,
+    thresholds: &ViralThresholds,
+    post: &ScrapedPost,
+    metrics: &Metrics,
+    own_handle: Option<&str>,
+    author_followers: Option<i64>,
+) -> bool {
     let (Some(id), Some(handle)) = (post.id.as_deref(), post.handle.as_deref()) else { return false };
     if post.promoted || post.text.trim().is_empty() || own_handle.is_some_and(|me| me.eq_ignore_ascii_case(handle)) {
         return false;
@@ -68,7 +79,7 @@ fn consider_for_formats(env: &ScoutEnv<'_>, thresholds: &ViralThresholds, post: 
     let input = PostInput {
         platform_post_id: id.to_string(),
         author_handle: handle.to_string(),
-        author_followers: None,
+        author_followers: author_followers.and_then(|f| u64::try_from(f).ok()),
         text: post.text.clone(),
         metrics: PostMetrics { likes: metrics.likes, reposts: metrics.reposts, replies: metrics.replies, bookmarks: metrics.bookmarks, views: (metrics.views > 0).then_some(metrics.views) },
         posted_at: post.time.clone(),
@@ -114,7 +125,7 @@ async fn score_batch(env: &ScoutEnv<'_>, rubric: &str, batch: &[Candidate], pref
         if m != "heuristic" {
             *model_name = m.clone();
         }
-        out.push((c.clone(), apply_preferences(s, c.post.handle.as_deref().unwrap_or(""), prefs), m));
+        out.push((c.clone(), apply_outlier_and_preferences(s, c, prefs), m));
     }
     out
 }
@@ -336,7 +347,11 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             new_ids += 1;
             target_new += 1;
             let metrics = post.metrics_label.as_deref().map(parse_metrics_label).unwrap_or_default();
-            if consider_for_formats(env, &viral_thresholds, &post, &metrics, read.me.as_deref()) {
+            let author_followers = post.handle.as_deref().and_then(|h| {
+                let db = env.db.lock().unwrap();
+                repo::lookup_author_followers(&db, env.profile_id, h)
+            });
+            if consider_for_formats(env, &viral_thresholds, &post, &metrics, read.me.as_deref(), author_followers) {
                 format_candidates += 1;
             }
             let drop = {
@@ -349,7 +364,17 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
             }
             let age_secs = post.time.as_deref().and_then(parse_rfc3339_unix).map(|t| (cfg.now_unix - t).max(0)).unwrap_or(3600);
             let v = velocity(&metrics, age_secs);
-            candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, image: None });
+            let outlier = evaluate_outlier(&OutlierSignals {
+                metrics: &metrics,
+                age_minutes: age_secs / 60,
+                author_followers,
+                author_verified: post.author_verified,
+                is_repost: post.is_repost,
+                has_media: post.has_media || !post.resolved_media().is_empty(),
+                text: &post.text,
+                has_context: post.context_text().is_some(),
+            });
+            candidates.push(Candidate { post, metrics, age_minutes: age_secs / 60, velocity: v, author_followers, outlier, image: None });
         }
         attach_thumbnails(env, &mut candidates, &mut thumb_budget).await;
 
@@ -358,13 +383,64 @@ pub async fn run_session(env: &ScoutEnv<'_>, session_id: &str, params: &SessionP
                 continue 'main;
             }
             let results = score_batch(env, &rubric, batch, &prefs, &mut heuristic_scored, &mut model_name).await;
-            let db = env.db.lock().unwrap();
-            for (c, s, model) in results {
-                let Ok(obs) = repo::upsert_observed(&db, env.profile_id, &c.post, &c.metrics, c.velocity, &params.feed_source) else { continue };
-                if repo::insert_evaluation(&db, &obs, session_id, rubric_version, &model, s.score, &s.angle, &s.reasoning).is_ok() {
-                    scored += 1;
-                    if s.score >= params.threshold {
-                        queued += 1;
+            let mut to_draft: Vec<(String, String, String)> = vec![];
+            {
+                let db = env.db.lock().unwrap();
+                for (c, s, model) in results {
+                    let Ok(obs) = repo::upsert_observed(&db, env.profile_id, &c.post, &c.metrics, c.velocity, &params.feed_source, c.author_followers) else { continue };
+                    if let Ok(eval_id) = repo::insert_evaluation_with_outlier(
+                        &db,
+                        &obs,
+                        session_id,
+                        rubric_version,
+                        &model,
+                        s.score,
+                        &s.angle,
+                        &s.reasoning,
+                        Some(c.outlier.outlier_score),
+                        &c.outlier.breakout_flags,
+                    ) {
+                        scored += 1;
+                        if s.score >= params.threshold {
+                            queued += 1;
+                            to_draft.push((eval_id, s.angle, s.reasoning));
+                        }
+                    }
+                }
+            }
+            if env.completion.is_configured(TaskSlot::ReplyDrafting) && !to_draft.is_empty() {
+                for (eval_id, angle, reasoning) in to_draft {
+                    if env.kill.is_engaged() || env.stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let prep = {
+                        let db = env.db.lock().unwrap();
+                        let Ok(draft_id) = draft_repo::create_for_evaluation(&db, env.profile_id, &eval_id) else { continue };
+                        let Ok(view) = draft_repo::get_view(&db, &draft_id) else { continue };
+                        if !view.edited_text.trim().is_empty() || !view.variants.is_empty() {
+                            continue;
+                        }
+                        let Ok(style) = draft_repo::load_style_for_generation(&db, env.profile_id, &view.post.text) else { continue };
+                        let context = draft_repo::post_context(&db, &view.post.observed_id).ok().flatten();
+                        Some((draft_id, view, style, context))
+                    };
+                    let Some((draft_id, view, style, context)) = prep else { continue };
+                    let req = GenRequest {
+                        quote: view.kind == "quote",
+                        handle: &view.post.handle,
+                        post_text: &view.post.text,
+                        max_chars: DEFAULT_MAX_CHARS,
+                        style: &style,
+                        instruction: Instruction::Fresh,
+                        current: None,
+                        angle: (!angle.trim().is_empty()).then_some(angle.as_str()),
+                        model_hint: None,
+                        context: context.as_deref(),
+                        why_working: (!reasoning.trim().is_empty()).then_some(reasoning.as_str()),
+                    };
+                    if let Ok(gen) = draft_gen::generate(&*env.completion, &req).await {
+                        let db = env.db.lock().unwrap();
+                        let _ = draft_repo::add_variants(&db, &draft_id, &gen.variants, &gen.model);
                     }
                 }
             }
@@ -459,7 +535,7 @@ mod tests {
 
     async fn browser(mock: &MockDriver) -> BrowserService {
         let svc = BrowserService::new(Box::new(mock.clone()));
-        svc.launch(ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: X_HOME_URL.into(), width: 1, height: 1 }).await.unwrap();
+        svc.launch(ChromeLaunchConfig { binary_path: "/x".into(), profile_dir: "/p".into(), start_url: X_HOME_URL.into(), width: 1, height: 1, invisible: false }).await.unwrap();
         svc
     }
 

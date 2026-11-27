@@ -96,14 +96,38 @@ pub fn usable_posts(raw: Vec<RawPost>, creator: &str) -> Vec<ScannedPost> {
 
 const SCROLL_STEPS: usize = 4;
 
-/// Opens a creator's profile in the X window and reads the posts it renders. Read-only apart from scrolling.
-pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<ScannedPost>, BrowserError> {
+/// Read-only extraction of the profile header's follower count label (e.g. `"1,234 Followers"` or `"42.1K"`).
+pub const READ_PROFILE_FOLLOWERS_JS: &str = r#"(() => {
+  const el = document.querySelector('a[href$="/followers"], a[href$="/verified_followers"]');
+  return el ? (el.innerText || el.getAttribute('aria-label') || '') : null;
+})()"#;
+
+pub fn parse_followers_label(label: &str) -> Option<u64> {
+    let token = label
+        .split_whitespace()
+        .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()))?;
+    parse_count(token)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileScan {
+    pub followers: Option<u64>,
+    pub posts: Vec<ScannedPost>,
+}
+
+/// Opens a creator's profile in the X window and reads their follower count plus recent posts. Read-only apart from scrolling.
+pub async fn scan_profile_with_followers(browser: &BrowserService, handle: &str) -> Result<ProfileScan, BrowserError> {
     let d = browser.lock().await;
     if !d.is_running() {
         return Err(BrowserError::Disconnected);
     }
     d.navigate(&format!("https://x.com/{handle}")).await?;
     tokio::time::sleep(Duration::from_millis(1500)).await;
+    let followers = d
+        .eval_json(READ_PROFILE_FOLLOWERS_JS)
+        .await
+        .ok()
+        .and_then(|v| v.as_str().and_then(parse_followers_label));
     let mut all: Vec<RawPost> = Vec::new();
     for step in 0..=SCROLL_STEPS {
         let v = d.eval_json(READ_POSTS_WITH_METRICS_JS).await?;
@@ -119,7 +143,12 @@ pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<
             tokio::time::sleep(Duration::from_millis(1200)).await;
         }
     }
-    Ok(usable_posts(all, handle))
+    Ok(ProfileScan { followers, posts: usable_posts(all, handle) })
+}
+
+/// Opens a creator's profile in the X window and reads the posts it renders. Read-only apart from scrolling.
+pub async fn scan_profile(browser: &BrowserService, handle: &str) -> Result<Vec<ScannedPost>, BrowserError> {
+    Ok(scan_profile_with_followers(browser, handle).await?.posts)
 }
 
 #[cfg(test)]

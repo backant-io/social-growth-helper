@@ -24,6 +24,20 @@ pub fn allocate_loopback_port() -> Result<u16, BrowserError> {
 }
 
 pub fn build_chrome_args(cfg: &ChromeLaunchConfig, debug_port: u16) -> Vec<String> {
+    if cfg.invisible {
+        return vec![
+            format!("--user-data-dir={}", cfg.profile_dir.display()),
+            "--headless=new".to_string(),
+            "--hide-scrollbars".to_string(),
+            "--mute-audio".to_string(),
+            format!("--remote-debugging-port={debug_port}"),
+            "--remote-debugging-address=127.0.0.1".to_string(),
+            "--no-first-run".to_string(),
+            "--no-default-browser-check".to_string(),
+            format!("--window-size={},{}", cfg.width, cfg.height),
+            cfg.start_url.clone(),
+        ];
+    }
     vec![
         format!("--user-data-dir={}", cfg.profile_dir.display()),
         format!("--app={}", cfg.start_url),
@@ -171,7 +185,18 @@ mod tests {
             start_url: "https://x.com/home".into(),
             width: 1100,
             height: 900,
+            invisible: false,
         }
+    }
+
+    #[test]
+    fn invisible_args_use_new_headless_without_app_window() {
+        let args = build_chrome_args(&ChromeLaunchConfig { invisible: true, ..cfg() }, 4242);
+        assert!(args.contains(&"--headless=new".to_string()));
+        assert!(args.contains(&"--hide-scrollbars".to_string()));
+        assert!(args.contains(&"--mute-audio".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("--app=")));
+        assert!(args.contains(&"https://x.com/home".to_string()));
     }
 
     #[test]

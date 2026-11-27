@@ -172,15 +172,19 @@ pub async fn formats_watch_scan(state: State<'_, AppState>, id: String) -> AppRe
         (entry, repo::get_thresholds(&db)?)
     };
     let _job = state.jobs.register("Scanning a watched creator");
-    let posts = scan::scan_profile(&state.browser, &entry.handle).await?;
+    let scan_res = scan::scan_profile_with_followers(&state.browser, &entry.handle).await?;
+    let followers = scan_res.followers.or(entry.followers);
 
     let db = state.db.lock().unwrap();
-    let mut summary = ScanSummary { handle: entry.handle.clone(), posts_read: posts.len(), flagged: 0, new_candidates: 0 };
-    for p in posts {
+    if let Some(f) = scan_res.followers {
+        let _ = db.execute("UPDATE creator_watchlist SET followers = ?2 WHERE id = ?1", rusqlite::params![entry.id, f as i64]);
+    }
+    let mut summary = ScanSummary { handle: entry.handle.clone(), posts_read: scan_res.posts.len(), flagged: 0, new_candidates: 0 };
+    for p in scan_res.posts {
         let input = PostInput {
             platform_post_id: p.id,
             author_handle: p.handle,
-            author_followers: entry.followers,
+            author_followers: followers,
             text: p.text,
             metrics: p.metrics,
             posted_at: p.posted_at,

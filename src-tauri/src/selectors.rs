@@ -39,6 +39,10 @@ pub mod sel {
     sel!(QUOTE_CARD, "[data-testid=\"quoteTweet\"]", []);
     sel!(SHOW_MORE, "[data-testid=\"tweet-text-show-more-link\"]", []);
     sel!(IMAGE, "[data-testid=\"tweetPhoto\"] img", []);
+    sel!(VIDEO_PLAYER, "[data-testid=\"videoPlayer\"]", ["[data-testid=\"videoComponent\"]"]);
+    sel!(VERIFIED, "[data-testid=\"icon-verified\"]", ["svg[aria-label*=\"Verified\"]"]);
+    sel!(SOCIAL_CONTEXT, "[data-testid=\"socialContext\"]", []);
+    sel!(PROFILE_FOLLOWERS, "a[href$=\"/followers\"]", ["a[href$=\"/verified_followers\"]"]);
     sel!(FEED_TAB, "[role=\"tab\"]", []);
     sel!(ACCOUNT_SWITCHER, "[data-testid=\"SideNav_AccountSwitcher_Button\"]", []);
     sel!(LIKE, "[data-testid=\"like\"]", ["button[aria-label*=\"Like\"]"]);
@@ -71,6 +75,7 @@ pub fn registry() -> Vec<&'static Selector> {
     use sel::*;
     vec![
         &TWEET, &TWEET_TEXT, &AUTHOR, &PERMALINK_TIME, &PROMOTED, &REPLY_RESTRICTED, &METRICS_GROUP, &MEDIA, &QUOTE_CARD, &SHOW_MORE, &IMAGE,
+        &VIDEO_PLAYER, &VERIFIED, &SOCIAL_CONTEXT, &PROFILE_FOLLOWERS,
         &ACCOUNT_SWITCHER, &LIKE, &UNLIKE, &REPLY, &RETWEET, &UNRETWEET, &RETWEET_CONFIRM, &UNRETWEET_CONFIRM,
         &BOOKMARK, &UNBOOKMARK, &FOLLOW, &UNFOLLOW, &UNFOLLOW_CONFIRM, &CARET, &MENU_ITEM, &COMPOSER, &SUBMIT, &TOAST,
         &CHALLENGE_CLOUDFLARE, &CHALLENGE_ARKOSE, &CHALLENGE_TEXT_INPUT,
@@ -162,21 +167,53 @@ for (const a of document.querySelectorAll({tweet}[0])) {{
   const replying = (a.innerText.match(REPLYING) || [])[1] || null;
   const handle = m ? m[1] : null;
   const parent = replying && prev && prev.handle && prev.handle.toLowerCase() === replying.toLowerCase() ? prev.text : null;
+  const imageUrls = [...a.querySelectorAll({image}[0])].filter(i => !quote || !quote.contains(i)).map(i => i.src).filter(u => /^https:\/\/pbs\.twimg\.com\//.test(u)).slice(0, 4);
+  const media = [];
+  for (const img of a.querySelectorAll({image}[0])) {{
+    if (quote && quote.contains(img)) continue;
+    if (!/^https:\/\/pbs\.twimg\.com\//.test(img.src || '')) continue;
+    if (!media.some(x => x.url === img.src)) media.push({{ kind: 'image', url: img.src, poster_url: null, alt: img.alt || null, duration: null }});
+    if (media.length >= 4) break;
+  }}
+  for (const vp of a.querySelectorAll({video_player}[0])) {{
+    if (quote && quote.contains(vp)) continue;
+    const v = vp.querySelector('video');
+    if (!v) continue;
+    let src = v.currentSrc || v.src || (v.querySelector('source') || {{}}).src || null;
+    if (src && !/^https:\/\//.test(src)) src = null;
+    if (!src) {{
+      try {{
+        for (const k of Object.keys(vp)) {{
+          if (!k.startsWith('__reactProps$') && !k.startsWith('__reactFiber$')) continue;
+          const s = JSON.stringify(vp[k], (key, val) => (key === 'children' || key === 'return' || key === 'stateNode' ? undefined : val));
+          const mp4s = s ? s.match(/https:\/\/video\.twimg\.com\/[^"\\]+\.mp4[^"\\]*/g) : null;
+          if (mp4s && mp4s.length) {{ src = mp4s[mp4s.length - 1]; break; }}
+        }}
+      }} catch (_e) {{}}
+    }}
+    const poster = /^https:\/\/pbs\.twimg\.com\//.test(v.poster || '') ? v.poster : null;
+    const isGif = (src && src.includes('/tweet_video/')) || (poster && poster.includes('/tweet_video_thumb/'));
+    const durMatch = (vp.innerText || '').match(/\b\d+:\d{{2}}\b/);
+    if (src || poster) media.push({{ kind: isGif ? 'gif' : 'video', url: src, poster_url: poster, alt: null, duration: durMatch ? durMatch[0] : null }});
+  }}
   posts.push({{
     id: m ? m[2] : null,
     handle,
     author: text(a, {author}).split('\n')[0],
+    author_verified: !!$all({verified}, a),
+    is_repost: !!$all({social_context}, a),
     text: body ? body.innerText : '',
     lang: body ? body.getAttribute('lang') : null,
     promoted: !!$all({promo}, a),
     reply_restricted: !!$all({restricted}, a),
-    has_media: !!$all({media}, a),
+    has_media: !!$all({media_sel}, a),
     time: a.querySelector('time')?.getAttribute('datetime') || null,
     metrics_label: ($all({metrics}, a) || {{ getAttribute: () => null }}).getAttribute('aria-label'),
     quoted,
     parent,
     replying_to: replying,
-    image_urls: [...a.querySelectorAll({image}[0])].filter(i => !quote || !quote.contains(i)).map(i => i.src).filter(u => /^https:\/\/pbs\.twimg\.com\//.test(u)).slice(0, 2),
+    image_urls: imageUrls,
+    media,
     truncated: !!$all({more}, a),
     sensitive: [...a.querySelectorAll('[role="button"]')].some(b => SENSITIVE.test(b.innerText || ''))
   }});
@@ -189,12 +226,15 @@ return {{ state: pageState(), me, url: location.href, posts }};
         tweet = list(&sel::TWEET),
         ttext = list(&sel::TWEET_TEXT),
         author = list(&sel::AUTHOR),
+        verified = list(&sel::VERIFIED),
+        social_context = list(&sel::SOCIAL_CONTEXT),
         promo = list(&sel::PROMOTED),
         restricted = list(&sel::REPLY_RESTRICTED),
-        media = list(&sel::MEDIA),
+        media_sel = list(&sel::MEDIA),
         metrics = list(&sel::METRICS_GROUP),
         quote = list(&sel::QUOTE_CARD),
         image = list(&sel::IMAGE),
+        video_player = list(&sel::VIDEO_PLAYER),
         more = list(&sel::SHOW_MORE),
     )
 }
