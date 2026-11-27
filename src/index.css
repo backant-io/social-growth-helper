@@ -198,6 +198,29 @@ pre,
   font-family: var(--font-mono);
 }
 
+/* Native dropdown popups ignore transparent backgrounds and inherit the text colour, which made the
+   model lists unreadable when the popup theme and the app theme disagreed. Always give them both. */
+select {
+  color-scheme: light;
+  color: var(--fg);
+}
+
+select option,
+select optgroup {
+  background-color: var(--bg);
+  color: var(--fg);
+}
+
+select option:disabled {
+  color: var(--fg-faint);
+}
+
+@media (prefers-color-scheme: dark) {
+  select {
+    color-scheme: dark;
+  }
+}
+
 ::selection {
   background: var(--fg);
   color: var(--bg);

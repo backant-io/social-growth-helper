@@ -41,7 +41,7 @@ function Welcome({ onStart, onSkip }: { onStart: () => void; onSkip?: () => void
             </button>
           )}
         </div>
-        <p className="mt-4 text-xs text-zinc-500">Skipping keeps everything that touches X switched off. You can finish setup any time from the banner at the top.</p>
+        <p className="mt-4 text-xs text-zinc-500">Skipping keeps everything that touches X switched off. You can finish setup any time from Settings.</p>
       </div>
     </div>
   );

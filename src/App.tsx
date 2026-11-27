@@ -74,6 +74,13 @@ export default function App() {
   }, [acknowledged]);
 
   useEffect(() => {
+    if (acknowledged && skipped) {
+      clearSetupSkipped();
+      setSkipped(false);
+    }
+  }, [acknowledged, skipped]);
+
+  useEffect(() => {
     if (!status || overlay || skipped) return;
     if (!status.tour_completed) setOverlay("full");
     // Re-prompt for the rules only when the notice version changed.
@@ -255,11 +262,11 @@ export default function App() {
           onNavigate={setSection}
           onFinished={async () => {
             const wizard = overlay === "full" || overlay === "setup";
-            closeOverlay();
-            if (wizard) setSection("scout");
             clearSetupSkipped();
             setSkipped(false);
             await refresh();
+            closeOverlay();
+            if (wizard) setSection("scout");
           }}
         />
       )}

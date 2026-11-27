@@ -266,21 +266,21 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
   const hasKeyProvider = providers.some((p) => (p.provider_type === "anthropic_api" || p.provider_type === "xai_api") && p.status === "connected");
 
   return (
-    <div className="space-y-8">
+    <div className="flex flex-col gap-8">
       {error && (
-        <div role="alert" className="rounded-lg border border-red-200 px-3.5 py-2.5 text-sm text-red-800 dark:border-red-900 dark:text-red-200">
+        <div role="alert" className="order-first rounded-lg border border-red-200 px-3.5 py-2.5 text-sm text-red-800 dark:border-red-900 dark:text-red-200">
           {error}
         </div>
       )}
       {note && (
-        <p role="status" data-testid="models-note" className="text-sm text-emerald-700 dark:text-emerald-400">
+        <p role="status" data-testid="models-note" className="order-first text-sm text-emerald-700 dark:text-emerald-400">
           {note}
         </p>
       )}
 
       <section aria-labelledby="prov-h">
         <h2 id="prov-h" className="eyebrow mb-1">
-          {compact ? "Pick one" : "Providers"}
+          {compact && connected.length === 0 ? "Pick one" : "Providers"}
         </h2>
         <ul className="border-t border-zinc-200 dark:border-zinc-800">
           {PRIMARY.map(rowFor)}
@@ -294,7 +294,7 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
       </section>
 
       {connected.length > 0 && (
-        <section aria-labelledby="def-h" className="space-y-3">
+        <section aria-labelledby="def-h" className={`space-y-3 ${compact ? "order-first" : ""}`}>
           <div className="flex flex-wrap items-end justify-between gap-2">
             <div>
               <h2 id="def-h" className="eyebrow mb-1">
