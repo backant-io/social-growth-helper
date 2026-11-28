@@ -5,6 +5,8 @@ import type { EvaluatedWidget } from "./types";
 interface WidgetCardProps {
   item: EvaluatedWidget;
   customizeMode: boolean;
+  /** Render as a bare number tile (used for runs of KPI widgets outside customize mode). */
+  tile?: boolean;
   isDragging: boolean;
   isDropTarget: boolean;
   canMoveUp: boolean;
@@ -69,6 +71,7 @@ function snapHeightSteps(currentH: number, deltaY: number): number {
 export function WidgetCard({
   item,
   customizeMode,
+  tile = false,
   isDragging,
   isDropTarget,
   canMoveUp,
@@ -84,7 +87,6 @@ export function WidgetCard({
   onDragEnd,
 }: WidgetCardProps) {
   const { widget, data, error } = item;
-  const isKpi = widget.spec.chart_type === "kpi";
   const [liveSize, setLiveSize] = useState<{ w: number; h: number } | null>(null);
   const startRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
@@ -142,34 +144,34 @@ export function WidgetCard({
         onDrop();
       }}
       onDragEnd={onDragEnd}
-      className={`relative col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} group flex flex-col rounded-lg border bg-transparent p-5 transition-all ${
-        isDropTarget
-          ? "border-sky-500 ring-2 ring-sky-500/50"
-          : customizeMode
-            ? "border-zinc-200 dark:border-zinc-800 ring-1 ring-sky-500/35 cursor-grab active:cursor-grabbing"
-            : "border-transparent border-t-zinc-200 dark:border-t-zinc-800 rounded-none px-0"
+      className={`group relative flex flex-col ${
+        customizeMode
+          ? `col-span-12 ${colSpanClass(effectiveW)} ${HEIGHT_CLASSES[effectiveH]} cursor-grab rounded-lg border bg-transparent p-5 active:cursor-grabbing ${
+              isDropTarget ? "border-zinc-950 dark:border-zinc-100" : "border-zinc-200 dark:border-zinc-800"
+            }`
+          : tile
+            ? "col-span-1 min-w-0"
+            : `col-span-12 min-w-0 ${colSpanClass(effectiveW)} border-t border-zinc-200 pt-5 dark:border-zinc-800`
       } ${isDragging ? "opacity-45" : ""}`}
     >
-      <header className="mb-3 flex items-start justify-between gap-2">
+      <header className={`flex items-start justify-between gap-2 ${tile && !customizeMode ? "mb-1" : "mb-4"}`}>
         <div className="flex items-start gap-1.5 min-w-0">
           {customizeMode && (
             <span
               title="Drag widget to reorder"
               aria-label="Drag handle"
-              className="mt-0.5 select-none text-zinc-400 text-xs leading-none"
+              className="mt-0.5 select-none text-xs leading-none text-zinc-400"
             >
               ⋮⋮
             </span>
           )}
           <div className="min-w-0">
-            <h3 className="eyebrow leading-snug">
+            <h3
+              title={widget.spec.options.subtitle ?? undefined}
+              className={`leading-snug ${tile && !customizeMode ? "text-sm text-zinc-600 dark:text-zinc-400" : "text-sm font-medium"}`}
+            >
               {widget.title}
             </h3>
-            {!isKpi && widget.spec.options.subtitle && (
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
-                {widget.spec.options.subtitle}
-              </p>
-            )}
           </div>
         </div>
 
@@ -250,10 +252,9 @@ export function WidgetCard({
 
       <div className="flex-1">
         {error ? (
-          <div className="rounded-md border border-rose-200 dark:border-rose-900 bg-rose-50/70 dark:bg-rose-950/40 p-3 text-xs text-rose-700 dark:text-rose-300">
-            <div className="font-medium">Widget query blocked or failed</div>
-            <p className="mt-0.5 opacity-90">{error}</p>
-          </div>
+          <p className="border-l-2 border-red-600 py-1 pl-3 text-sm text-zinc-700 dark:text-zinc-300">
+            This chart could not load. <span className="text-zinc-500">{error}</span>
+          </p>
         ) : data ? (
           <WidgetChartRenderer spec={widget.spec} data={data} />
         ) : null}

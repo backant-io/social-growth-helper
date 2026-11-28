@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   btn,
   btnGhost,
@@ -13,6 +13,7 @@ interface LayoutControlsProps {
   layouts: DashboardLayout[];
   windowDays: number;
   customizeMode: boolean;
+  description?: ReactNode;
   onWindowChange: (days: number) => void;
   onToggleCustomize: () => void;
   onOpenBuilder: () => void;
@@ -29,6 +30,7 @@ export function LayoutControls({
   layouts,
   windowDays,
   customizeMode,
+  description,
   onWindowChange,
   onToggleCustomize,
   onOpenBuilder,
@@ -62,23 +64,20 @@ export function LayoutControls({
     <div className="space-y-4">
       <PageHeader
         title="Analytics"
-        description="How your posts and replies are doing."
+        description={description}
         actions={
           <>
             <Segmented
               label="Time window"
               value={windowDays}
-              options={[7, 30].map((d) => ({ value: d, label: `${d}d` }))}
+              options={[7, 30].map((d) => ({ value: d, label: `${d} days` }))}
               onChange={onWindowChange}
             />
-            <button
-              type="button"
-              onClick={onToggleCustomize}
-              aria-pressed={customizeMode}
-              className={customizeMode ? btn : btnGhost}
-            >
-              {customizeMode ? "Done" : "Customize"}
-            </button>
+            {customizeMode && (
+              <button type="button" onClick={onToggleCustomize} className={btn}>
+                Done
+              </button>
+            )}
           </>
         }
       />

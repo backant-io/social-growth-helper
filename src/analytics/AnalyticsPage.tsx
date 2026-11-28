@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { btn, btnGhost, btnPrimary, EmptyBlock, muted, Notice, Page, PageHeader } from "../components/ui";
+import { btn, btnGhost, btnPrimary, Disclosure, EmptyBlock, LoadingBlock, Notice, Page, PageHeader } from "../components/ui";
 import { listen } from "../lib/api";
 import type { SectionId } from "../lib/types";
 import { analyticsApi } from "./api";
@@ -12,6 +12,8 @@ import type {
   ActivitySummary,
   DashboardSnapshot,
   DashboardWidget,
+  EvaluatedWidget,
+  PeriodOverview,
   WidgetPositionUpdate,
   WidgetSpec,
 } from "./types";
@@ -54,7 +56,7 @@ function hasLocalActivity(a?: ActivitySummary): boolean {
   );
 }
 
-function CollectedActivityStrip({ activity }: { activity: ActivitySummary }) {
+function CollectedActivity({ activity }: { activity: ActivitySummary }) {
   const items = [
     { label: "Scouted posts", value: activity.scouted_posts },
     { label: "Evaluated", value: activity.evaluated_posts },
@@ -68,28 +70,81 @@ function CollectedActivityStrip({ activity }: { activity: ActivitySummary }) {
   ];
 
   return (
-    <section
-      aria-label="Your activity"
-      className="space-y-3 border-t border-zinc-200 pt-5 dark:border-zinc-800"
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="eyebrow">Your activity</h2>
-        <span className={`text-xs ${muted}`}>Counted as you go</span>
-      </div>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-9">
+    <Disclosure summary="Your activity">
+      <dl className="grid gap-x-10 sm:grid-cols-2">
         {items.map((stat) => (
           <div
             key={stat.label}
-            className="border-t border-zinc-200 pt-3 dark:border-zinc-800"
+            className="flex items-baseline justify-between border-b border-zinc-200 py-2 text-sm dark:border-zinc-800"
           >
-            <div className="eyebrow">{stat.label}</div>
-            <div className="mt-1 font-mono text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-              {stat.value.toLocaleString()}
-            </div>
+            <dt className="text-zinc-600 dark:text-zinc-400">{stat.label}</dt>
+            <dd className="font-mono tabular-nums">{stat.value.toLocaleString()}</dd>
           </div>
         ))}
-      </div>
-    </section>
+      </dl>
+    </Disclosure>
+  );
+}
+
+/** One quiet line under the title: X period totals, then when the numbers last refreshed. */
+export function headerLine(
+  overview: PeriodOverview | null | undefined,
+  hasData: boolean,
+  syncLine: string | null,
+): string {
+  const parts: Array<string | null> = [];
+  if (hasData && overview) {
+    if (overview.engagements != null) parts.push(`${formatCompact(overview.engagements)} engagements`);
+    if (overview.profile_visits != null) parts.push(`${formatCompact(overview.profile_visits)} profile visits`);
+  }
+  parts.push(syncLine);
+  return parts.filter(Boolean).join(" · ");
+}
+
+type WidgetRun =
+  | { kind: "kpis"; items: Array<{ item: EvaluatedWidget; index: number }> }
+  | { kind: "chart"; item: EvaluatedWidget; index: number }
+  | { kind: "waiting"; key: string };
+
+/** KPI tiles that read X's account-level period totals (the `analytics_period_snapshots` row). */
+export function isPeriodTotalKpi(item: EvaluatedWidget): boolean {
+  return item.widget.spec.chart_type === "kpi" && item.widget.spec.view === "v_analytics_account_overview";
+}
+
+/**
+ * Groups consecutive KPI widgets so they read as one row of numbers, keeping the saved order.
+ * Without a period snapshot for the window, the period-total KPIs collapse into one waiting run.
+ */
+export function groupWidgets(widgets: EvaluatedWidget[], hasPeriodSnapshot = true): WidgetRun[] {
+  const runs: WidgetRun[] = [];
+  let waitingAdded = false;
+  widgets.forEach((item, index) => {
+    if (!hasPeriodSnapshot && isPeriodTotalKpi(item)) {
+      if (!waitingAdded) {
+        runs.push({ kind: "waiting", key: item.widget.id });
+        waitingAdded = true;
+      }
+      return;
+    }
+    if (item.widget.spec.chart_type === "kpi") {
+      const last = runs[runs.length - 1];
+      if (last && last.kind === "kpis") last.items.push({ item, index });
+      else runs.push({ kind: "kpis", items: [{ item, index }] });
+    } else {
+      runs.push({ kind: "chart", item, index });
+    }
+  });
+  return runs;
+}
+
+function WaitingForCapture({ windowDays }: { windowDays: number }) {
+  return (
+    <div className="col-span-12 space-y-1" role="status">
+      <p className="text-sm font-medium">Waiting for first X Analytics capture</p>
+      <p className="text-sm text-zinc-500">
+        Your {windowDays}-day totals appear here on their own. Nothing to do.
+      </p>
+    </div>
   );
 }
 
@@ -255,7 +310,7 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
   if (!snapshot) {
     return (
       <Page wide>
-        <PageHeader title="Analytics" description="How your posts and replies are doing." />
+        <PageHeader title="Analytics" />
         {error ? (
           <div className="space-y-3">
             <Notice tone="error">{error}</Notice>
@@ -264,22 +319,49 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-12 gap-5" role="status" aria-label="Loading analytics dashboard">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <div
-                key={i}
-                className="col-span-12 md:col-span-4 h-24 animate-pulse rounded-xl bg-zinc-100 dark:bg-zinc-900"
-              />
-            ))}
-          </div>
+          <LoadingBlock label="Loading analytics" rows={4} />
         )}
       </Page>
+    );
+  }
+
+  function renderWidget(item: EvaluatedWidget, idx: number, tile: boolean) {
+    return (
+      <WidgetCard
+        key={item.widget.id}
+        item={item}
+        customizeMode={customizeMode}
+        tile={tile}
+        isDragging={draggedWidgetId === item.widget.id}
+        isDropTarget={dragOverWidgetId === item.widget.id && draggedWidgetId !== item.widget.id}
+        canMoveUp={idx > 0}
+        canMoveDown={idx < snapshot!.widgets.length - 1}
+        onReprompt={() => setBuilderTarget({ open: true, widget: item.widget })}
+        onExportCsv={() => void handleExportCsv(item.widget)}
+        onRemove={() => void handleRemoveWidget(item.widget.id)}
+        onMove={(delta) => void handleMoveWidget(idx, delta)}
+        onResize={(w, h) => void handleResizeWidget(item.widget, w, h)}
+        onDragStart={() => setDraggedWidgetId(item.widget.id)}
+        onDragOver={() => setDragOverWidgetId(item.widget.id)}
+        onDrop={() => void handleDropWidget(item.widget.id)}
+        onDragEnd={() => {
+          setDraggedWidgetId(null);
+          setDragOverWidgetId(null);
+        }}
+      />
     );
   }
 
   const hasData = hasPerformanceData(snapshot);
   const localActivity = hasLocalActivity(snapshot.activity_summary);
   const showGettingStarted = !hasData && !customizeMode && !showEmptyWidgets;
+  const hasPeriodSnapshot = snapshot.period_overview != null;
+  const syncBlocked = Boolean(snapshot.sync_status?.blocked);
+  const description = headerLine(
+    snapshot.period_overview,
+    hasData,
+    syncBlocked ? null : syncStatusLine(snapshot.sync_status),
+  );
 
   return (
     <Page wide>
@@ -288,6 +370,7 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         layouts={snapshot.layouts}
         windowDays={windowDays}
         customizeMode={customizeMode}
+        description={description || undefined}
         onWindowChange={setWindowDays}
         onToggleCustomize={() => setCustomizeMode((v) => !v)}
         onOpenBuilder={() => setBuilderTarget({ open: true, widget: null })}
@@ -307,37 +390,16 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
         onResetStarter={() => void handleLayoutAction(() => analyticsApi.resetStarterLayout())}
       />
 
-      <div className={`flex flex-wrap items-center justify-between gap-2 text-xs ${muted}`} role="status">
-        <span>{syncStatusLine(snapshot.sync_status)}</span>
-        {hasData && snapshot.period_overview && (
-          <span>
-            {[
-              `X Analytics ${snapshot.period_overview.period_label}`,
-              snapshot.period_overview.engagements != null
-                ? `${formatCompact(snapshot.period_overview.engagements)} engagements`
-                : null,
-              snapshot.period_overview.profile_visits != null
-                ? `${formatCompact(snapshot.period_overview.profile_visits)} profile visits`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
-        )}
-      </div>
+      {syncBlocked && <Notice tone="warn">{syncStatusLine(snapshot.sync_status)}</Notice>}
 
       {customizeMode && (
-        <Notice tone="info">Drag cards to reorder or resize. Changes save as you go.</Notice>
+        <Notice tone="info">Drag to reorder or resize. Changes save as you go.</Notice>
       )}
 
       {error && <Notice tone="error">{error}</Notice>}
 
       {showGettingStarted ? (
         <div className="space-y-6">
-          {localActivity && snapshot.activity_summary && (
-            <CollectedActivityStrip activity={snapshot.activity_summary} />
-          )}
-
           <EmptyBlock
             title="Nothing here yet"
             action={
@@ -360,6 +422,9 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
           >
             Your numbers appear here after your first reply or post.
           </EmptyBlock>
+          {localActivity && snapshot.activity_summary && (
+            <CollectedActivity activity={snapshot.activity_summary} />
+          )}
         </div>
       ) : snapshot.widgets.length === 0 ? (
         <EmptyBlock
@@ -400,36 +465,38 @@ export function AnalyticsPage({ onNavigate }: AnalyticsPageProps) {
             </div>
           )}
 
-          <div className="grid grid-cols-12 gap-5">
-            {snapshot.widgets.map((item, idx) => (
-              <WidgetCard
-                key={item.widget.id}
-                item={item}
-                customizeMode={customizeMode}
-                isDragging={draggedWidgetId === item.widget.id}
-                isDropTarget={dragOverWidgetId === item.widget.id && draggedWidgetId !== item.widget.id}
-                canMoveUp={idx > 0}
-                canMoveDown={idx < snapshot.widgets.length - 1}
-                onReprompt={() => setBuilderTarget({ open: true, widget: item.widget })}
-                onExportCsv={() => void handleExportCsv(item.widget)}
-                onRemove={() => void handleRemoveWidget(item.widget.id)}
-                onMove={(delta) => void handleMoveWidget(idx, delta)}
-                onResize={(w, h) => void handleResizeWidget(item.widget, w, h)}
-                onDragStart={() => setDraggedWidgetId(item.widget.id)}
-                onDragOver={() => setDragOverWidgetId(item.widget.id)}
-                onDrop={() => void handleDropWidget(item.widget.id)}
-                onDragEnd={() => {
-                  setDraggedWidgetId(null);
-                  setDragOverWidgetId(null);
-                }}
-              />
-            ))}
+          <div className="grid grid-cols-12 gap-x-10 gap-y-10 [&>*]:min-w-0">
+            {(customizeMode
+              ? snapshot.widgets.map((item, index) => ({ kind: "chart" as const, item, index }))
+              : groupWidgets(snapshot.widgets, hasPeriodSnapshot)
+            ).map((run) =>
+              run.kind === "waiting" ? (
+                <WaitingForCapture key={run.key} windowDays={windowDays} />
+              ) : run.kind === "kpis" ? (
+                <div
+                  key={run.items[0].item.widget.id}
+                  className="col-span-12 grid grid-cols-2 gap-x-6 gap-y-8 sm:grid-cols-3 sm:gap-x-10"
+                >
+                  {run.items.map(({ item, index }) => renderWidget(item, index, true))}
+                </div>
+              ) : (
+                renderWidget(run.item, run.index, false)
+              ),
+            )}
           </div>
         </div>
       )}
 
       {!showGettingStarted && !customizeMode && localActivity && snapshot.activity_summary && (
-        <CollectedActivityStrip activity={snapshot.activity_summary} />
+        <CollectedActivity activity={snapshot.activity_summary} />
+      )}
+
+      {!customizeMode && (
+        <div className="flex justify-end">
+          <button type="button" onClick={() => setCustomizeMode(true)} className={btnGhost}>
+            Customize
+          </button>
+        </div>
       )}
 
       {builderTarget.open && (
