@@ -53,15 +53,23 @@ pub struct CompletionRequest {
     pub model_hint: Option<String>,
     /// When set, an active prompt override for the task replaces `system` and `user`.
     pub slots: Option<PromptSlots>,
+    /// Lowest sampling temperature this call accepts. A routed temperature at or above it is kept; an unset or
+    /// lower one is raised to it, so a call that wants varied output is never made deterministic by the route.
+    pub min_temperature: Option<f32>,
 }
 
 impl CompletionRequest {
     pub fn new(task: TaskSlot, system: String, user: String, json: bool) -> Self {
-        Self { task, system, user, json, images: vec![], model_hint: None, slots: None }
+        Self { task, system, user, json, images: vec![], model_hint: None, slots: None, min_temperature: None }
     }
 
     pub fn with_slots(mut self, slots: PromptSlots) -> Self {
         self.slots = Some(slots);
+        self
+    }
+
+    pub fn with_min_temperature(mut self, floor: f32) -> Self {
+        self.min_temperature = Some(floor);
         self
     }
 
