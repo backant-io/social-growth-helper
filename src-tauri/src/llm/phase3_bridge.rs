@@ -109,6 +109,10 @@ impl CompletionProvider for RouterCompletion {
             }
             None => None,
         };
+        let temperature = req.min_temperature.and_then(|floor| {
+            let routed = get_task_route(&self.db.lock().unwrap(), task).ok().and_then(|r| r.temperature);
+            routed.is_none_or(|t| t < floor).then_some(floor)
+        });
         let mut parts = vec![LlmContentPart::Text { text: user }];
         parts.extend(req.images.iter().map(|b| LlmContentPart::ImageBase64 { media_type: media_type(b).into(), data_base64: b.clone() }));
         let llm = LlmRequest {
@@ -116,7 +120,7 @@ impl CompletionProvider for RouterCompletion {
             model_id: String::new(),
             system_prompt: Some(system),
             messages: vec![LlmMessage { role: LlmRole::User, parts }],
-            temperature: None,
+            temperature,
             reasoning_effort: None,
             max_tokens: None,
             json_schema: None,
@@ -218,6 +222,37 @@ mod tests {
         let sent = &cli.recorded_calls()[0];
         assert!(sent.has_images());
         assert_eq!(sent.system_prompt.as_deref(), Some("sys"));
+    }
+
+    #[tokio::test]
+    async fn min_temperature_raises_an_unset_or_low_route_but_keeps_a_hotter_one() {
+        let (_d, b, cli, _xai) = rig();
+        route(&b, TaskType::ReplyDrafting, "cli", "sonnet");
+        let req = |min: Option<f32>| {
+            let r = CompletionRequest::new(TaskSlot::ReplyDrafting, "s".into(), "u".into(), false);
+            match min {
+                Some(f) => r.with_min_temperature(f),
+                None => r,
+            }
+        };
+        for _ in 0..4 {
+            cli.push_ok("{}");
+        }
+        b.complete(req(None)).await.unwrap();
+        b.complete(req(Some(0.9))).await.unwrap();
+        let set_temp = |t: Option<f64>| {
+            crate::llm::repo::save_task_route(
+                &b.db.lock().unwrap(),
+                TaskModelRoutePatch { task_type: TaskType::ReplyDrafting, provider_account_id: Some("cli".into()), model_id: Some("sonnet".into()), reasoning_effort: None, temperature: t.map(|v| v as f32), fallback_account_id: None, fallback_model_id: None, max_calls_per_hour: None },
+            )
+            .unwrap();
+        };
+        set_temp(Some(0.2));
+        b.complete(req(Some(0.9))).await.unwrap();
+        set_temp(Some(1.2));
+        b.complete(req(Some(0.9))).await.unwrap();
+        let temps: Vec<Option<f32>> = cli.recorded_calls().iter().map(|c| c.temperature).collect();
+        assert_eq!(temps, vec![None, Some(0.9), Some(0.9), Some(1.2)]);
     }
 
     #[tokio::test]

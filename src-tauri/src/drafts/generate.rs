@@ -72,6 +72,8 @@ impl StyleContext {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Instruction {
     Fresh,
+    /// Redraft the current draft as a clearly different take, never a paraphrase of it.
+    Regenerate,
     Shorter,
     Funnier,
     MoreDirect,
@@ -80,7 +82,8 @@ pub enum Instruction {
 impl Instruction {
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
-            "fresh" | "regenerate" => Self::Fresh,
+            "fresh" => Self::Fresh,
+            "regenerate" => Self::Regenerate,
             "shorter" => Self::Shorter,
             "funnier" => Self::Funnier,
             "more_direct" => Self::MoreDirect,
@@ -91,6 +94,7 @@ impl Instruction {
     fn text(self) -> &'static str {
         match self {
             Self::Fresh => "Write fresh variants.",
+            Self::Regenerate => "The user rejected the current draft. Write fresh variants that are clearly different from it: take a new angle and a different structure (for example change what you lead with, the kind of point you make, or the sentence shape). A synonym swap or light reword of the current draft is a failure, and so is reusing its opening or key phrases.",
             Self::Shorter => "Rewrite the current draft noticeably shorter.",
             Self::Funnier => "Rewrite the current draft funnier, keeping the point.",
             Self::MoreDirect => "Rewrite the current draft more direct and less hedged.",
@@ -191,7 +195,9 @@ struct PromptParts {
     user_extra: String,
 }
 
-fn prompt_parts(r: &GenRequest) -> PromptParts {
+const RETRY_NOTE: &str = "Your previous attempt came back identical or nearly identical to the current draft, which is not acceptable. Start over from a completely different angle, opening and structure than the current draft.";
+
+fn prompt_parts(r: &GenRequest, retry: bool) -> PromptParts {
     let what = if r.quote { "quote post" } else { "reply" };
     let style = if r.style.guide.trim().is_empty() { "Short, plain, specific. No hashtags.".to_string() } else { r.style.guide.clone() };
     let mut rules = String::new();
@@ -235,6 +241,9 @@ fn prompt_parts(r: &GenRequest) -> PromptParts {
     }
     if let Some(c) = r.current.filter(|c| !c.trim().is_empty()) {
         extra.push_str(&format!("\nCurrent draft: {}", neutralize(c)));
+        if retry {
+            extra.push_str(&format!("\n{RETRY_NOTE}"));
+        }
     }
     let user = format!("{FENCE_OPEN}\n{}\n{FENCE_CLOSE}\n\n{}{extra}", serde_json::to_string_pretty(&post).unwrap_or_default(), instruction);
     let user_extra = format!("{instruction}{extra}");
@@ -242,7 +251,7 @@ fn prompt_parts(r: &GenRequest) -> PromptParts {
 }
 
 pub fn build_prompt(r: &GenRequest) -> (String, String) {
-    let p = prompt_parts(r);
+    let p = prompt_parts(r, false);
     (p.system, p.user)
 }
 
@@ -250,7 +259,11 @@ pub fn build_prompt(r: &GenRequest) -> (String, String) {
 /// variant count, length and JSON shape, and the per-call instruction, thread context, angle and current
 /// draft always travel with the call, whatever the override says.
 pub fn build_slots(r: &GenRequest) -> PromptSlots {
-    let p = prompt_parts(r);
+    build_slots_for(r, false)
+}
+
+fn build_slots_for(r: &GenRequest, retry: bool) -> PromptSlots {
+    let p = prompt_parts(r, retry);
     PromptSlots {
         vars: vec![
             ("style_guide", p.style),
@@ -335,14 +348,69 @@ pub fn parse_variants(text: &str, r: &GenRequest) -> Vec<Variant> {
     out
 }
 
-pub async fn generate(provider: &dyn CompletionProvider, r: &GenRequest<'_>) -> Result<Generated, CompletionError> {
-    let (system, user) = build_prompt(r);
-    let c = provider.complete(CompletionRequest::new(TaskSlot::ReplyDrafting, system, user, true).with_slots(build_slots(r)).with_model_hint(r.model_hint.map(str::to_string))).await?;
-    let variants = parse_variants(&c.text, r);
-    if variants.is_empty() {
-        return Err(CompletionError::Failed("the model returned no usable variants (too long, banned, or malformed)".into()));
+/// Sampling floor for a regenerate, so a route set to a low or unset temperature cannot make it repeat itself.
+pub const REGENERATE_TEMPERATURE: f32 = 0.9;
+const REGENERATE_RETRY_TEMPERATURE: f32 = 1.0;
+const NEAR_DUPLICATE: f32 = 0.75;
+
+fn tokens(s: &str) -> Vec<String> {
+    s.to_lowercase().split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect()
+}
+
+/// How alike two drafts are, 0.0 to 1.0, ignoring case, punctuation and whitespace. Identical wording scores
+/// 1.0, and so does one draft that only adds or drops a few words of the other.
+pub fn similarity(a: &str, b: &str) -> f32 {
+    let (ta, tb) = (tokens(a), tokens(b));
+    if ta == tb {
+        return 1.0;
     }
-    Ok(Generated { variants, model: c.model })
+    let (sa, sb): (std::collections::HashSet<&String>, std::collections::HashSet<&String>) = (ta.iter().collect(), tb.iter().collect());
+    let shared = sa.intersection(&sb).count() as f32;
+    let union = sa.union(&sb).count() as f32;
+    let jaccard = if union == 0.0 { 0.0 } else { shared / union };
+    let (ja, jb) = (ta.join(" "), tb.join(" "));
+    let (short, long) = if ja.len() <= jb.len() { (&ja, &jb) } else { (&jb, &ja) };
+    let contained = if !short.is_empty() && format!(" {long} ").contains(&format!(" {short} ")) { short.len() as f32 / long.len() as f32 } else { 0.0 };
+    jaccard.max(contained)
+}
+
+pub fn is_near_duplicate(candidate: &str, previous: &str) -> bool {
+    similarity(candidate, previous) >= NEAR_DUPLICATE
+}
+
+pub async fn generate(provider: &dyn CompletionProvider, r: &GenRequest<'_>) -> Result<Generated, CompletionError> {
+    let previous = r.current.map(str::trim).filter(|c| !c.is_empty()).filter(|_| r.instruction == Instruction::Regenerate);
+    let Some(previous) = previous else {
+        let (system, user) = build_prompt(r);
+        let c = provider.complete(CompletionRequest::new(TaskSlot::ReplyDrafting, system, user, true).with_slots(build_slots(r)).with_model_hint(r.model_hint.map(str::to_string))).await?;
+        let variants = parse_variants(&c.text, r);
+        if variants.is_empty() {
+            return Err(CompletionError::Failed("the model returned no usable variants (too long, banned, or malformed)".into()));
+        }
+        return Ok(Generated { variants, model: c.model });
+    };
+
+    let mut last_failure = String::new();
+    for retry in [false, true] {
+        let p = prompt_parts(r, retry);
+        let floor = if retry { REGENERATE_RETRY_TEMPERATURE } else { REGENERATE_TEMPERATURE };
+        let req = CompletionRequest::new(TaskSlot::ReplyDrafting, p.system, p.user, true)
+            .with_slots(build_slots_for(r, retry))
+            .with_model_hint(r.model_hint.map(str::to_string))
+            .with_min_temperature(floor);
+        let c = provider.complete(req).await?;
+        let usable = parse_variants(&c.text, r);
+        if usable.is_empty() {
+            last_failure = "the model returned no usable variants (too long, banned, or malformed)".into();
+            continue;
+        }
+        let variants: Vec<Variant> = usable.into_iter().filter(|v| !is_near_duplicate(&v.text, previous)).collect();
+        if !variants.is_empty() {
+            return Ok(Generated { variants, model: c.model });
+        }
+        last_failure = "the model kept returning the same draft; try again or pick another model".into();
+    }
+    Err(CompletionError::Failed(last_failure))
 }
 
 #[cfg(test)]
@@ -487,5 +555,81 @@ mod tests {
         assert!(matches!(generate(&p, &req(&style)).await, Err(CompletionError::Failed(_))));
         let u = crate::completion::UnconfiguredProvider;
         assert!(matches!(generate(&u, &req(&style)).await, Err(CompletionError::NotConfigured(_))));
+    }
+
+    fn regen<'a>(style: &'a StyleContext, current: &'a str) -> GenRequest<'a> {
+        GenRequest { instruction: Instruction::Regenerate, current: Some(current), max_chars: 280, ..req(style) }
+    }
+
+    fn one(text: &str) -> String {
+        serde_json::json!({"variants":[{"tone":"x","text":text}]}).to_string()
+    }
+
+    #[test]
+    fn similarity_ignores_case_punctuation_and_spacing() {
+        assert!(is_near_duplicate("  PgBouncer   fixes\nthis. ", "pgbouncer fixes this"));
+        assert!(is_near_duplicate("pgbouncer fixes this, honestly", "PgBouncer fixes this"));
+        assert!(!is_near_duplicate("Connection limits bite long before CPU does.", "PgBouncer fixes this"));
+    }
+
+    #[test]
+    fn regenerate_prompt_carries_previous_draft_and_asks_for_a_different_take() {
+        let style = StyleContext::default();
+        let r = regen(&style, "old draft text");
+        let (_, user) = build_prompt(&r);
+        assert!(user.contains("Current draft: old draft text"));
+        assert!(user.contains("clearly different") && user.contains("synonym"));
+        assert!(build_slots(&r).extra.contains("Current draft: old draft text"));
+        assert!(!user.contains("came back identical"));
+    }
+
+    #[tokio::test]
+    async fn regenerate_retries_once_when_the_model_repeats_the_previous_draft() {
+        let style = StyleContext::default();
+        let p = ScriptedProvider::new(vec![&one("  same   OLD take. "), &one("Pooling limits bite before CPU does."), &one("never reached")]);
+        let g = generate(&p, &regen(&style, "Same old take")).await.unwrap();
+        assert_eq!(g.variants[0].text, "Pooling limits bite before CPU does.");
+        assert_eq!(p.call_count(), 2, "exactly one retry");
+        let calls = p.requests.lock().unwrap();
+        assert!(calls[0].user.contains("Current draft: Same old take") && !calls[0].user.contains("came back identical"));
+        assert!(calls[1].user.contains("came back identical") && calls[1].slots.as_ref().unwrap().extra.contains("came back identical"));
+        assert!(calls[0].min_temperature.unwrap() >= 0.7 && calls[1].min_temperature > calls[0].min_temperature);
+    }
+
+    #[tokio::test]
+    async fn regenerate_fails_instead_of_returning_the_same_draft_twice() {
+        let style = StyleContext::default();
+        let p = ScriptedProvider::new(vec![&one("Same old take"), &one("same old take!"), &one("never reached")]);
+        let err = generate(&p, &regen(&style, "Same old take")).await.err().expect("must reject");
+        assert!(err.to_string().contains("same draft"));
+        assert_eq!(p.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn regenerate_drops_only_the_repeated_variant_and_keeps_the_rest() {
+        let style = StyleContext::default();
+        let body = serde_json::json!({"variants":[{"tone":"a","text":"Same old take"},{"tone":"b","text":"A genuinely new angle on it"}]}).to_string();
+        let p = ScriptedProvider::new(vec![&body]);
+        let g = generate(&p, &regen(&style, "Same old take")).await.unwrap();
+        assert_eq!(g.variants.iter().map(|v| v.text.as_str()).collect::<Vec<_>>(), vec!["A genuinely new angle on it"]);
+        assert_eq!(p.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn non_regenerate_calls_do_not_compare_or_force_sampling() {
+        let style = StyleContext::default();
+        let p = ScriptedProvider::new(vec![&one("Same old take")]);
+        let r = GenRequest { current: Some("Same old take"), instruction: Instruction::Shorter, ..req(&style) };
+        assert_eq!(generate(&p, &r).await.unwrap().variants.len(), 1);
+        assert!(p.requests.lock().unwrap()[0].min_temperature.is_none());
+    }
+
+    #[test]
+    fn regenerate_keeps_voice_and_reply_rules() {
+        let style = StyleContext { guide: "dry".into(), banned: vec!["synergy".into()], ..Default::default() };
+        let (system, _) = build_prompt(&regen(&style, "x"));
+        assert!(system.contains("dry") && system.contains("synergy") && system.contains("Never write empty generic praise"));
+        assert_eq!(Instruction::parse("regenerate"), Some(Instruction::Regenerate));
+        assert_eq!(Instruction::parse("fresh"), Some(Instruction::Fresh));
     }
 }

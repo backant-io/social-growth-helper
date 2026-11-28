@@ -132,7 +132,7 @@ export function ReplyBox({ item, canDraft, onDismiss, onChanged, mode = "reply",
 
   const regenerate = async () => {
     const d = draft ?? (await p3.draftOpen(evalId).catch(() => null));
-    if (d) await fresh(d, null);
+    if (d) await fresh(d, "regenerate");
   };
 
   const save = () => {
