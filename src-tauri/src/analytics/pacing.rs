@@ -14,6 +14,10 @@ pub const DAILY_UNIT_CAP: i64 = 40;
 pub const DOM_UNITS: i64 = 1;
 pub const AI_HEAL_UNITS: i64 = 4;
 
+/// Units per rolling 24h held back for each account-period window (7d and 30d). Post, profile and reply
+/// reads can never spend them, so a busy per-post sync cannot starve the period totals.
+pub const PERIOD_RESERVE_UNITS: i64 = 2;
+
 pub const AI_PER_HOUR: i64 = 1;
 pub const AI_PER_DAY: i64 = 3;
 pub const AI_COOLDOWN_SECS: i64 = 15 * 60;
@@ -94,10 +98,51 @@ fn units_since(conn: &Connection, profile_id: &str, since: i64) -> AppResult<i64
     )?)
 }
 
-/// True when `units` more would stay inside both the hourly (8) and daily (40) caps.
+/// True when `units` more would stay inside both the hourly (8) and daily (40) caps. Account-period captures
+/// use this: they may spend the units reserved for them.
 pub fn can_spend(conn: &Connection, profile_id: &str, now: i64, units: i64) -> AppResult<bool> {
     Ok(units_since(conn, profile_id, now - 3600)? + units <= HOURLY_UNIT_CAP
         && units_since(conn, profile_id, now - 86_400)? + units <= DAILY_UNIT_CAP)
+}
+
+/// Like [`can_spend`] but for everything that is not an account-period capture (post reads, profile sweeps,
+/// reply sweeps, post self-heals): it additionally leaves every window's still-unspent reserve untouched.
+pub fn can_spend_unreserved(conn: &Connection, profile_id: &str, now: i64, units: i64) -> AppResult<bool> {
+    Ok(units_since(conn, profile_id, now - 3600)? + units <= HOURLY_UNIT_CAP
+        && units_since(conn, profile_id, now - 86_400)? + units + reserved_units(conn, now) <= DAILY_UNIT_CAP)
+}
+
+/// Units still held back for account-period captures in the last 24h: per window, the reserve minus what that
+/// window's captures already spent.
+pub fn reserved_units(conn: &Connection, now: i64) -> i64 {
+    TRACKED_PERIODS
+        .iter()
+        .map(|&days| (PERIOD_RESERVE_UNITS - period_units_spent(conn, days, now)).max(0))
+        .sum()
+}
+
+/// Page loads one window's period captures spent in the last 24h.
+pub fn period_units_spent(conn: &Connection, period_days: u32, now: i64) -> i64 {
+    period_spend_log(conn, period_days).iter().filter(|&&at| at > now - 86_400).count() as i64
+}
+
+fn period_spend_log(conn: &Connection, period_days: u32) -> Vec<i64> {
+    get_setting(conn, &period_spend_key(period_days))
+        .ok()
+        .flatten()
+        .map(|v| v.split(',').filter_map(|t| t.parse().ok()).collect())
+        .unwrap_or_default()
+}
+
+/// Records one account-period page load: counted in the shared budget log and against that window's reserve.
+/// The per-window list lives in `app_settings` (comma separated unix seconds, pruned to 24h) because
+/// `analytics_budget_log.kind` cannot carry the window.
+pub fn record_period_units(conn: &Connection, profile_id: &str, now: i64, period_days: u32) -> AppResult<()> {
+    record_units(conn, profile_id, now, DOM_UNITS, UnitKind::Dom)?;
+    let mut log: Vec<i64> = period_spend_log(conn, period_days).into_iter().filter(|&at| at > now - 86_400).collect();
+    log.push(now);
+    let joined = log.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    set_setting(conn, &period_spend_key(period_days), &joined)
 }
 
 fn ai_attempts_since(conn: &Connection, profile_id: &str, since: i64) -> AppResult<i64> {
@@ -111,6 +156,15 @@ fn ai_attempts_since(conn: &Connection, profile_id: &str, since: i64) -> AppResu
 /// Whether one AI self-heal may run now: inside the shared unit budget, at most 1 per hour and 3 per day,
 /// 15 minutes apart, once per post per day, and not while the two-failure circuit breaker is open.
 pub fn can_ai_heal(conn: &Connection, profile_id: &str, now: i64, post_last_heal: Option<i64>) -> AppResult<bool> {
+    Ok(ai_heal_gates_open(conn, profile_id, now, post_last_heal)? && can_spend(conn, profile_id, now, AI_HEAL_UNITS)?)
+}
+
+/// [`can_ai_heal`] for a per-post self-heal: same limits, but it cannot dip into the period reserve.
+pub fn can_post_ai_heal(conn: &Connection, profile_id: &str, now: i64, post_last_heal: Option<i64>) -> AppResult<bool> {
+    Ok(ai_heal_gates_open(conn, profile_id, now, post_last_heal)? && can_spend_unreserved(conn, profile_id, now, AI_HEAL_UNITS)?)
+}
+
+fn ai_heal_gates_open(conn: &Connection, profile_id: &str, now: i64, post_last_heal: Option<i64>) -> AppResult<bool> {
     if post_last_heal.is_some_and(|t| now - t < AI_POST_COOLDOWN_SECS) {
         return Ok(false);
     }
@@ -131,7 +185,7 @@ pub fn can_ai_heal(conn: &Connection, profile_id: &str, now: i64, post_last_heal
             return Ok(false);
         }
     }
-    can_spend(conn, profile_id, now, AI_HEAL_UNITS)
+    Ok(true)
 }
 
 pub fn pause_until(conn: &Connection) -> Option<i64> {
@@ -259,6 +313,18 @@ fn period_fails_key(period_days: u32) -> String {
     format!("analytics_period_{}d_fails", canonical_period_key(period_days))
 }
 
+fn period_spend_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_spend_at", canonical_period_key(period_days))
+}
+
+fn period_upsell_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_upsell_until", canonical_period_key(period_days))
+}
+
+fn period_error_key(period_days: u32) -> String {
+    format!("analytics_period_{}d_last_error", canonical_period_key(period_days))
+}
+
 fn period_heal_key(period_days: u32) -> String {
     format!("analytics_period_{}d_last_heal_at", canonical_period_key(period_days))
 }
@@ -293,9 +359,41 @@ pub fn period_last_heal_at(conn: &Connection, period_days: u32) -> Option<i64> {
         .and_then(|v| v.parse().ok())
 }
 
+/// True while the first capture of a window has no stored row and X is not showing the Premium upsell: such a
+/// window is captured as soon as the budget allows, ignoring the failure backoff, because there is nothing
+/// to show until it works. The three-failures-in-a-row worker pause still bounds retries.
+pub fn period_first_run_due(conn: &Connection, profile_id: &str, period_days: u32, now: i64) -> bool {
+    let upsell_until: i64 = get_setting(conn, &period_upsell_key(period_days))
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if upsell_until > now {
+        return false;
+    }
+    let stored: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM analytics_period_snapshots WHERE profile_id = ?1 AND period_days = ?2",
+            params![profile_id, canonical_period_key(period_days) as i64],
+            |r| r.get(0),
+        )
+        .unwrap_or(1);
+    stored == 0
+}
+
+/// Why the last capture of a window failed (`step: reason`), or `None` after a success.
+pub fn period_last_error(conn: &Connection, period_days: u32) -> Option<String> {
+    get_setting(conn, &period_error_key(period_days)).ok().flatten().filter(|v| !v.is_empty())
+}
+
+pub fn set_period_error(conn: &Connection, period_days: u32, error: Option<&str>) -> AppResult<()> {
+    set_setting(conn, &period_error_key(period_days), error.unwrap_or(""))
+}
+
 pub fn mark_period_synced(conn: &Connection, period_days: u32, now: i64) -> AppResult<()> {
     set_setting(conn, &period_due_key(period_days), &(now + PERIOD_SYNC_INTERVAL_SECS).to_string())?;
     set_setting(conn, &period_fails_key(period_days), "0")?;
+    set_period_error(conn, period_days, None)?;
     Ok(())
 }
 
@@ -314,6 +412,7 @@ pub fn mark_period_upsell(conn: &Connection, now: i64) -> AppResult<()> {
     let until = (now + PERIOD_UPSELL_COOLDOWN_SECS).to_string();
     for p in TRACKED_PERIODS {
         set_setting(conn, &period_due_key(p), &until)?;
+        set_setting(conn, &period_upsell_key(p), &until)?;
         set_setting(conn, &period_fails_key(p), "0")?;
     }
     Ok(())
@@ -487,5 +586,82 @@ mod tests {
         mark_healed(&conn, &pid, "7", NOW + 5).unwrap();
         let s = load_state(&conn, &pid, "7").unwrap().unwrap();
         assert_eq!((s.last_heal_at, s.fail_count), (Some(NOW + 5), 1));
+    }
+
+    fn spread_post_units(conn: &Connection, pid: &str, count: i64) {
+        for i in 0..count {
+            record_units(conn, pid, NOW - 7200 - i * 60, DOM_UNITS, UnitKind::Dom).unwrap();
+        }
+    }
+
+    #[test]
+    fn post_tasks_cannot_spend_the_units_reserved_for_period_captures() {
+        let (_d, conn, pid) = db();
+        assert_eq!(reserved_units(&conn, NOW), 2 * PERIOD_RESERVE_UNITS);
+        spread_post_units(&conn, &pid, 36);
+        assert!(!can_spend_unreserved(&conn, &pid, NOW, DOM_UNITS).unwrap(), "36 spent + 4 reserved leaves nothing for posts");
+        assert!(!can_post_ai_heal(&conn, &pid, NOW, None).unwrap());
+        assert!(can_spend(&conn, &pid, NOW, DOM_UNITS).unwrap(), "period captures may use the reserve");
+        assert!(can_ai_heal(&conn, &pid, NOW, None).unwrap() == can_spend(&conn, &pid, NOW, AI_HEAL_UNITS).unwrap());
+
+        record_period_units(&conn, &pid, NOW, 7).unwrap();
+        record_period_units(&conn, &pid, NOW + 1, 7).unwrap();
+        assert_eq!(reserved_units(&conn, NOW + 2), PERIOD_RESERVE_UNITS, "the 7d reserve is used up, the 30d one still held");
+        assert!(!can_spend_unreserved(&conn, &pid, NOW + 2, DOM_UNITS).unwrap());
+        record_period_units(&conn, &pid, NOW + 3, 30).unwrap();
+        record_period_units(&conn, &pid, NOW + 4, 30).unwrap();
+        assert_eq!(reserved_units(&conn, NOW + 5), 0);
+        assert!(!can_spend(&conn, &pid, NOW + 5, DOM_UNITS).unwrap(), "the overall 40/day cap still holds");
+    }
+
+    #[test]
+    fn the_reserve_is_per_window_and_frees_up_after_a_day() {
+        let (_d, conn, pid) = db();
+        record_period_units(&conn, &pid, NOW, 30).unwrap();
+        assert_eq!(reserved_units(&conn, NOW), PERIOD_RESERVE_UNITS + PERIOD_RESERVE_UNITS - 1);
+        assert_eq!(period_units_spent(&conn, 30, NOW + 86_401), 0, "spend older than 24h no longer counts");
+        assert_eq!(period_units_spent(&conn, 7, NOW), 0);
+        assert!(can_spend_unreserved(&conn, &pid, NOW, DOM_UNITS).unwrap());
+    }
+
+    #[test]
+    fn the_hourly_cap_of_eight_still_applies_to_period_captures() {
+        let (_d, conn, pid) = db();
+        for i in 0..8 {
+            record_period_units(&conn, &pid, NOW + i, 7).unwrap();
+        }
+        assert!(!can_spend(&conn, &pid, NOW + 60, DOM_UNITS).unwrap());
+    }
+
+    #[test]
+    fn a_window_without_a_stored_row_is_due_at_once_despite_backoff_but_not_during_an_upsell() {
+        let (_d, conn, pid) = db();
+        mark_period_failed(&conn, 7, NOW).unwrap();
+        assert!(period_next_due_at(&conn, 7) > NOW, "the regular schedule is in backoff");
+        assert!(period_first_run_due(&conn, &pid, 7, NOW + 1), "no data yet: capture again immediately");
+
+        mark_period_upsell(&conn, NOW).unwrap();
+        assert!(!period_first_run_due(&conn, &pid, 7, NOW + 1), "the Premium upsell cooldown is respected");
+        assert!(period_first_run_due(&conn, &pid, 7, NOW + PERIOD_UPSELL_COOLDOWN_SECS + 1));
+
+        conn.execute(
+            "INSERT INTO analytics_period_snapshots (id, profile_id, period_days, period_label, captured_at, impressions, source, raw_json)
+             VALUES ('s', ?1, 7, '7D', '2026-01-01T00:00:00Z', 1, 'dom', '{}')",
+            [&pid],
+        )
+        .unwrap();
+        assert!(!period_first_run_due(&conn, &pid, 7, NOW + PERIOD_UPSELL_COOLDOWN_SECS + 1), "has data: normal schedule applies");
+        assert!(period_first_run_due(&conn, &pid, 30, NOW + PERIOD_UPSELL_COOLDOWN_SECS + 1), "each window is judged on its own");
+    }
+
+    #[test]
+    fn the_last_period_error_is_kept_until_a_capture_succeeds() {
+        let (_d, conn, _pid) = db();
+        assert_eq!(period_last_error(&conn, 7), None);
+        set_period_error(&conn, 7, Some("dom_read: nothing found")).unwrap();
+        assert_eq!(get_setting(&conn, "analytics_period_7d_last_error").unwrap().as_deref(), Some("dom_read: nothing found"));
+        assert_eq!(period_last_error(&conn, 30), None);
+        mark_period_synced(&conn, 7, NOW).unwrap();
+        assert_eq!(period_last_error(&conn, 7), None);
     }
 }
