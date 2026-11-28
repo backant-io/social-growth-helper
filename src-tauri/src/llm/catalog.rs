@@ -7,8 +7,11 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelInfo {
     pub id: String,
+    /// Wire names match the UI's `ModelInfo` (`display_name`, `is_custom`).
+    #[serde(rename = "display_name", alias = "label")]
     pub label: String,
     pub capabilities: ProviderCapabilities,
+    #[serde(rename = "is_custom", alias = "custom")]
     pub custom: bool,
 }
 
@@ -168,5 +171,18 @@ mod tests {
         assert!(ids.contains(&"grok-4.7-preview"));
         assert!(ids.contains(&"grok-custom-test"));
         assert!(models.iter().find(|m| m.id == "grok-custom-test").unwrap().custom);
+    }
+
+    #[test]
+    fn serializes_with_the_field_names_the_ui_reads() {
+        for pt in [ProviderType::ClaudeCli, ProviderType::AnthropicApi, ProviderType::XaiApi, ProviderType::XaiOAuth, ProviderType::GrokWeb] {
+            for m in merge_catalog(pt, &["remote-model".into()], &["custom-model".into()]) {
+                let v = serde_json::to_value(&m).unwrap();
+                let name = v["display_name"].as_str().unwrap_or_default();
+                assert!(!name.trim().is_empty(), "{pt:?} {} has no display_name", m.id);
+                assert!(v["is_custom"].is_boolean());
+                assert!(v.get("label").is_none());
+            }
+        }
     }
 }
