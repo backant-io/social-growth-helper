@@ -31,6 +31,7 @@ import type {
 } from "./types";
 import type { BrowserStatus } from "./browserState";
 import { TASK_METAS } from "./types";
+import { normalizeAccount, normalizeModels } from "./modelCatalog";
 import rulesText from "../../src-tauri/src/onboarding/rules_of_engagement.md?raw";
 
 export const NOTICE_VERSION = 1;
@@ -225,7 +226,7 @@ function mockState(): MockState {
     preferences: parsed.preferences ?? null,
     ack_version: parsed.ack_version ?? null,
     ack_at: parsed.ack_at ?? null,
-    providers: parsed.providers ?? [],
+    providers: (parsed.providers ?? []).map(normalizeAccount),
     routes: parsed.routes ?? defaultRoutes(),
     prompts: parsed.prompts ?? defaultPrompts(),
     style_guides: parsed.style_guides ?? [],
@@ -365,7 +366,7 @@ export const api = {
 
   // --- Phase 2: LLM Providers, Routing, Usage & Prompts ---
   async llmListProviders(): Promise<ProviderAccountView[]> {
-    if (inTauri()) return call("llm_list_providers");
+    if (inTauri()) return (await call<ProviderAccountView[]>("llm_list_providers")).map(normalizeAccount);
     return mockState().providers;
   },
   async llmDetectClaudeCli(overridePath: string | null): Promise<ClaudeCliDetectionResponse> {
@@ -377,7 +378,7 @@ export const api = {
     };
   },
   async llmConnectClaudeCli(label: string | null, binaryPath: string | null): Promise<ProviderAccountView> {
-    if (inTauri()) return call("llm_connect_claude_cli", { label, binaryPath });
+    if (inTauri()) return normalizeAccount(await call<ProviderAccountView>("llm_connect_claude_cli", { label, binaryPath }));
     const s = mockState();
     const acct: ProviderAccountView = {
       id: "claude_cli",
@@ -398,7 +399,7 @@ export const api = {
     return acct;
   },
   async llmConnectGrokWeb(label: string | null): Promise<ProviderAccountView> {
-    if (inTauri()) return call("llm_connect_grok_web", { label });
+    if (inTauri()) return normalizeAccount(await call<ProviderAccountView>("llm_connect_grok_web", { label }));
     const s = mockState();
     const acct: ProviderAccountView = {
       id: "grok_web",
@@ -422,7 +423,7 @@ export const api = {
     label: string | null,
     apiKey: string
   ): Promise<ProviderAccountView> {
-    if (inTauri()) return call("llm_save_api_key_provider", { providerType, label, apiKey });
+    if (inTauri()) return normalizeAccount(await call<ProviderAccountView>("llm_save_api_key_provider", { providerType, label, apiKey }));
     if (apiKey.trim().length < 8) throw new Error("API key looks too short");
     const s = mockState();
     const acct: ProviderAccountView = {
@@ -460,7 +461,10 @@ export const api = {
     endpointBase: string | null,
     label: string | null
   ): Promise<XaiOAuthPollResult> {
-    if (inTauri()) return call("llm_xai_oauth_poll", { tokenEndpoint, deviceCode, endpointBase, label });
+    if (inTauri()) {
+      const res = await call<XaiOAuthPollResult>("llm_xai_oauth_poll", { tokenEndpoint, deviceCode, endpointBase, label });
+      return { ...res, account: res.account ? normalizeAccount(res.account) : null };
+    }
     const s = mockState();
     const acct: ProviderAccountView = {
       id: "xai_oauth",
@@ -480,7 +484,7 @@ export const api = {
     return { outcome: { state: "authorized" }, account: acct };
   },
   async llmHealthCheckProvider(accountId: string): Promise<ProviderAccountView> {
-    if (inTauri()) return call("llm_health_check_provider", { accountId });
+    if (inTauri()) return normalizeAccount(await call<ProviderAccountView>("llm_health_check_provider", { accountId }));
     const s = mockState();
     const p = s.providers.find((x) => x.id === accountId);
     if (!p) throw new Error("provider account not found");
@@ -489,12 +493,12 @@ export const api = {
     return p;
   },
   async llmRefreshProviderModels(accountId: string): Promise<ModelInfo[]> {
-    if (inTauri()) return call("llm_refresh_provider_models", { accountId });
+    if (inTauri()) return normalizeModels(await call<ModelInfo[]>("llm_refresh_provider_models", { accountId }));
     const p = mockState().providers.find((x) => x.id === accountId);
     return p ? p.models : [];
   },
   async llmAddCustomModel(accountId: string, modelId: string): Promise<ProviderAccountView> {
-    if (inTauri()) return call("llm_add_custom_model", { accountId, modelId });
+    if (inTauri()) return normalizeAccount(await call<ProviderAccountView>("llm_add_custom_model", { accountId, modelId }));
     const s = mockState();
     const p = s.providers.find((x) => x.id === accountId);
     if (!p) throw new Error("provider account not found");

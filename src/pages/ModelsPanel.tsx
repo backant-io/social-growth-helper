@@ -4,6 +4,7 @@ import { saveRouteSelection } from "../components/modelRoute";
 import { btn, btnGhost, btnPrimary, input, muted } from "../components/ui";
 import { api } from "../lib/api";
 import { parseLlmError } from "../lib/errors";
+import { modelLabel } from "../lib/modelCatalog";
 import { autoAssignDefaults, commonRoute, connectedProviders, recommendRoutes, recommendedModel, refreshLiveModels, routesForAll } from "../lib/modelDefaults";
 import type { ClaudeCliDetectionResponse, ProviderAccountView, ProviderHealth, ProviderType, TaskModelRoute, TaskType, XaiDeviceChallenge } from "../lib/types";
 import { TASK_METAS } from "../lib/types";
@@ -252,7 +253,7 @@ export function ModelsPanel({ providers, routes, offline, onChanged, compact }: 
     if (!account || !model) return;
     await run("default", async () => {
       for (const patch of routesForAll(account, model, routes)) await api.llmSaveTaskRoute(patch);
-      setNote(`${model.display_name} is now the default for every task.`);
+      setNote(`${account.label} · ${modelLabel(model)} is now the default for every task.`);
     });
   };
 
@@ -367,7 +368,7 @@ function TaskModels({ providers, routes, onChanged }: { providers: ProviderAccou
                   {meta.requiresVision && <span className="eyebrow ml-2 align-middle">Vision</span>}
                 </div>
                 <div className={`text-xs ${muted}`}>{meta.description}</div>
-                {(!r.provider_account_id || !r.model_id) && rec && <div className="text-xs text-zinc-500">Suggested: {rec.model.display_name}</div>}
+                {(!r.provider_account_id || !r.model_id) && rec && <div className="text-xs text-zinc-500">Suggested: {rec.account.label} · {modelLabel(rec.model)}</div>}
               </div>
               <ModelPicker
                 providers={providers}

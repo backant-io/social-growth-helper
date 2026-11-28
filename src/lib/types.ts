@@ -180,7 +180,7 @@ export interface ProviderCapabilities {
 export interface ModelInfo {
   id: string;
   display_name: string;
-  provider_type: ProviderType;
+  provider_type?: ProviderType;
   capabilities: ProviderCapabilities;
   is_custom: boolean;
 }

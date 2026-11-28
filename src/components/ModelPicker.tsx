@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../lib/api";
+import { buildModelOptions } from "../lib/modelCatalog";
 import { btnPrimary, input, muted } from "./ui";
 import type { ModelInfo, ProviderAccountView } from "../lib/types";
 
@@ -65,9 +66,10 @@ export function ModelPicker({
 
   const selected = findSelectedModel(providers, value);
   const encoded = encodeModelChoice(value.providerAccountId, value.modelId);
+  const options = buildModelOptions({ providers, selected: value, requireVision, unsetLabel: allowUnset ? unsetLabel : null });
 
   const handleAddCustom = async () => {
-    const accountId = addingFor || value.providerAccountId || providers[0]?.id;
+    const accountId = addingFor || providers[0]?.id;
     if (!accountId || !customModel.trim()) return;
     setBusy(true);
     setError(null);
@@ -94,23 +96,10 @@ export function ModelPicker({
           value={encoded}
           onChange={(e) => onChange(decodeModelChoice(e.target.value))}
         >
-          {allowUnset && <option value="">{unsetLabel}</option>}
-          {providers.map((acct) => (
-            <optgroup
-              key={acct.id}
-              label={`${acct.label} (${acct.billing_lane === "subscription" ? "Subscription" : "API"})`}
-            >
-              {acct.models.map((m) => {
-                const visionBlocked = requireVision && !m.capabilities.vision;
-                return (
-                  <option key={`${acct.id}::${m.id}`} value={`${acct.id}::${m.id}`} disabled={visionBlocked}>
-                    {m.display_name}
-                    {m.is_custom ? " [custom]" : ""}
-                    {visionBlocked ? " (no vision)" : ""}
-                  </option>
-                );
-              })}
-            </optgroup>
+          {options.map((o) => (
+            <option key={o.value || "unset"} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
           ))}
         </select>
 
@@ -118,7 +107,7 @@ export function ModelPicker({
           <button
             type="button"
             className={`px-1.5 py-1 text-xs ${muted} hover:text-zinc-950 dark:hover:text-zinc-50`}
-            onClick={() => setAddingFor(addingFor ? null : value.providerAccountId ?? providers[0].id)}
+            onClick={() => setAddingFor(addingFor ? null : (providers.find((p) => p.id === value.providerAccountId) ?? providers[0]).id)}
             title="Add a custom model ID"
           >
             {addingFor ? "Cancel" : "Custom ID"}
