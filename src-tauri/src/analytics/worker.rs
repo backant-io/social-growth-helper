@@ -35,6 +35,7 @@ const SETTLE_PROFILE_MS: u64 = 2500;
 const SETTLE_ACCOUNT_MS: u64 = 3500;
 const SETTLE_ACCOUNT_RANGE_CLICK_MS: u64 = 2500;
 const PROFILE_WINDOW_DAYS: i64 = 30;
+const PERIOD_LOG_TARGET: &str = "analytics::period";
 const LAST_SWEEP_KEY: &str = "analytics_last_sweep_at";
 const SWEEP_STAGE_KEY: &str = "analytics_sweep_stage";
 
@@ -116,35 +117,44 @@ fn has_account_context(conn: &Connection, profile_id: &str, handle_known: bool) 
     has_activity > 0
 }
 
-fn pick_due_period(conn: &Connection, now: i64) -> Option<u32> {
+/// The window to capture next: a window with no stored row at all goes first (nothing to show yet, so no
+/// failure backoff), then any window whose regular refresh is due. The preferred window leads in both cases.
+fn pick_due_period(conn: &Connection, profile_id: &str, now: i64) -> Option<u32> {
     let preferred = pacing::preferred_window_days(conn);
     let ordered = if preferred <= 7 { [7u32, 30u32] } else { [30u32, 7u32] };
     ordered
         .into_iter()
-        .find(|&days| pacing::period_next_due_at(conn, days) <= now)
+        .find(|&days| pacing::period_first_run_due(conn, profile_id, days, now))
+        .or_else(|| ordered.into_iter().find(|&days| pacing::period_next_due_at(conn, days) <= now))
 }
 
 /// What the next tick should do. Profile sweeps need a known handle, which the first post or account visit teaches us.
+/// A due account-period capture goes before every other task and is the only one allowed to spend the units
+/// reserved for periods.
 pub fn plan(conn: &Connection, profile_id: &str, now: i64) -> AppResult<Plan> {
     if pacing::pause_until(conn).is_some_and(|until| until > now) {
         return Ok(Plan::Paused);
     }
     let handle_known = ingest::profile_handle(conn, profile_id).ok().flatten().is_some();
+    let account_context = has_account_context(conn, profile_id, handle_known);
+    if account_context {
+        if let Some(days) = pick_due_period(conn, profile_id, now) {
+            return Ok(if pacing::can_spend(conn, profile_id, now, pacing::DOM_UNITS)? {
+                Plan::Work(Task::AccountPeriod(days))
+            } else {
+                Plan::Throttled
+            });
+        }
+    }
     let task = if handle_known && repo::get_setting(conn, SWEEP_STAGE_KEY)?.as_deref() == Some("replies") {
         Some(Task::Replies)
     } else if handle_known && now - setting_i64(conn, LAST_SWEEP_KEY) >= pacing::SWEEP_INTERVAL_SECS {
         Some(Task::Profile)
-    } else if has_account_context(conn, profile_id, handle_known) {
-        if let Some(days) = pick_due_period(conn, now) {
-            Some(Task::AccountPeriod(days))
-        } else {
-            pick_due_post(conn, profile_id, now)?.map(|p| Task::Post(Box::new(p)))
-        }
     } else {
         pick_due_post(conn, profile_id, now)?.map(|p| Task::Post(Box::new(p)))
     };
     let Some(task) = task else { return Ok(Plan::Idle) };
-    if !pacing::can_spend(conn, profile_id, now, pacing::DOM_UNITS)? {
+    if !pacing::can_spend_unreserved(conn, profile_id, now, pacing::DOM_UNITS)? {
         return Ok(Plan::Throttled);
     }
     Ok(Plan::Work(task))
@@ -212,13 +222,49 @@ pub async fn execute(env: &TickEnv<'_>, task: Task, now: i64) -> TickOutcome {
     }
 }
 
+/// One account-period capture, logged step by step to app.log. The steps are `page_open` (load the analytics
+/// page), `range_click` (the 7D/30D control took effect), `dom_read` (the numbers were found), `validate`
+/// (they are plausible) and `store`. A failure keeps its `step: reason` in `analytics_period_<n>d_last_error`.
+struct PeriodTrace {
+    days: u32,
+}
+
+impl PeriodTrace {
+    fn ok(&self, step: &str, detail: &str) {
+        log::info!(target: PERIOD_LOG_TARGET, "window={}d step={step} outcome=ok {detail}", self.days);
+    }
+
+    fn skipped(&self, step: &str, reason: &str) {
+        log::info!(target: PERIOD_LOG_TARGET, "window={}d step={step} outcome=skipped reason={reason}", self.days);
+    }
+
+    fn fail(&self, step: &str, reason: &str) -> String {
+        log::warn!(target: PERIOD_LOG_TARGET, "window={}d step={step} outcome=fail reason={reason}", self.days);
+        format!("{step}: {reason}")
+    }
+}
+
+fn single_line(text: &str) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    flat.chars().take(200).collect()
+}
+
 async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -> TickOutcome {
     let pid = env.profile_id;
     let target_canonical = canonical_period_days(period_days);
+    let trace = PeriodTrace { days: target_canonical as u32 };
     {
         let db = env.db.lock().unwrap();
-        let _ = pacing::record_units(&db, pid, now, pacing::DOM_UNITS, UnitKind::Dom);
+        let _ = pacing::record_period_units(&db, pid, now, period_days);
     }
+    let fail_period = |error: &str| {
+        let db = env.db.lock().unwrap();
+        let _ = pacing::mark_period_failed(&db, period_days, now);
+        let _ = pacing::set_period_error(&db, period_days, Some(error));
+        drop(db);
+        tick_result(env, false, now);
+        TickOutcome::Failed
+    };
 
     let req = AnalyticsPageRequest {
         url: ACCOUNT_ANALYTICS_URL.to_string(),
@@ -231,17 +277,20 @@ async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -
 
     let cap = match env.fetcher.fetch_page(req).await {
         Ok(c) => c,
-        Err(_) => {
-            let db = env.db.lock().unwrap();
-            let _ = pacing::mark_period_failed(&db, period_days, now);
-            drop(db);
-            tick_result(env, false, now);
-            return TickOutcome::Failed;
+        Err(e) => {
+            let error = trace.fail("page_open", &single_line(&e.to_string()));
+            return fail_period(&error);
         }
     };
     if let Some(reason) = block_reason(&cap) {
+        let error = trace.fail("page_open", &format!("blocked by X ({reason}), waiting for the user"));
+        {
+            let db = env.db.lock().unwrap();
+            let _ = pacing::set_period_error(&db, period_days, Some(&error));
+        }
         return blocked(env, &reason);
     }
+    trace.ok("page_open", &format!("final_url={}", single_line(&cap.final_url)));
 
     let metrics = parse_account_overview(&cap.network_responses, &cap.dom_result);
     if let Some(h) = &metrics.handle {
@@ -249,11 +298,18 @@ async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -
         ingest::update_profile_handle_if_empty(&db, pid, h);
     }
     if metrics.is_logged_out {
+        let error = trace.fail("page_open", "blocked by X (logged_out), waiting for the user");
+        {
+            let db = env.db.lock().unwrap();
+            let _ = pacing::set_period_error(&db, period_days, Some(&error));
+        }
         return blocked(env, "logged_out");
     }
     if metrics.is_premium_upsell {
+        trace.skipped("dom_read", "premium_upsell: account analytics needs X Premium, retrying in 24h");
         let db = env.db.lock().unwrap();
         let _ = pacing::mark_period_upsell(&db, now);
+        let _ = pacing::set_period_error(&db, period_days, Some("dom_read: premium_upsell"));
         drop(db);
         tick_result(env, true, now);
         return TickOutcome::Synced;
@@ -263,24 +319,48 @@ async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -
         .period_days
         .map(|d| canonical_period_days(d) == target_canonical)
         .unwrap_or(true);
+    let mut root_error: Option<String> = None;
+    match metrics.period_days {
+        Some(d) if range_matches => trace.ok("range_click", &format!("page_range={d}d")),
+        Some(d) => {
+            root_error = Some(trace.fail("range_click", &format!("page still shows {d}d, wanted {target_canonical}d")));
+        }
+        None => trace.ok("range_click", "page_range=unknown, assuming the control took effect"),
+    }
 
-    if metrics.source != "empty" && range_matches {
-        let stored = {
-            let db = env.db.lock().unwrap();
-            ingest::ingest_account_period_metrics(&db, pid, period_days, &metrics, now).unwrap_or(false)
-        };
-        if stored {
-            let db = env.db.lock().unwrap();
-            let _ = pacing::mark_period_synced(&db, period_days, now);
-            drop(db);
-            tick_result(env, true, now);
-            updated(env, "account_period");
-            return TickOutcome::Synced;
+    if root_error.is_none() {
+        if metrics.source == "empty" {
+            root_error = Some(trace.fail("dom_read", "no analytics numbers found on the page (selectors matched nothing)"));
+        } else {
+            trace.ok("dom_read", &format!("source={}", metrics.source));
+            if !ingest::account_metrics_are_sane(&metrics) {
+                root_error = Some(trace.fail("validate", "metrics failed the sanity check (negative, out of range or no usable number)"));
+            } else {
+                trace.ok("validate", "");
+                let stored = {
+                    let db = env.db.lock().unwrap();
+                    ingest::ingest_account_period_metrics(&db, pid, period_days, &metrics, now)
+                };
+                match stored {
+                    Ok(true) => {
+                        trace.ok("store", "");
+                        let db = env.db.lock().unwrap();
+                        let _ = pacing::mark_period_synced(&db, period_days, now);
+                        drop(db);
+                        tick_result(env, true, now);
+                        updated(env, "account_period");
+                        return TickOutcome::Synced;
+                    }
+                    Ok(false) => root_error = Some(trace.fail("store", "ingest refused the metrics")),
+                    Err(e) => root_error = Some(trace.fail("store", &single_line(&e.to_string()))),
+                }
+            }
         }
     }
 
     // The subscription analytics page loaded, wasn't an upsell, and DOM extraction came back empty
     // or couldn't verify the selected range: try one vision heal under the shared AI heal budget.
+    let mut heal_note = String::new();
     if let Some(healer) = env.healer.filter(|h| h.available()) {
         let may_heal = {
             let db = env.db.lock().unwrap();
@@ -298,38 +378,42 @@ async fn execute_account_period(env: &TickEnv<'_>, period_days: u32, now: i64) -
                 let db = env.db.lock().unwrap();
                 let _ = pacing::record_units(&db, pid, now, pacing::AI_HEAL_UNITS, kind);
             }
-            if let Ok(m) = healed {
-                let stored = {
-                    let db = env.db.lock().unwrap();
-                    let ok = ingest::ingest_account_period_metrics(&db, pid, period_days, &m, now).unwrap_or(false);
-                    if ok {
-                        let _ = pacing::mark_period_synced(&db, period_days, now);
-                        crate::activity::record(
-                            &db,
-                            pid,
-                            "action",
-                            "Analytics read account totals from a screenshot",
-                            Some("The analytics page layout changed, so the period totals were read visually."),
-                            Some(true),
-                            None,
-                        );
+            match healed {
+                Ok(m) => {
+                    let stored = {
+                        let db = env.db.lock().unwrap();
+                        let ok = ingest::ingest_account_period_metrics(&db, pid, period_days, &m, now).unwrap_or(false);
+                        if ok {
+                            let _ = pacing::mark_period_synced(&db, period_days, now);
+                            crate::activity::record(
+                                &db,
+                                pid,
+                                "action",
+                                "Analytics read account totals from a screenshot",
+                                Some("The analytics page layout changed, so the period totals were read visually."),
+                                Some(true),
+                                None,
+                            );
+                        }
+                        ok
+                    };
+                    if stored {
+                        trace.ok("store", "source=vision_heal");
+                        tick_result(env, true, now);
+                        updated(env, "account_period");
+                        return TickOutcome::Healed;
                     }
-                    ok
-                };
-                if stored {
-                    tick_result(env, true, now);
-                    updated(env, "account_period");
-                    return TickOutcome::Healed;
+                    heal_note = format!("; vision heal: {}", trace.fail("validate", "vision heal result was refused"));
                 }
+                Err(e) => heal_note = format!("; vision heal: {}", trace.fail("dom_read", &format!("vision heal failed: {}", single_line(&e)))),
             }
+        } else {
+            trace.skipped("dom_read", "vision heal not allowed right now (AI heal limits or budget)");
         }
     }
 
-    let db = env.db.lock().unwrap();
-    let _ = pacing::mark_period_failed(&db, period_days, now);
-    drop(db);
-    tick_result(env, false, now);
-    TickOutcome::Failed
+    let error = root_error.unwrap_or_else(|| "store: nothing was stored".to_string());
+    fail_period(&format!("{error}{heal_note}"))
 }
 
 async fn execute_post(env: &TickEnv<'_>, item: &TrackedPostSchedule, now: i64) -> TickOutcome {
@@ -396,7 +480,7 @@ async fn execute_post(env: &TickEnv<'_>, item: &TrackedPostSchedule, now: i64) -
         let may_heal = {
             let db = env.db.lock().unwrap();
             let last = pacing::load_state(&db, pid, post_id).ok().flatten().and_then(|s| s.last_heal_at);
-            pacing::can_ai_heal(&db, pid, now, last).unwrap_or(false)
+            pacing::can_post_ai_heal(&db, pid, now, last).unwrap_or(false)
         };
         if may_heal {
             {
@@ -638,7 +722,18 @@ mod tests {
         w.db.lock().unwrap().execute("UPDATE profiles SET handle = ?1 WHERE id = ?2", params![handle, w.pid]).unwrap();
     }
 
+    fn seed_period_row(w: &World, days: i64) {
+        w.db.lock().unwrap().execute(
+            "INSERT OR IGNORE INTO analytics_period_snapshots (id, profile_id, period_days, period_label, captured_at, impressions, source, raw_json)
+             VALUES (?1, ?2, ?3, ?4, '2026-01-01T00:00:00Z', 1000, 'dom', '{}')",
+            params![format!("seed{days}"), w.pid, days, format!("{days}D")],
+        )
+        .unwrap();
+    }
+
     fn silence_sweeps_and_periods(w: &World, now: i64) {
+        seed_period_row(w, 7);
+        seed_period_row(w, 30);
         let db = w.db.lock().unwrap();
         repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
         pacing::mark_period_synced(&db, 7, now).unwrap();
@@ -846,6 +941,8 @@ mod tests {
         f.on("https://x.com/pavel/with_replies", Ok(json!({ "handle": "pavel", "followersText": "1,200 Followers", "posts": [] })));
         f.on(&url("111"), Ok(page("20", "700")));
         let sink = CollectSink::default();
+        seed_period_row(&w, 7);
+        seed_period_row(&w, 30);
         {
             let db = w.db.lock().unwrap();
             pacing::mark_period_synced(&db, 7, now).unwrap();
@@ -1049,6 +1146,7 @@ mod tests {
         let w = world(&[]);
         set_handle(&w, "pavel");
         let now = now_unix_secs();
+        seed_period_row(&w, 7);
         {
             let db = w.db.lock().unwrap();
             repo::set_setting(&db, LAST_SWEEP_KEY, &now.to_string()).unwrap();
@@ -1075,5 +1173,166 @@ mod tests {
             )
             .unwrap();
         assert_eq!((imp, src.as_str()), (88_000, "vision_heal"));
+    }
+
+    fn period_page(range_days: i64) -> serde_json::Value {
+        json!({
+            "state": "ok", "handle": "pavel", "selectedRangeDays": range_days,
+            "labeledMetrics": { "impressions": "31.5K", "engagements": "1.5K", "profile visits": "420" },
+            "metricCards": {}, "bodySnippet": ""
+        })
+    }
+
+    #[tokio::test]
+    async fn a_full_post_budget_cannot_starve_period_captures() {
+        let w = world(&[("111", 2)]);
+        set_handle(&w, "pavel");
+        let f = Fake::new();
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(period_page(7)));
+        f.on(&url("111"), Ok(page("5", "500")));
+        let sink = CollectSink::default();
+        let now = now_unix_secs();
+        silence_sweeps_and_periods(&w, now);
+        {
+            let db = w.db.lock().unwrap();
+            for i in 0..36 {
+                pacing::record_units(&db, &w.pid, now - 7200 - i * 60, pacing::DOM_UNITS, UnitKind::Dom).unwrap();
+            }
+        }
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Throttled, "posts stop at 36 of 40 units");
+        assert!(f.calls().is_empty());
+
+        pacing::set_preferred_window_days(&w.db.lock().unwrap(), 7).unwrap();
+        w.db.lock().unwrap().execute("DELETE FROM app_settings WHERE key = 'analytics_period_7d_next_due_at'", []).unwrap();
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 60).await, TickOutcome::Synced);
+        assert_eq!(f.calls(), vec![ACCOUNT_ANALYTICS_URL.to_string()], "the reserved units pay for the period capture");
+        assert_eq!(pacing::period_units_spent(&w.db.lock().unwrap(), 7, now + 60), 1);
+    }
+
+    #[tokio::test]
+    async fn a_window_with_no_row_is_captured_at_once_even_after_a_failure_and_before_posts() {
+        let w = world(&[("111", 2)]);
+        set_handle(&w, "pavel");
+        let f = Fake::new();
+        f.on(ACCOUNT_ANALYTICS_URL, Err("first attempt failed".into()));
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(period_page(7)));
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(period_page(30)));
+        f.on(&url("111"), Ok(page("5", "500")));
+        let sink = CollectSink::default();
+        let now = now_unix_secs();
+        repo::set_setting(&w.db.lock().unwrap(), LAST_SWEEP_KEY, &now.to_string()).unwrap();
+        pacing::set_preferred_window_days(&w.db.lock().unwrap(), 7).unwrap();
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Failed);
+        assert!(pacing::period_next_due_at(&w.db.lock().unwrap(), 7) >= now + pacing::BACKOFF_SECS[0], "the 15 minute backoff is set");
+        assert_eq!(
+            run_tick(&env(&w, &f, None, &sink), now + 120).await,
+            TickOutcome::Synced,
+            "7d has no data, so it is retried right away"
+        );
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 240).await, TickOutcome::Synced, "30d has no data either");
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 360).await, TickOutcome::Synced, "only then the post");
+        assert_eq!(f.calls().last(), Some(&url("111")));
+        assert_eq!(f.calls().iter().filter(|u| u.as_str() == ACCOUNT_ANALYTICS_URL).count(), 3);
+        assert_eq!(pacing::period_last_error(&w.db.lock().unwrap(), 7), None, "a success clears the stored error");
+    }
+
+    #[tokio::test]
+    async fn the_premium_upsell_is_not_retried_every_tick_for_a_window_with_no_row() {
+        let w = world(&[]);
+        set_handle(&w, "pavel");
+        let f = Fake::new();
+        f.on(
+            ACCOUNT_ANALYTICS_URL,
+            Ok(json!({ "state": "ok", "isPremiumUpsell": true, "metricCards": {}, "labeledMetrics": {}, "bodySnippet": "" })),
+        );
+        let sink = CollectSink::default();
+        let now = now_unix_secs();
+        repo::set_setting(&w.db.lock().unwrap(), LAST_SWEEP_KEY, &now.to_string()).unwrap();
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Synced);
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120).await, TickOutcome::Idle);
+        assert_eq!(f.calls().len(), 1);
+    }
+
+    struct CaptureLogger;
+    static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    impl log::Log for CaptureLogger {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Info
+        }
+        fn log(&self, r: &log::Record) {
+            CAPTURED.lock().unwrap().push(format!("{} {} {}", r.level(), r.target(), r.args()));
+        }
+        fn flush(&self) {}
+    }
+
+    fn captured_with(marker: &str) -> Vec<String> {
+        CAPTURED.lock().unwrap().iter().filter(|l| l.contains(marker)).cloned().collect()
+    }
+
+    fn capture_logs() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = log::set_logger(&CaptureLogger);
+            log::set_max_level(log::LevelFilter::Info);
+        });
+    }
+
+    #[tokio::test]
+    async fn a_failed_period_capture_logs_its_step_and_reason_and_keeps_it_in_settings() {
+        capture_logs();
+        let w = world(&[]);
+        set_handle(&w, "pavel");
+        let f = Fake::new();
+        f.on(ACCOUNT_ANALYTICS_URL, Err("boom-reason-7d-open".into()));
+        let sink = CollectSink::default();
+        let now = now_unix_secs();
+        pacing::set_preferred_window_days(&w.db.lock().unwrap(), 7).unwrap();
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Failed);
+        let lines = captured_with("boom-reason-7d-open");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        for part in ["WARN", "analytics::period", "window=7d", "step=page_open", "outcome=fail", "reason=", "boom-reason-7d-open"] {
+            assert!(lines[0].contains(part), "{part} missing from {}", lines[0]);
+        }
+        let stored = repo::get_setting(&w.db.lock().unwrap(), "analytics_period_7d_last_error").unwrap().unwrap();
+        assert!(stored.starts_with("page_open: ") && stored.contains("boom-reason-7d-open"), "{stored}");
+        assert_eq!(pacing::period_last_error(&w.db.lock().unwrap(), 30), None);
+    }
+
+    #[tokio::test]
+    async fn every_period_step_is_logged_and_each_failure_names_its_step() {
+        capture_logs();
+        let w = world(&[]);
+        set_handle(&w, "pavel");
+        let f = Fake::new();
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(period_page(28)));
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(json!({ "state": "ok", "selectedRangeDays": 7, "metricCards": {}, "labeledMetrics": {}, "bodySnippet": "step-marker-empty" })));
+        f.on(ACCOUNT_ANALYTICS_URL, Ok(period_page(7)));
+        let sink = CollectSink::default();
+        let now = now_unix_secs();
+        repo::set_setting(&w.db.lock().unwrap(), LAST_SWEEP_KEY, &now.to_string()).unwrap();
+        pacing::set_preferred_window_days(&w.db.lock().unwrap(), 7).unwrap();
+        let db_error = |days: u32| pacing::period_last_error(&w.db.lock().unwrap(), days).unwrap_or_default();
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now).await, TickOutcome::Failed);
+        assert!(db_error(7).starts_with("range_click: page still shows 28d, wanted 7d"), "{}", db_error(7));
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 120).await, TickOutcome::Failed);
+        assert!(db_error(7).starts_with("dom_read: no analytics numbers"), "{}", db_error(7));
+
+        assert_eq!(run_tick(&env(&w, &f, None, &sink), now + 240).await, TickOutcome::Synced);
+        assert_eq!(db_error(7), "");
+        let ok_lines: Vec<String> = CAPTURED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with("INFO analytics::period") && l.contains("window=7d") && l.contains("outcome=ok"))
+            .cloned()
+            .collect();
+        for step in ["page_open", "range_click", "dom_read", "validate", "store"] {
+            assert!(ok_lines.iter().any(|l| l.contains(&format!("step={step} "))), "no ok line for {step}");
+        }
     }
 }
