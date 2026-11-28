@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { hasPerformanceData } from "./AnalyticsPage";
+import { groupWidgets, hasPerformanceData, headerLine } from "./AnalyticsPage";
 import { analyticsApi, evaluatePreviewSpec, resetPreviewStore, validatePreviewSpec } from "./api";
 import { formatCompact, formatMetricValue } from "./charts/ChartPrimitives";
 import { serializeWidgetCsv } from "./csv";
@@ -207,5 +207,28 @@ describe("Phase 4 analytics frontend", () => {
     expect(kpiVal(d30, "Replies Published", "reply_count")).toBe(5);
     expect(kpiVal(d7, "OGC Published", "ogc_count")).toBe(1);
     expect(kpiVal(d30, "OGC Published", "ogc_count")).toBe(2);
+  });
+
+  it("groups consecutive KPIs and swaps period-total KPIs for one waiting state without a period snapshot", async () => {
+    const dash = await analyticsApi.getDashboard(30);
+    const withSnapshot = groupWidgets(dash.widgets, true);
+    expect(withSnapshot[0].kind).toBe("kpis");
+    expect(withSnapshot[0].kind === "kpis" && withSnapshot[0].items.length).toBe(6);
+    expect(withSnapshot.some((r) => r.kind === "waiting")).toBe(false);
+
+    const waiting = groupWidgets(dash.widgets, false);
+    expect(waiting[0].kind).toBe("waiting");
+    expect(waiting.filter((r) => r.kind === "waiting").length).toBe(1);
+    const kpiTitles = waiting.flatMap((r) => (r.kind === "kpis" ? r.items.map((i) => i.item.widget.title) : []));
+    expect(kpiTitles).toEqual(["Replies Published", "OGC Published", "Avg Impressions / Reply"]);
+  });
+
+  it("builds one calm header line from period totals and sync status", async () => {
+    const dash = await analyticsApi.getDashboard(30);
+    expect(headerLine(dash.period_overview, true, "Updated 5 min ago")).toBe(
+      "5,976 engagements · 1,800 profile visits · Updated 5 min ago",
+    );
+    expect(headerLine(null, true, "Updated 5 min ago")).toBe("Updated 5 min ago");
+    expect(headerLine(dash.period_overview, false, null)).toBe("");
   });
 });

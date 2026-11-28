@@ -29,6 +29,19 @@ export function formatCompact(num: number): string {
   return num.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
+function humanize(name: string): string {
+  return name.replace(/^avg_/, "").replace(/_/g, " ");
+}
+
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function kindLabel(kind: string): string {
+  if (kind === "ogc") return "Post";
+  return sentenceCase(kind);
+}
+
 function asNumber(v: unknown): number {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
@@ -45,9 +58,7 @@ function pickField(
 
 function EmptyChart({ message = "No data in this time window yet." }: { message?: string }) {
   return (
-    <div className="flex h-36 items-center justify-center rounded-md border border-dashed border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500">
-      {message}
-    </div>
+    <p className="py-6 text-sm text-zinc-500">{message}</p>
   );
 }
 
@@ -56,8 +67,8 @@ function KpiChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult })
   const valueField = pickField(spec.options.value_field, data.columns, data.columns.length - 1);
   const raw = row ? row[valueField] : null;
   return (
-    <div className="flex flex-col justify-between py-1">
-      <div className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+    <div>
+      <div className="font-display text-3xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
         {formatMetricValue(raw, spec.options.format)}
       </div>
     </div>
@@ -111,7 +122,7 @@ function LineChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult }
           const y = padT + plotH * (1 - t);
           return (
             <g key={t}>
-              <line x1={padL} x2={width - padR} y1={y} y2={y} className="stroke-zinc-200 dark:stroke-zinc-800" strokeDasharray="3 3" />
+              <line x1={padL} x2={width - padR} y1={y} y2={y} className="stroke-zinc-200 dark:stroke-zinc-800" />
               <text x={padL - 6} y={y + 3} textAnchor="end" className="fill-zinc-400 text-[10px]">
                 {formatCompact(yMax * t)}
               </text>
@@ -130,7 +141,7 @@ function LineChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult }
                 <polyline
                   fill="none"
                   stroke={color}
-                  strokeWidth={2.2}
+                  strokeWidth={1.5}
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   points={points.join(" ")}
@@ -138,10 +149,14 @@ function LineChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult }
               )}
               {xValues.map((x, i) => {
                 const val = lookup.get(`${series}\0${x}`) ?? 0;
+                const isLast = i === xValues.length - 1;
                 return (
-                  <circle key={x} cx={xPos(i)} cy={yPos(val)} r={3} fill={color}>
-                    <title>{`${series} • ${x}: ${formatMetricValue(val, spec.options.format)}`}</title>
-                  </circle>
+                  <g key={x}>
+                    {isLast && <circle cx={xPos(i)} cy={yPos(val)} r={2.5} fill={color} />}
+                    <circle cx={xPos(i)} cy={yPos(val)} r={8} fill="transparent">
+                      <title>{`${series} • ${x}: ${formatMetricValue(val, spec.options.format)}`}</title>
+                    </circle>
+                  </g>
                 );
               })}
             </g>
@@ -163,7 +178,7 @@ function LineChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult }
         <div className="flex flex-wrap gap-3 text-xs text-zinc-600 dark:text-zinc-400">
           {seriesNames.map((s, i) => (
             <span key={s} className="inline-flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] }} />
+              <span className="h-0.5 w-3" style={{ backgroundColor: SERIES_COLORS[i % SERIES_COLORS.length] }} />
               {s}
             </span>
           ))}
@@ -187,34 +202,26 @@ function BarChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult })
   const maxVal = Math.max(1, ...items.map((i) => i.value));
 
   return (
-    <div className="space-y-2.5">
+    <ul className="space-y-4">
       {items.map((item, idx) => {
         const pct = Math.max(2, Math.round((item.value / maxVal) * 100));
+        const extras = extraMetrics.map((m) => `${humanize(m)} ${formatCompact(asNumber(item.raw[m]))}`);
         return (
-          <div key={`${item.label}-${idx}`} className="space-y-1">
-            <div className="flex items-baseline justify-between gap-2 text-xs">
-              <span className="font-medium text-zinc-800 dark:text-zinc-200 truncate">{item.label}</span>
-              <div className="flex items-center gap-2 shrink-0 text-zinc-500">
-                {extraMetrics.map((m) => (
-                  <span key={m} className="text-[11px]">
-                    {m.replace(/^avg_/, "")}: {formatCompact(asNumber(item.raw[m]))}
-                  </span>
-                ))}
-                <span className="font-mono font-medium text-zinc-900 dark:text-zinc-100">
-                  {formatMetricValue(item.value, spec.options.format)}
-                </span>
-              </div>
+          <li key={`${item.label}-${idx}`} className="space-y-1.5">
+            <div className="flex items-baseline justify-between gap-3 text-sm">
+              <span className="min-w-0 truncate">{item.label}</span>
+              <span className="shrink-0 font-mono tabular-nums">
+                {formatMetricValue(item.value, spec.options.format)}
+              </span>
             </div>
-            <div className="h-2.5 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
-              <div
-                className="h-full rounded-full transition-all"
-                style={{ width: `${pct}%`, backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }}
-              />
+            <div className="h-1 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
+              <div className="h-full rounded-full bg-zinc-950 dark:bg-zinc-100" style={{ width: `${pct}%` }} />
             </div>
-          </div>
+            {extras.length > 0 && <p className="text-xs text-zinc-500">{extras.join(" · ")}</p>}
+          </li>
         );
       })}
-    </div>
+    </ul>
   );
 }
 
@@ -245,10 +252,10 @@ function StackedBarChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryRe
         {stacks.map((stack) => (
           <div key={stack.x} className="space-y-1">
             <div className="flex justify-between text-xs">
-              <span className="text-zinc-700 dark:text-zinc-300 font-medium">{stack.x}</span>
+              <span className="text-zinc-700 dark:text-zinc-300">{stack.x}</span>
               <span className="font-mono text-zinc-500">{formatMetricValue(stack.total, spec.options.format)}</span>
             </div>
-            <div className="flex h-3 w-full rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+            <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800">
               {stack.parts.map((p, idx) => {
                 const widthPct = (p.value / maxTotal) * 100;
                 if (widthPct <= 0) return null;
@@ -267,7 +274,7 @@ function StackedBarChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryRe
       <div className="flex flex-wrap gap-3 text-xs text-zinc-500">
         {seriesNames.map((s, idx) => (
           <span key={s} className="inline-flex items-center gap-1.5">
-            <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }} />
+            <span className="h-0.5 w-3" style={{ backgroundColor: SERIES_COLORS[idx % SERIES_COLORS.length] }} />
             {s}
           </span>
         ))}
@@ -327,7 +334,7 @@ function HeatmapChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResul
               {xs.map((x) => {
                 const cell = grid.get(`${y}\0${x}`);
                 const ratio = cell && maxVal > 0 ? cell.value / maxVal : 0;
-                const alpha = cell ? Math.max(0.12, Math.min(0.85, ratio)) : 0;
+                const alpha = cell ? Math.max(0.06, Math.min(0.85, ratio)) : 0;
                 return (
                   <td
                     key={x}
@@ -335,8 +342,8 @@ function HeatmapChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResul
                     style={
                       cell
                         ? {
-                            backgroundColor: `rgba(2, 132, 199, ${alpha.toFixed(2)})`,
-                            color: ratio > 0.55 ? "#ffffff" : undefined,
+                            backgroundColor: `color-mix(in srgb, var(--fg) ${Math.round(alpha * 100)}%, transparent)`,
+                            color: ratio > 0.55 ? "var(--bg)" : undefined,
                           }
                         : undefined
                     }
@@ -462,69 +469,50 @@ function FunnelChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult
 }
 
 function WinnersFlopsGallery({ data }: { data: WidgetQueryResult }) {
-  if (data.rows.length === 0) return <EmptyChart message="Sync posts to see top winners and flops." />;
+  if (data.rows.length === 0) return <EmptyChart message="Posts you publish show up here once their numbers sync." />;
   const winners = data.rows.filter((r) => String(r.tier) === "winner");
   const flops = data.rows.filter((r) => String(r.tier) === "flop");
 
-  const renderCard = (row: Record<string, unknown>, idx: number, kind: "winner" | "flop") => {
+  const renderRow = (row: Record<string, unknown>, idx: number) => {
     const isExternal = Number(row.is_external ?? 0) === 1 || String(row.draft_kind) === "external";
+    const meta = [
+      isExternal ? "External" : kindLabel(String(row.draft_kind ?? "post")),
+      String(row.model_family ?? ""),
+      `${formatCompact(asNumber(row.impressions))} impressions`,
+      `${asNumber(row.engagement_rate).toFixed(2)}% engagement`,
+    ].filter(Boolean);
     return (
-      <div
-        key={idx}
-        className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-900/50 p-3 space-y-2"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
-          <div className="flex items-center gap-1.5">
-            <span
-              className={`rounded-full px-2 py-0.5 font-medium ${
-                kind === "winner"
-                  ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
-                  : "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-              }`}
-            >
-              {kind === "winner" ? "Winner" : "Flop"}
-            </span>
-            <span className="rounded bg-zinc-200/80 dark:bg-zinc-800 px-1.5 py-0.5 text-zinc-700 dark:text-zinc-300">
-              {String(row.draft_kind ?? "post")}
-            </span>
-            <span className="text-zinc-500">{String(row.model_family ?? "")}</span>
-            {isExternal && (
-              <span className="rounded bg-violet-100 dark:bg-violet-950 px-1.5 py-0.5 text-violet-700 dark:text-violet-300">
-                external
-              </span>
-            )}
-          </div>
-          <div className="font-mono text-zinc-700 dark:text-zinc-300">
-            {formatCompact(asNumber(row.impressions))} impr · {asNumber(row.engagement_rate).toFixed(2)}% ER
-          </div>
-        </div>
-        <p className="text-xs text-zinc-900 dark:text-zinc-100 whitespace-pre-wrap leading-relaxed">
+      <li key={idx} className="space-y-1 py-3">
+        <p className="whitespace-pre-wrap text-sm leading-relaxed">
           {String(row.post_text ?? "(no post text captured)")}
         </p>
         {row.context_text ? (
-          <div className="rounded border-l-2 border-zinc-300 dark:border-zinc-700 pl-2.5 text-[11px] text-zinc-500">
-            Replying to <span className="font-medium">@{String(row.context_author ?? "author")}</span>:{" "}
-            {String(row.context_text)}
-          </div>
+          <p className="text-xs text-zinc-500">
+            Replying to @{String(row.context_author ?? "author")}: {String(row.context_text)}
+          </p>
         ) : null}
-      </div>
+        <p className="text-xs text-zinc-500">{meta.join(" · ")}</p>
+      </li>
     );
   };
 
+  const group = (label: string, rows: Array<Record<string, unknown>>, empty: string) => (
+    <div>
+      <h4 className="text-sm font-medium">{label}</h4>
+      {rows.length === 0 ? (
+        <p className="py-3 text-sm text-zinc-500">{empty}</p>
+      ) : (
+        <ul className="mt-1 divide-y divide-zinc-200 border-t border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+          {rows.map(renderRow)}
+        </ul>
+      )}
+    </div>
+  );
+
   return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
-          Top 10% Winners ({winners.length})
-        </div>
-        {winners.length === 0 ? <EmptyChart message="No winners yet." /> : winners.map((r, i) => renderCard(r, i, "winner"))}
-      </div>
-      <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
-          Bottom 10% Flops ({flops.length})
-        </div>
-        {flops.length === 0 ? <EmptyChart message="No flops yet." /> : flops.map((r, i) => renderCard(r, i, "flop"))}
-      </div>
+    <div className="grid gap-x-10 gap-y-6 md:grid-cols-2">
+      {group("Top 10%", winners, "Nothing yet.")}
+      {group("Bottom 10%", flops, "Nothing yet.")}
     </div>
   );
 }
@@ -536,33 +524,31 @@ function TableChart({ spec, data }: { spec: WidgetSpec; data: WidgetQueryResult 
   if (data.rows.length === 0) return <EmptyChart />;
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left text-xs">
+      <table className="w-full text-left text-sm">
         <thead>
-          <tr className="border-b border-zinc-200 dark:border-zinc-800 text-zinc-500">
+          <tr className="border-b border-zinc-200 text-zinc-500 dark:border-zinc-800">
             {data.columns.map((c) => (
-              <th key={c} className="py-1.5 pr-3 font-medium whitespace-nowrap">
-                {c.replace(/_/g, " ")}
+              <th key={c} className="py-2 pr-4 font-normal whitespace-nowrap">
+                {sentenceCase(humanize(c))}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/70">
+        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
           {data.rows.map((row, idx) => (
-            <tr key={idx} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+            <tr key={idx}>
               {data.columns.map((c) => {
                 const v = row[c];
                 const isNum = typeof v === "number";
                 return (
                   <td
                     key={c}
-                    className={`py-2 pr-3 max-w-xs truncate ${
+                    className={`py-2.5 pr-4 max-w-xs truncate ${
                       isNum ? "font-mono text-zinc-800 dark:text-zinc-200" : "text-zinc-700 dark:text-zinc-300"
                     }`}
                   >
-                    {c === "is_external" && Number(v) === 1 ? (
-                      <span className="rounded bg-violet-100 dark:bg-violet-950 px-1.5 py-0.5 text-[10px] text-violet-700 dark:text-violet-300">
-                        external
-                      </span>
+                    {c === "is_external" ? (
+                      Number(v) === 1 ? "External" : "—"
                     ) : isNum ? (
                       formatCompact(v)
                     ) : (
